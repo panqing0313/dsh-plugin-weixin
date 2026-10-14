@@ -251,11 +251,18 @@ export class AsrController extends TypertRemoteService {
     static inject = ["typert"];
 
     constructor(ctx, options = {}) {
+        // Validate BEFORE super(), and before anything else can fail. A bad
+        // proxy or endpoint throws here; after super() the same throw would be
+        // reported by the caller as "ASR service unavailable" with the real
+        // reason buried in a string, or masked entirely by a later error. The
+        // operator then sees a missing feature, not a typo in their config.
+        const hfEndpoint = normalizeEndpoint(options.hfEndpoint ?? process.env.DSH_WEIXIN_HF_ENDPOINT);
+        const hfProxy = normalizeProxy(options.hfProxy ?? process.env.DSH_WEIXIN_HF_PROXY);
         super(ctx, "asrController", { namespace: "weixinAsr" });
         this.modelDir =
             options.modelDir ?? process.env.DSH_WEIXIN_ASR_MODEL_DIR ?? readPersistedModelDir() ?? DEFAULT_MODEL_DIR;
-        this.hfEndpoint = normalizeEndpoint(options.hfEndpoint ?? process.env.DSH_WEIXIN_HF_ENDPOINT);
-        this.hfProxy = normalizeProxy(options.hfProxy ?? process.env.DSH_WEIXIN_HF_PROXY);
+        this.hfEndpoint = hfEndpoint;
+        this.hfProxy = hfProxy;
         this.downloads = new Map(); // modelId -> {status, message}
     }
 

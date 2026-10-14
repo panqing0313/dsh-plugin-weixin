@@ -137,3 +137,71 @@ test('an upgrade keeps the row singular and does not duplicate the header', () =
   )
   fs.rmSync(home, { recursive: true, force: true })
 })
+
+test('a nested block the template does not ship survives an upgrade', () => {
+  // `asr:` is a config key the operator adds by hand and the fresh template never
+  // contains. The rewrite loop replaced it with `row.replace(missingPattern, ...)`,
+  // which is a silent no-op -- so the value was deleted at the WRITE, not the
+  // read, and every fix to the capture logic changed nothing. Losing hfProxy
+  // silently un-does the network fix, and the operator sees a working config.
+  const { home, patchPath } = fakeHome({ patch: '[]\n' })
+  runInstall(home)
+  const installed = fs.readFileSync(patchPath, 'utf8')
+  // Add a nested block the same way an operator would, after the last sibling.
+  fs.writeFileSync(
+    patchPath,
+    installed.replace(/^(\s*)typingIndicator: true\s*$/m, '$1typingIndicator: true\n$1asr:\n$1  hfProxy: http://127.0.0.1:7897'),
+  )
+
+  // Assert on the text: readRowConfig only understands flat keys and would
+  // report every nested block as absent, which is a broken assertion rather
+  // than a broken installer.
+  for (let round = 1; round <= 3; round += 1) {
+    runInstall(home)
+    const text = fs.readFileSync(patchPath, 'utf8')
+    assert.match(
+      text,
+      /^\s*asr:\s*$/m,
+      `round ${round}: the nested asr block was dropped, silently un-fixing the download`,
+    )
+    assert.match(text, /^\s*hfProxy: http:\/\/127\.0\.0\.1:7897\s*$/m, `round ${round}: hfProxy was lost`)
+    const asrIndent = text.split('\n').find((l) => /^\s*asr:\s*$/.test(l)).match(/^\s*/)[0].length
+    const proxyIndent = text.split('\n').find((l) => /^\s*hfProxy:/.test(l)).match(/^\s*/)[0].length
+    assert.equal(proxyIndent, asrIndent + 2, `round ${round}: hfProxy must stay a child of asr`)
+  }
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('a nested block does not displace the keys around it', () => {
+  // Appending the missing key must land it as a child of `config`, not as a
+  // sibling of the row: a wrong indent level makes the row invalid for the
+  // loader, which fails the whole plugin rather than just the setting.
+  const { home, patchPath } = fakeHome({ patch: '[]\n' })
+  runInstall(home)
+  const installed = fs.readFileSync(patchPath, 'utf8')
+  fs.writeFileSync(
+    patchPath,
+    installed
+      .replace(/^(\s*)allowedSenders:\s*\[\s*\]\s*$/m, '$1allowedSenders:\n$1  - wxid_operator')
+      .replace(/^(\s*)typingIndicator: true\s*$/m, '$1typingIndicator: true\n$1asr:\n$1  hfProxy: http://127.0.0.1:7897'),
+  )
+  runInstall(home)
+  const after = readRowConfig(fs.readFileSync(patchPath, 'utf8'))
+  assert.deepEqual(after.allowedSenders, ['wxid_operator'], 'the allowlist must still be there')
+  assert.deepEqual(after.typingIndicator, ['true'], 'the sibling before the insertion point must survive')
+  assert.deepEqual(after.maxMessageLength, ['1500'])
+  const body = fs.readFileSync(patchPath, 'utf8')
+  assert.match(body, /^\s*asr:\s*$/m)
+  assert.match(body, /^\s*hfProxy: http:\/\/127\.0\.0\.1:7897\s*$/m)
+
+  // The appended key must be a CHILD of config: the raw text has to indent it.
+  const text = fs.readFileSync(patchPath, 'utf8')
+  const asrLine = text.split('\n').find((line) => /^\s*asr:\s*$/.test(line))
+  const configLine = text.split('\n').find((line) => /^\s*config:\s*$/.test(line))
+  assert.equal(
+    asrLine.match(/^\s*/)[0].length,
+    configLine.match(/^\s*/)[0].length + 2,
+    'asr: must be one level deeper than config:, or the row will not load',
+  )
+  fs.rmSync(home, { recursive: true, force: true })
+})

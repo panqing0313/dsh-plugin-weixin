@@ -283,7 +283,12 @@ test('a malformed endpoint is rejected rather than passed to the CLI', () => {
 })
 
 test('the endpoint is exported to the CLI as HF_ENDPOINT, and only when set', () => {
-  assert.match(HOST, /this\.hfEndpoint = normalizeEndpoint\(/, 'the controller must normalize its endpoint')
+  // Assert the contract, not the syntax: validation is deliberately lifted
+  // above super(), so it assigns a local first. Pinning the old
+  // `this.hfEndpoint = normalizeEndpoint(` line made a correct refactor look
+  // like a regression.
+  assert.match(HOST, /const hfEndpoint = normalizeEndpoint\(/, 'the controller must normalize its endpoint')
+  assert.match(HOST, /this\.hfEndpoint = hfEndpoint;/, 'and keep the normalized value')
   assert.match(
     HOST,
     /\.\.\.\(this\.hfEndpoint \? \{ HF_ENDPOINT: this\.hfEndpoint \} : \{\}\)/,
@@ -329,4 +334,49 @@ test('the proxy reaches AsrController from the plugin config', () => {
   const index = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
   assert.match(index, /hfProxy: config\.asr\?\.hfProxy/, 'config.asr.hfProxy must be passed through')
   assert.match(index, /hfProxy: z\s*\n\s*\.string\(\)/, 'the schema must declare hfProxy')
+})
+
+test('a bad proxy is rejected at construction, before the service registers', async () => {
+  // Regression: validation used to run AFTER super(). A throw there is caught
+  // by src/index.js, which only warns "ASR service unavailable" and drops the
+  // controller -- so a typo in hfProxy silently removed the whole feature, and
+  // the operator saw "no model available" with no hint that their config was
+  // wrong. Validate first, so the real reason surfaces.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  // The validation must not need a working ctx: if it ran after super(), the
+  // service would already be registered by the time it threw. Proving it
+  // throws on a BARE context -- before any registration can succeed -- pins
+  // the order.
+  class BareContext {}
+
+  for (const [label, options, code] of [
+    ['unparseable proxy', { hfProxy: 'nope' }, 'bad_proxy'],
+    ['proxy with an unusable scheme', { hfProxy: 'socks5://127.0.0.1:1080' }, 'bad_proxy'],
+    ['unparseable endpoint', { hfEndpoint: 'not a url' }, 'bad_endpoint'],
+  ]) {
+    assert.throws(
+      () => new AsrController(new BareContext(), options),
+      (err) => {
+        assert.equal(err.code, code, `${label}: a bare ctx means super() was never reached`)
+        return true
+      },
+      `${label} must be rejected before the service is registered`,
+    )
+  }
+
+  // And a valid one registers normally on a real context.
+  const controller = new AsrController(new Context(), { hfProxy: 'http://127.0.0.1:7897' })
+  assert.equal(controller.hfProxy, 'http://127.0.0.1:7897')
+  assert.equal(controller.hfEndpoint, undefined)
+})
+
+test('an unparseable proxy never reaches the spawn environment', async () => {
+  // The failure mode to prevent is not "an error is shown" but "a value the
+  // CLI cannot use is passed along and the download silently ignores it".
+  const { normalizeProxy } = await import('../src/asr-remote.js')
+  for (const bad of ['nope', 'not a url', 'socks5://127.0.0.1:1080', 'ftp://x.com']) {
+    assert.throws(() => normalizeProxy(bad), (err) => err.code === 'bad_proxy', `${bad} must not be accepted`)
+  }
 })

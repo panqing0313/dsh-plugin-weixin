@@ -195,7 +195,7 @@ const patch = fs.existsSync(patchPath) ? fs.readFileSync(patchPath, 'utf8') : '[
 const freshRow = fs.readFileSync(path.join(sourceRoot, 'cordis.patch.yml'), 'utf8').trimEnd()
 
 /** The values an operator owns and that an upgrade must not silently reset. */
-const KEPT_KEYS = ['allowedSenders', 'allowedChats', 'cwd', 'accountId', 'enabled']
+const KEPT_KEYS = ['allowedSenders', 'allowedChats', 'cwd', 'accountId', 'enabled', 'asr']
 
 /**
  * Locate our mounted block by line, so it can be swapped without touching any
@@ -260,7 +260,13 @@ function readKeptValues(block) {
     const startAt = lines.findIndex((line) => new RegExp(`^[ \\t]*${key}:[ \\t]*(.*)$`).test(line))
     if (startAt === -1) continue
     const indent = lines[startAt].match(/^[ \t]*/)[0].length
-    const collected = [lines[startAt].trim()]
+    // Capture every line with its ABSOLUTE indentation and the node's own base
+    // indent. Trimming them collapsed a nested block to column zero, so a
+    // nested `asr:` came back as a sibling key and was lost on the next
+    // upgrade; making them relative instead then double-counted the step when
+    // spliced, which silently emptied `allowedSenders`. Absolute in, absolute
+    // out is the only pairing where the two halves cannot disagree.
+    const collected = []
     for (let at = startAt + 1; at < lines.length; at += 1) {
       const line = lines[at]
       if (line.trim() === '') {
@@ -271,10 +277,18 @@ function readKeptValues(block) {
         collected.push('')
         continue
       }
-      if (line.match(/^[ \t]*/)[0].length <= indent) break
-      collected.push(line.trim())
+      const lineIndent = line.match(/^[ \t]*/)[0].length
+      if (lineIndent <= indent) break
+      // Comments belong to the template, not to the operator: the fresh row
+      // ships its own, and carrying stale ones forward would duplicate them.
+      if (line.trim().startsWith('#')) continue
+      collected.push(line)
     }
-    keep[key] = collected.join('\n')
+    keep[key] = {
+      keyLine: lines[startAt].slice(indent),
+      bodyIndent: indent,
+      body: collected.join('\n'),
+    }
   }
   return keep
 }
@@ -287,17 +301,63 @@ if (block === undefined) {
   const lines = patch.split('\n')
   const keep = readKeptValues(lines.slice(block.start, block.end).join('\n'))
   let row = freshRow
-  for (const [key, value] of Object.entries(keep)) {
-    // The fresh row writes each kept key on one line; re-indent the captured
-    // node's continuation lines by the same amount so a block sequence stays a
-    // valid child of its key.
+  // Keys the operator added that the template does not ship (a nested `asr:`
+  // block, say). `replace` on a missing pattern is a silent no-op, which is how
+  // these values were being deleted on every upgrade -- the loss happened at the
+  // write, not the read, so fixing the capture had no effect.
+  const appended = []
+  for (const [key, entry] of Object.entries(keep)) {
+    // Re-seat the node under the fresh row's own indent: the template decides
+    // where the key sits, the captured text decides what is underneath it.
+    // Continuation lines keep their absolute indentation, shifted by however
+    // far the key itself moved, so nesting is preserved at any depth.
     const pattern = new RegExp(`^([ \\t]*)${key}:[^\\n]*$`, 'm')
-    const indent = row.match(pattern)?.[1] ?? ''
-    const replacement = value
+    const match = row.match(pattern)
+    if (match === null) {
+      appended.push({ key, entry })
+      continue
+    }
+    const targetIndent = match[1]
+    const shift = targetIndent.length - entry.bodyIndent
+    const body = entry.body
       .split('\n')
-      .map((line, index) => (index === 0 ? `${indent}${line}` : line === '' ? '' : `${indent}  ${line}`))
+      .map((line) => (line === '' ? '' : ' '.repeat(Math.max(0, shift)) + line))
       .join('\n')
+    const replacement = body === '' ? `${targetIndent}${entry.keyLine}` : `${targetIndent}${entry.keyLine}\n${body}`
     row = row.replace(pattern, replacement)
+  }
+  if (appended.length > 0) {
+    // Append at the end of the config mapping: find the last key that belongs to
+    // it and insert after that node, so the new key lands as a sibling rather
+    // than at the row's outer level.
+    const rowLines = row.split('\n')
+    let insertAt = -1
+    let configIndent = null
+    for (let at = 0; at < rowLines.length; at += 1) {
+      const line = rowLines[at]
+      if (!/^[ \t]*config:[ \t]*$/.test(line)) continue
+      configIndent = line.match(/^[ \t]*/)[0].length
+      for (let inner = at + 1; inner < rowLines.length; inner += 1) {
+        const candidate = rowLines[inner]
+        if (candidate.trim() === '' || candidate.trim().startsWith('#')) continue
+        if (candidate.match(/^[ \t]*/)[0].length <= configIndent) break
+        insertAt = inner + 1
+      }
+      break
+    }
+    if (insertAt !== -1) {
+      const childIndent = ' '.repeat(configIndent + 2)
+      const block = appended.flatMap(({ entry }) => {
+        const shift = childIndent.length - entry.bodyIndent
+        const body = entry.body
+          .split('\n')
+          .map((line) => (line === '' ? '' : ' '.repeat(Math.max(0, shift)) + line))
+          .filter((line) => line !== '')
+        return [`${childIndent}${entry.keyLine}`, ...body]
+      })
+      rowLines.splice(insertAt, 0, ...block)
+      row = rowLines.join('\n')
+    }
   }
   const next = [...lines.slice(0, block.start), ...row.split('\n'), ...lines.slice(block.end)].join('\n')
   fs.writeFileSync(patchPath, next)
