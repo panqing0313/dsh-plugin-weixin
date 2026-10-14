@@ -17,6 +17,36 @@ import path from 'node:path'
 import test from 'node:test'
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
+
+/**
+ * Whether the packages that only exist *inside* a DSH host can be resolved.
+ *
+ * `agent-bridge.js` loads `@deepseek-ai/dsh-llm` lazily to build the user
+ * message it hands to `agent.followup`, and that package is not published on the
+ * public registry — it ships inside a DSH installation. On a checkout without a
+ * host the plugin still loads and every other test still runs; only the tests
+ * that drive a full inbound turn need this.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function hostPackagesAvailable() {
+  try {
+    const mod = await import('@deepseek-ai/dsh-llm')
+    return typeof mod.createUserMessage === 'function'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Skip reason for the full-round-trip tests, or `false` to run them.
+ *
+ * Spelled out once so the skip message tells a contributor exactly what to do
+ * rather than looking like an unexplained red.
+ */
+const HOST_ONLY_SKIP =
+  'needs @deepseek-ai/dsh-llm, which only exists inside a DSH installation; ' +
+  'run `npm test` from a DSH profile (or link a host) to exercise this path'
 const ACCOUNT_ID = 'bot1'
 const ALLOWED = 'wxid_abc'
 
@@ -125,7 +155,9 @@ async function startFakeILinkWithUpload(batches) {
   return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, sent, uploadUrls }
 }
 
-test('one Weixin round trip: allow → dedupe → agent → chunked reply', async () => {
+test('one Weixin round trip: allow → dedupe → agent → chunked reply', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-'))
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
   try {
@@ -187,7 +219,9 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
   }
 })
 
-test('an inbound image is downloaded, decrypted, saved and handed to the agent', async () => {
+test('an inbound image is downloaded, decrypted, saved and handed to the agent', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-media-'))
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
   const { encryptAesEcb } = await import('../vendor/openclaw-weixin/cdn/aes-ecb.js')
@@ -377,7 +411,9 @@ test('a CDN root saved in the account record is used when config does not set on
   }
 })
 
-test('a whitespace-only cdnBaseUrl counts as unset and does not shadow the account record', async () => {
+test('a whitespace-only cdnBaseUrl counts as unset and does not shadow the account record', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   // Regression: `||` treats "   " as truthy, so a YAML `cdnBaseUrl:` with
   // trailing spaces would win the chain, discard a working account record, and
   // fail later as `Failed to parse URL from    /upload?...`. The account side
@@ -598,7 +634,9 @@ test('an unauthorized sender never triggers a CDN download', async () => {
  * upload attempts, so the integration seam — not the module — is what is
  * pinned here.
  */
-test('a reply that references a local file uploads it and sends an IMAGE item', async () => {
+test('a reply that references a local file uploads it and sends an IMAGE item', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-out-'))
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
   const uploaded = []

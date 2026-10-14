@@ -29,6 +29,36 @@ import { StreamingMarkdownFilter } from '../vendor/openclaw-weixin/messaging/mar
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 
+/**
+ * Whether the packages that only exist *inside* a DSH host can be resolved.
+ *
+ * `agent-bridge.js` loads `@deepseek-ai/dsh-llm` lazily to build the user
+ * message it hands to `agent.followup`, and that package is not published on the
+ * public registry — it ships inside a DSH installation. On a checkout without a
+ * host the plugin still loads and every other test still runs; only the tests
+ * that drive a full inbound turn need this.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function hostPackagesAvailable() {
+  try {
+    const mod = await import('@deepseek-ai/dsh-llm')
+    return typeof mod.createUserMessage === 'function'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Skip reason for the full-round-trip tests, or `false` to run them.
+ *
+ * Spelled out once so the skip message tells a contributor exactly what to do
+ * rather than looking like an unexplained red.
+ */
+const HOST_ONLY_SKIP =
+  'needs @deepseek-ai/dsh-llm, which only exists inside a DSH installation; ' +
+  'run `npm test` from a DSH profile (or link a host) to exercise this path'
+
 // ---------------------------------------------------------------------------
 // What the filter keeps and what it strips
 // ---------------------------------------------------------------------------
@@ -276,7 +306,9 @@ async function roundTrip({ reply, config: extraConfig = {} }) {
   }
 }
 
-test('e2e: the outbound path strips Markdown before sending', async () => {
+test('e2e: the outbound path strips Markdown before sending', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   // `mediaEnabled: false` isolates the text path: with media on, `![shot](path)`
   // is an *outbound attachment reference* handled earlier in the pipeline, so it
   // is removed (or replaced by its alt text) before the filter ever sees it.
@@ -292,13 +324,17 @@ test('e2e: the outbound path strips Markdown before sending', async () => {
   assert.ok(joined.includes('结束'), 'text after the image must survive')
 })
 
-test('e2e: markdownMode "off" sends the raw Markdown', async () => {
+test('e2e: markdownMode "off" sends the raw Markdown', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   const raw = '**完成** 了 *这一项* 与普通文字'
   const texts = await roundTrip({ reply: raw, config: { markdownMode: 'off' } })
   assert.deepEqual(texts, [raw])
 })
 
-test('e2e: a converted reply longer than the limit is split, and every part fits', async () => {
+test('e2e: a converted reply longer than the limit is split, and every part fits', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
   const line = '**加粗的中文行** 与 *斜体片段* 以及一些普通文字'
   const reply = Array.from({ length: 60 }, (_, i) => `${i}: ${line}`).join('\n')
   const limit = 200
