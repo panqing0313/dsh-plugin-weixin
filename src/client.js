@@ -393,6 +393,13 @@ window.__ModuleLoader__.load({
 
 		//#endregion
 
+		// This list must NOT name the namespaces: `remote.weixin` only comes into
+		// existence inside apply() when $mount installs it, so waiting for it here
+		// is a deadlock — the boot audit reports
+		// `pending (waiting for services: remote.weixin, remote.weixinAsr)`.
+		// `remote` itself is safe because the api-gateway provides it before any
+		// bundle activates. The namespaces are declared on the inner ctx.inject
+		// below, which runs after $mount has created them.
 		const inject = ["remote", "slots", "locale"];
 
 		function registerUi(ctx) {
@@ -423,7 +430,7 @@ window.__ModuleLoader__.load({
 
 		async function apply(ctx) {
 			const disposeRemote = await ctx.remote.$mount(TYPERT_REMOTE);
-			const ui = ctx.inject(["remote", "slots", "locale"], registerUi);
+			const ui = ctx.inject(["remote.weixin", "remote.weixinAsr", "slots", "locale"], registerUi);
 			try {
 				await ui;
 			} catch (error) {

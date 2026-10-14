@@ -100,7 +100,18 @@ function fakeCtx(hooks = {}) {
       $mount: async (contribution) => {
         validateContribution(contribution)
         hooks.onMount?.(contribution)
-        return async () => {}
+        // The real $mount registers one Cordis service per namespace, named
+        // `remote.<namespace>`. Modelling that here is what makes a missing
+        // "remote.weixin" in inject observable: the namespace simply is not a
+        // property of the context yet.
+        for (const namespace of new Set(contribution.descriptors.map((d) => d.namespace))) {
+          ctx[`remote.${namespace}`] = { namespace }
+        }
+        return async () => {
+          for (const namespace of new Set(contribution.descriptors.map((d) => d.namespace))) {
+            delete ctx[`remote.${namespace}`]
+          }
+        }
       },
     },
     slots: {
@@ -111,9 +122,17 @@ function fakeCtx(hooks = {}) {
   }
   // Cordis' ctx.inject(deps, callback) returns a Fiber (thenable with dispose);
   // model that, since apply() disposes it on both the happy and error paths.
+  // A dependency that is not present is a hard error, exactly like the real
+  // `cannot get property "..." without inject` guard.
   ctx.inject = (deps, callback) => {
     const sub = {}
-    for (const dep of deps) sub[dep] = ctx[dep]
+    for (const dep of deps) {
+      assert.ok(
+        ctx[dep] !== undefined,
+        `injected service "${dep}" is not available — declare it in inject`,
+      )
+      sub[dep] = ctx[dep]
+    }
     const value = callback(sub)
     return { dispose: async () => {}, then: (fn) => Promise.resolve(value).then(fn) }
   }
@@ -127,6 +146,36 @@ test('the client bundle registers under its package id and exposes apply/inject'
   const mod = registration.factory(fakeRequire)
   assert.equal(typeof mod.apply, 'function')
   assert.deepEqual([...mod.inject].sort(), ['locale', 'remote', 'slots'])
+})
+
+test('the entry inject must not wait for the namespaces it creates itself', () => {
+  // `remote.weixin` is installed by apply() -> ctx.remote.$mount(). Naming it in
+  // the entry inject makes Cordis wait for a service that only appears once the
+  // entry itself starts, so the boot audit reports
+  // `pending (waiting for services: remote.weixin, remote.weixinAsr)` and the
+  // plugin never activates. The namespaces belong on the inner ctx.inject,
+  // which runs after $mount. The official voice-input bundle follows the same
+  // rule: entry inject has "remote" but not "remote.speech".
+  const registration = loadClientModule()
+  const mod = registration.factory(fakeRequire)
+  for (const dep of mod.inject) {
+    assert.ok(
+      !dep.startsWith('remote.'),
+      `entry inject must not name the namespace "${dep}"; declare it on the inner ctx.inject`,
+    )
+  }
+  // The namespaces still have to be declared somewhere, or the UI's
+  // ctx.remote.weixin.* reads throw. Assert the inner inject carries them.
+  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const inner = source.match(/ctx\.inject\(\s*\[([^\]]*)\]/)
+  assert.ok(inner, 'apply() must call ctx.inject([...], registerUi)')
+  const innerDeps = [...inner[1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+  for (const namespace of ['remote.weixin', 'remote.weixinAsr']) {
+    assert.ok(
+      innerDeps.includes(namespace),
+      `inner ctx.inject must declare "${namespace}" (found: ${innerDeps.join(', ')})`,
+    )
+  }
 })
 
 test('every Remote descriptor has a unique wire field matching its parameter name', () => {
