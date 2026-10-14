@@ -125,6 +125,30 @@ window.__ModuleLoader__.load({
 		};
 
 		//#region UI components
+
+		/**
+		 * Unwrap a Remote invocation result.
+		 *
+		 * Every client Remote call resolves to an envelope — `{ok: true, value}`
+		 * on success, `{ok: false, error}` for a withdrawal, cancellation or
+		 * carrier fault — never to the bare host return value. Reading the host
+		 * fields straight off that envelope yields `undefined` for everything,
+		 * which is what made the QR image and the model list render empty.
+		 */
+		function unwrap(result) {
+			if (result !== null && typeof result === "object" && "ok" in result) {
+				if (!result.ok) throw result.error ?? new Error("remote call failed");
+				return result.value;
+			}
+			// Already bare (older carrier, or a stubbed call in tests).
+			return result;
+		}
+
+		/** Call a Remote method and return its unwrapped host value. */
+		async function callRemote(fn, ...args) {
+			return unwrap(await fn(...args));
+		}
+
 		function useLocaleText(ctx) {
 			// Simple bilingual labels without the locale dictionaries: the plugin
 			// card stays self-contained and reads the client's current language.
@@ -156,8 +180,8 @@ window.__ModuleLoader__.load({
 
 			const refreshStatus = react.useCallback(async () => {
 				try {
-					const s = await ctx.remote.weixin.status();
-					setAccounts(s.accounts ?? []);
+					const s = await callRemote(() => ctx.remote.weixin.status());
+					setAccounts(s?.accounts ?? []);
 				} catch {
 					// remote not mounted yet
 				}
@@ -175,15 +199,15 @@ window.__ModuleLoader__.load({
 				setMessage("");
 				setCopied(false);
 				try {
-					const r = await ctx.remote.weixin.startLogin();
-					setQrUrl(r.qrcodeUrl ?? null);
-					setQrDataUrl(r.qrDataUrl ?? null);
-					setSessionKey(r.sessionKey);
+					const r = await callRemote(() => ctx.remote.weixin.startLogin());
+					setQrUrl(r?.qrcodeUrl ?? null);
+					setQrDataUrl(r?.qrDataUrl ?? null);
+					setSessionKey(r?.sessionKey);
 					setState({ phase: "qr" });
 					stopPolling();
 					pollRef.current = setInterval(async () => {
 						try {
-							const p = await ctx.remote.weixin.poll(sessionKey);
+							const p = await callRemote(() => ctx.remote.weixin.poll(sessionKey));
 							if (p.status === "confirmed") {
 								stopPolling();
 								setState({ phase: "confirmed" });
@@ -213,7 +237,7 @@ window.__ModuleLoader__.load({
 
 			const submitCode = async () => {
 				if (!sessionKey || !code.trim()) return;
-				await ctx.remote.weixin.submitVerifyCode(sessionKey, code.trim());
+				await callRemote(() => ctx.remote.weixin.submitVerifyCode(sessionKey, code.trim()));
 				setCode("");
 				setState({ phase: "qr" });
 				setMessage("");
@@ -292,10 +316,10 @@ window.__ModuleLoader__.load({
 
 			const refresh = react.useCallback(async () => {
 				try {
-					const r = await ctx.remote.weixinAsr.listModels();
-					setModels(r.models ?? []);
-					setModelDir(r.modelDir ?? "");
-					setDirInput(r.modelDir ?? "");
+					const r = await callRemote(() => ctx.remote.weixinAsr.listModels());
+					setModels(r?.models ?? []);
+					setModelDir(r?.modelDir ?? "");
+					setDirInput(r?.modelDir ?? "");
 				} catch {
 					// remote not mounted yet
 				}
@@ -311,10 +335,10 @@ window.__ModuleLoader__.load({
 				setSavingDir(true);
 				setDirMsg("");
 				try {
-					const r = await ctx.remote.weixinAsr.setModelDir(target);
-					setModelDir(r.modelDir ?? target);
-					setDirInput(r.modelDir ?? target);
-					setModels(r.models ?? []);
+					const r = await callRemote(() => ctx.remote.weixinAsr.setModelDir(target));
+					setModelDir(r?.modelDir ?? target);
+					setDirInput(r?.modelDir ?? target);
+					setModels(r?.models ?? []);
 					setDirMsg(t("Directory updated", "目录已更新"));
 				} catch (err) {
 					setDirMsg(String(err?.message ?? err));
@@ -327,10 +351,10 @@ window.__ModuleLoader__.load({
 				if (!repo.trim()) return;
 				setBusy(true);
 				try {
-					await ctx.remote.weixinAsr.downloadModel(repo.trim());
+					await callRemote(() => ctx.remote.weixinAsr.downloadModel(repo.trim()));
 					const timer = setInterval(async () => {
 						try {
-							const s = await ctx.remote.weixinAsr.downloadStatus(repo.trim());
+							const s = await callRemote(() => ctx.remote.weixinAsr.downloadStatus(repo.trim()));
 							setDlStatus({ ...s });
 							if (s.status === "done") {
 								clearInterval(timer);

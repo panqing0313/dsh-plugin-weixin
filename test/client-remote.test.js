@@ -225,6 +225,41 @@ test('apply() registers the settings card and disposes cleanly', async () => {
   await dispose()
 })
 
+test('every Remote call that reads a host field goes through the envelope', () => {
+  // A Remote invocation resolves to {ok, value}, not to the bare host value.
+  // Reading `r.qrcodeUrl` off the envelope is always undefined, which renders
+  // as a permanent "loading" placeholder with no error anywhere. Each
+  // data-returning call must therefore be unwrapped; a fire-and-forget call
+  // (`cancel`) is the only case where discarding the result is correct.
+  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const wrapped = (text) => text.includes('callRemote(')
+  const calls = [...source.matchAll(/ctx\.remote\.(weixin|weixinAsr)\.(\w+)\(/g)]
+  assert.ok(calls.length > 0, 'expected the card to call Remote methods')
+  // A wrapped call appears as `callRemote(() => ctx.remote.ns.method(` — the
+  // `callRemote(` sits in the same expression, so match on a window before it.
+  for (const match of calls) {
+    const at = match.index
+    const window = source.slice(Math.max(0, at - 40), at + match[0].length)
+    const method = match[2]
+    // `cancel` is fire-and-forget: its result is intentionally discarded.
+    const readsResult = method !== 'cancel'
+    if (readsResult) {
+      assert.ok(
+        window.includes('callRemote('),
+        `ctx.remote.${method}() must be wrapped in callRemote(...) to unwrap the {ok, value} envelope`,
+      )
+    } else {
+      assert.ok(
+        !window.includes('callRemote('),
+        `ctx.remote.${method}() discards its result; wrapping it would be misleading`,
+      )
+    }
+  }
+  // Both the success and failure branches of the envelope have to be handled.
+  assert.match(source, /if \(!result\.ok\) throw/, 'unwrap() must surface the failure branch')
+  assert.match(source, /return result\.value/, 'unwrap() must return the success value')
+})
+
 test('a descriptor table that repeats a wire field is rejected, as the runtime does', () => {
   // Guards the validator itself: if this stopped throwing, the test above would
   // pass even with the original bug reintroduced.
