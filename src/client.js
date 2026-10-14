@@ -371,6 +371,23 @@ window.__ModuleLoader__.load({
 			lineHeight: "20px",
 		};
 
+		// A determinate bar reads as measured progress; it is only rendered when
+		// the CLI actually reported a percentage, never as decoration.
+		const progressTrackStyle = {
+			height: 6,
+			borderRadius: RADIUS.pill,
+			background: C.surfaceSunken,
+			overflow: "hidden",
+			maxWidth: 320,
+		};
+
+		const progressFillStyle = {
+			height: "100%",
+			borderRadius: RADIUS.pill,
+			background: C.brand,
+			transition: "width 240ms ease",
+		};
+
 		//#endregion design vocabulary
 
 		function LoginSection({ ctx, t }) {
@@ -761,13 +778,32 @@ window.__ModuleLoader__.load({
 						}),
 						createElement("button", { onClick: download, disabled: busy, style: buttonStyleFor(busy) },
 							busy ? t("Downloading…", "下载中…") : t("Download", "下载"))),
-					// The host reports `running`/`done`/`failed`/`idle` and no
-					// percentage, so state the phase rather than inventing a
-					// progress bar that would sit at a made-up number.
+					// The host now reports real readings parsed from the CLI's own
+					// tqdm output, so show them. A bar is only drawn when a
+					// percentage is actually known — an indeterminate download
+					// says "downloading" instead of parking a bar at a number
+					// nobody measured.
 					dlStatus.status === "running"
-						? createElement("div", { style: { display: "flex", alignItems: "center", gap: 9 } },
-								createElement("span", { style: dotStyle("warn") }),
-								createElement("span", { style: hintStyle }, t("Downloading…", "下载中…")))
+						? createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+								createElement("div", { style: { display: "flex", alignItems: "center", gap: 9 } },
+									createElement("span", { style: dotStyle("warn") }),
+									createElement("span", { style: hintStyle },
+										typeof dlStatus.percent === "number"
+											? t(`Downloading… ${dlStatus.percent}%`, `下载中… ${dlStatus.percent}%`)
+											: t("Downloading…", "下载中…")),
+									dlStatus.files
+										? createElement("span", { style: captionStyle },
+												`${dlStatus.files.done}/${dlStatus.files.total}`)
+										: null),
+								typeof dlStatus.percent === "number"
+									? createElement("div", { style: progressTrackStyle },
+											createElement("div", {
+												style: {
+													...progressFillStyle,
+													width: `${Math.max(0, Math.min(100, dlStatus.percent))}%`,
+												},
+											}))
+									: null)
 						: null,
 					dlStatus.status === "done"
 						? createElement("div", { style: { display: "flex", alignItems: "center", gap: 9 } },

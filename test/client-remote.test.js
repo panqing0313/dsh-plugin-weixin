@@ -437,9 +437,39 @@ test('every state the card renders matches what the host actually reports', () =
       `the card renders dlStatus "${status}", which the host never reports (host: ${[...hostStatuses].join(', ')})`,
     )
   }
+  // The card may now show a percentage, but ONLY one the host measured: it is
+  // parsed from the CLI's own tqdm output. The original guard banned a progress
+  // figure outright because the host reported none; the risk it protected
+  // against is unchanged — rendering a number nobody measured.
+  const hostReads = new Set([...host.matchAll(/rec\.(\w+)\s*=/g)].map((m) => m[1]))
+  const rendered = [...client.matchAll(/dlStatus\.(\w+)/g)].map((m) => m[1])
+  assert.ok(rendered.length > 0, 'expected the card to render download fields')
+  const synthetic = new Set(['progress', 'eta', 'speed', 'rate', 'bytesPerSecond'])
+  for (const field of rendered) {
+    if (!synthetic.has(field)) continue
+    assert.ok(
+      hostReads.has(field),
+      `the card renders dlStatus.${field}, which the host never measures`,
+    )
+  }
+  // A bar must be conditional on a measured value. Matching the condition
+  // anywhere is not enough — it has to actually wrap the bar, or the check
+  // passes while an unconditional bar renders a number nobody measured.
+  // Find the bar's USE, not the style definition, then require the measured
+  // percentage to be what conditions it.
+  const first = client.indexOf('progressTrackStyle')
+  const track = client.indexOf('progressTrackStyle', first + 1)
+  assert.ok(track !== -1, 'expected the progress bar to be rendered somewhere')
+  const guard = client.lastIndexOf('typeof dlStatus.percent === "number"', track)
   assert.ok(
-    !/dlStatus\.progress/.test(client),
-    'the host reports no percentage, so a progress figure would be fabricated',
+    guard !== -1 && track - guard < 200,
+    'the progress bar must be gated directly on a measured percentage',
+  )
+  // And the label must not claim a percentage it does not have.
+  assert.match(
+    client,
+    /typeof dlStatus\.percent === "number"\s*\n?\s*\? t\(/,
+    'the percentage label must be conditional too',
   )
 })
 

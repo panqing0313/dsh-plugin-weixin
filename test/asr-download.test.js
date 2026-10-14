@@ -185,3 +185,65 @@ test('the failure message names the CLI it actually ran', () => {
     'the old message told users to install what the CLI banner says is already installed',
   )
 })
+
+// ---- progress parsing -------------------------------------------------------
+// The readings the card shows come from the CLI's own tqdm output on stderr,
+// which redraws one line with \r. These samples are verbatim captures.
+import { parseHfProgress, isProgressOnly } from '../src/asr-remote.js'
+
+const BAR = (pct, done, total, rate = '1.84s/it') =>
+  `\rFetching 4 files: ${String(pct).padStart(3)}%|\u2588\u2588\u258c       | ${done}/${total} [00:01<00:05, ${rate}]`
+
+test('a real tqdm redraw yields its percentage and file count', () => {
+  assert.deepEqual(parseHfProgress(BAR(25, 1, 4)), { percent: 25, files: { done: 1, total: 4 } })
+  assert.deepEqual(parseHfProgress(BAR(0, 0, 4)), { percent: 0, files: { done: 0, total: 4 } })
+  assert.deepEqual(parseHfProgress(BAR(100, 4, 4)), { percent: 100, files: { done: 4, total: 4 } })
+})
+
+test('the trailing rate is not mistaken for the percentage', () => {
+  // tqdm ends the line with a rate such as "95.3MB/s" or "1.84s/it". Anchoring
+  // the percentage to the start of the line matched nothing, and a looser
+  // pattern would have read the rate instead.
+  const reading = parseHfProgress('\rFetching 4 files:  50%|\u2588\u2588\u2588\u2588\u2588     | 2/4 [00:06<00:06, 95.3MB/s]')
+  assert.equal(reading.percent, 50, 'the first N% before the bar is the progress')
+  assert.notEqual(reading.percent, 95, 'the rate must not be read as a percentage')
+})
+
+test('banners and retry notices are not progress', () => {
+  assert.equal(parseHfProgress('Warning: You are sending unauthenticated requests to the HF Hub.'), null)
+  assert.equal(parseHfProgress('no local file found. Retrying..'), null)
+})
+
+test('a chunk of pure progress carries no diagnostic value', () => {
+  assert.equal(isProgressOnly(BAR(25, 1, 4)), true)
+  assert.equal(isProgressOnly('Warning: You are sending unauthenticated requests to the HF Hub.'), true)
+  // A retry notice IS worth keeping — and it must not be swallowed as noise.
+  assert.equal(isProgressOnly('no local file found. Retrying..'), false)
+  assert.equal(isProgressOnly('huggingface_hub.errors.RepositoryNotFoundError: 404'), false)
+})
+
+test('a chunk mixing progress with an error still keeps the error', () => {
+  const mixed = `${BAR(25, 1, 4)}\nRepositoryNotFoundError: 404 Client Error`
+  assert.equal(isProgressOnly(mixed), false, 'an error must never be discarded as progress')
+})
+
+test('the stderr handler actually consults isProgressOnly', () => {
+  // Defining isProgressOnly is not the fix — the handler must call it, or
+  // progress fragments accumulate into lastError and push the real cause out
+  // of the retained tail. Asserting the helper alone let that regression pass.
+  const handler = HOST.match(/child\.stderr\.on\("data"[\s\S]*?\n\s*\}\);/)[0]
+  assert.match(handler, /isProgressOnly\(chunk\)/, 'the handler must filter progress-only chunks out of lastError')
+  assert.match(handler, /parseHfProgress\(chunk\)/, 'and must parse them for progress')
+  // The filter must guard the accumulation, not merely be computed.
+  assert.match(
+    handler,
+    /if \(!isProgressOnly\(chunk\)\)\s*lastError =/,
+    'isProgressOnly must gate the write to lastError',
+  )
+})
+
+test('the download reports a percentage so the card has something to show', () => {
+  assert.match(HOST, /percent: 0, startedAt: Date\.now\(\)/, 'a running download must start at a known percentage')
+  assert.match(HOST, /rec\.percent = reading\.percent/, 'readings must be folded into the record')
+  assert.match(HOST, /percent: 100,/, 'a completed download must report completion')
+})

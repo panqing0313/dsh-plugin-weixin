@@ -97,6 +97,60 @@ function summarizeHfFailure(stderr) {
     return lines.slice(-3).join(" ").slice(0, 400);
 }
 
+// tqdm redraws its bar on one line, so the stream arrives as
+//   "\rFetching 4 files:  25%|██▌  | 1/4 [00:01<00:05, 1.84s/it]"
+// fragments. The last two numbers are a rate and are NOT a percentage; the
+// download percentage is the FIRST `N%` on the line, which is also the only
+// value that means anything while several files are still queued.
+// tqdm prints "<desc>:  25%|<bar>| 1/4 [elapsed<remaining, rate]". The
+// percentage therefore follows a description and a colon; anchoring it to the
+// start of the line matched nothing. The trailing rate (`1.84s/it`,
+// `95.3MB/s`) is NOT a percentage, so take the first `N%` before the bar.
+const TQDM_PERCENT = /(?:^|[\s:])(\d{1,3})%\s*\|/;
+// "1/4" — how many files are finished, useful before any percentage appears.
+const TQDM_COUNT = /\|\s*(\d+)\/(\d+)\s*\[/;
+
+/** Whether a chunk is only a progress redraw, carrying no diagnostic value. */
+export function isProgressOnly(chunk) {
+    const lines = String(chunk)
+        .split(/\r|\n/)
+        .map((line) => line.replace(/\u001b\[[0-9;]*m/g, "").trim())
+        .filter(Boolean);
+    if (lines.length === 0) return true;
+    return lines.every((line) => TQDM_PERCENT.test(line) || HF_NOISE.test(line));
+}
+
+/**
+ * Pull one progress reading out of a raw stderr chunk, or null when the chunk
+ * holds nothing but banners and retries.
+ *
+ * @param {string} chunk
+ * @returns {{percent: number, files?: {done: number, total: number}}|null}
+ */
+export function parseHfProgress(chunk) {
+    const text = String(chunk);
+    // A chunk can carry several redraws; the last one is the current state.
+    const segments = text.split(/\r|\n/).filter((line) => line.trim() !== "");
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+        const line = segments[i];
+        const percent = TQDM_PERCENT.exec(line.replace(/\u001b\[[0-9;]*m/g, ""));
+        if (!percent) continue;
+        const value = Number(percent[1]);
+        if (!Number.isFinite(value) || value < 0 || value > 100) continue;
+        const count = TQDM_COUNT.exec(line);
+        const reading = { percent: value };
+        if (count) {
+            const done = Number(count[1]);
+            const total = Number(count[2]);
+            if (Number.isFinite(done) && Number.isFinite(total) && total > 0) {
+                reading.files = { done, total };
+            }
+        }
+        return reading;
+    }
+    return null;
+}
+
 /** Best-effort persistence of the runtime-chosen model dir under stateDir(). */
 async function persistModelDir(dir) {
     try {
@@ -203,7 +257,9 @@ export class AsrController extends TypertRemoteService {
             return { started: false, message: "该模型已在下载中" };
         }
         fs.mkdirSync(this.modelDir, { recursive: true });
-        this.downloads.set(repoId, { status: "running", message: "" });
+        // `startedAt` lets the card show elapsed time without inventing a rate
+        // from a percentage it cannot date.
+        this.downloads.set(repoId, { status: "running", message: "", percent: 0, startedAt: Date.now() });
 
         const cli = resolveHfCli();
         const args = ["download", repoId, "--local-dir", path.join(this.modelDir, repoId)];
@@ -218,7 +274,20 @@ export class AsrController extends TypertRemoteService {
         });
         let lastError = "";
         child.stderr.on("data", (d) => {
-            lastError = `${lastError}${String(d)}`.slice(-4000);
+            const chunk = String(d);
+            // Keep the tail for diagnostics, but never let a progress redraw
+            // displace a real error: the previous version accumulated raw
+            // stderr and a long download could push the cause out of the
+            // window entirely.
+            if (!isProgressOnly(chunk)) lastError = `${lastError}${chunk}`.slice(-4000);
+            const reading = parseHfProgress(chunk);
+            if (!reading) return;
+            const rec = this.downloads.get(repoId);
+            if (!rec || rec.status !== "running") return;
+            // Fold the reading forward so a later chunk that carries only a
+            // percentage cannot erase a known file count.
+            rec.percent = reading.percent;
+            if (reading.files) rec.files = reading.files;
         });
         child.on("error", (err) => {
             this.downloads.set(repoId, {
@@ -228,7 +297,14 @@ export class AsrController extends TypertRemoteService {
         });
         child.on("exit", (code) => {
             if (code === 0) {
-                this.downloads.set(repoId, { status: "done", message: "" });
+                const rec = this.downloads.get(repoId) ?? {};
+                this.downloads.set(repoId, {
+                    status: "done",
+                    message: "",
+                    percent: 100,
+                    files: rec.files,
+                    elapsedMs: Date.now() - (rec.startedAt ?? Date.now()),
+                });
             } else {
                 const detail = summarizeHfFailure(lastError);
                 this.downloads.set(repoId, {
