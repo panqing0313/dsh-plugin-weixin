@@ -23,20 +23,61 @@ const ASR_CONFIG_FILE = "asr-config.json";
 // installs still have only the old entry point (and it still works below 1.0).
 const HF_CLI_CANDIDATES = ["hf", "huggingface-cli"];
 
-/** The CLI to shell out to: env override, else the first one that answers. */
+/**
+ * Windows resolves a bare name through PATHEXT, and what `pip` installs there
+ * is a `.cmd` shim rather than the extensionless script POSIX gets. Node's
+ * `spawn` only applies PATHEXT for a bare name; given an explicit `.cmd` path
+ * it refuses to execute it without a shell (`EINVAL`), because it will not
+ * silently reinterpret a program as a shell command. Probing the bare name
+ * first covers the PATH case; the suffixes matter when an operator points
+ * DSH_WEIXIN_HF_CLI at an install directory instead of relying on PATH.
+ */
+const WIN_CLI_SUFFIXES = [".cmd", ".exe", ".bat"];
+
+/** Expand ONE candidate into the concrete names worth probing, in order. */
+function cliCandidates(candidate) {
+    if (process.platform !== "win32" || path.extname(candidate) !== "") return [candidate];
+    return [candidate, ...WIN_CLI_SUFFIXES.map((suffix) => `${candidate}${suffix}`)];
+}
+
+/** Run one candidate, reporting whether it is a usable program. */
+function cliAnswers(command) {
+    try {
+        const probe = spawnSync(command, ["--help"], { stdio: "ignore", timeout: 10_000 });
+        return probe.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The CLI to shell out to, and whether it needs a shell to run.
+ *
+ * A `.cmd`/`.bat` shim is a shell script, so Node must be told to interpret it —
+ * `shell: true` on spawn, `shell` on spawnSync. Without that the download fails
+ * with EINVAL on a machine where the CLI is installed and works from a prompt.
+ * The reported `command` is what the operator would type, not the resolved
+ * `.cmd` path, so a failure message stays recognizable.
+ */
 function resolveHfCli() {
     const override = process.env.DSH_WEIXIN_HF_CLI;
-    if (override) return override;
-    for (const candidate of HF_CLI_CANDIDATES) {
-        try {
+    if (override) {
+        // An explicit choice is authoritative: do not silently substitute a
+        // different program, but do flag that it needs a shell.
+        return { command: override, shell: needsShell(override) };
+    }
+    for (const bare of HF_CLI_CANDIDATES) {
+        for (const command of cliCandidates(bare)) {
             // `--help` is cheap and, unlike `version`, exits 0 on both CLIs.
-            const probe = spawnSync(candidate, ["--help"], { stdio: "ignore", timeout: 10_000 });
-            if (probe.status === 0) return candidate;
-        } catch {
-            // not on PATH; try the next candidate
+            if (cliAnswers(command)) return { command, shell: needsShell(command) };
         }
     }
-    return HF_CLI_CANDIDATES[0];
+    return { command: HF_CLI_CANDIDATES[0], shell: false };
+}
+
+/** Whether running this program requires letting a shell interpret it. */
+function needsShell(command) {
+    return /\.(cmd|bat)$/i.test(command);
 }
 
 // The old CLI's deprecation banner is pure noise, and so is the progress bar:
@@ -166,9 +207,14 @@ export class AsrController extends TypertRemoteService {
 
         const cli = resolveHfCli();
         const args = ["download", repoId, "--local-dir", path.join(this.modelDir, repoId)];
-        const child = spawn(cli, args, {
+        if (cli.shell) args.unshift(cli.command);
+        const child = spawn(cli.command, args, {
             stdio: ["ignore", "pipe", "pipe"],
             env: { ...process.env, HF_HUB_DISABLE_TELEMETRY: "1" },
+            // A .cmd/.bat shim is a shell script; Node refuses to run one
+            // without a shell, which is EINVAL on an install that works fine
+            // from a prompt. POSIX never takes this path.
+            ...(cli.shell ? { shell: true } : {}),
         });
         let lastError = "";
         child.stderr.on("data", (d) => {
@@ -177,7 +223,7 @@ export class AsrController extends TypertRemoteService {
         child.on("error", (err) => {
             this.downloads.set(repoId, {
                 status: "failed",
-                message: `找不到 ${cli}，请 pip install -U huggingface_hub：${err.message}`,
+                message: `找不到 ${cli.command}，请 pip install -U huggingface_hub：${err.message}`,
             });
         });
         child.on("exit", (code) => {
@@ -188,8 +234,8 @@ export class AsrController extends TypertRemoteService {
                 this.downloads.set(repoId, {
                     status: "failed",
                     message: detail
-                        ? `${cli} 下载失败：${detail}`
-                        : `${cli} 下载失败（exit ${code}），请检查模型名与网络`,
+                        ? `${cli.command} 下载失败：${detail}`
+                        : `${cli.command} 下载失败（exit ${code}），请检查模型名与网络`,
                 });
             }
         });

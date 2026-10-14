@@ -52,11 +52,23 @@ async function writeWithNodeQrcode(text, outFile) {
  * Encoders are tried in order so a machine with a bundled python (DSH ships
  * one) still produces a scannable image without an npm install.
  */
+function bundledPythonPath() {
+  // DSH ships a python for its own runtime, so reaching for it beats requiring
+  // an npm install. The layout differs per platform: bin/python on POSIX,
+  // python.exe at the root on Windows. `HOME` is not set on Windows either.
+  const home = os.homedir()
+  if (!home) return ''
+  const root = path.join(home, '.dsh', 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'python')
+  return process.platform === 'win32'
+    ? path.join(root, 'python.exe')
+    : path.join(root, 'bin', 'python')
+}
+
 const PYTHON_CANDIDATES = [
   process.env.DSH_PYTHON ?? '',
   'python3',
   'python',
-  `${process.env.HOME ?? ''}/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python`,
+  bundledPythonPath(),
 ].filter((p) => p !== '')
 
 const PYTHON_SCRIPT = `
