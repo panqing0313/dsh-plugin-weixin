@@ -16,13 +16,13 @@
     "bot",
     "asr"
   ],
-  "homepage": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin#readme",
+  "homepage": "https://github.com/panqing0313/dsh-weixin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin.git"
+    "url": "git+https://github.com/panqing0313/dsh-weixin.git"
   },
   "bugs": {
-    "url": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin/issues"
+    "url": "https://github.com/panqing0313/dsh-weixin/issues"
   },
   "scripts": {
     "login": "node bin/login.js",
