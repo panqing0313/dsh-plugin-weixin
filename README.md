@@ -8,6 +8,10 @@
 
 不是 Hermes Agent runtime 的移植，也不是网页版微信模拟——只借通信层，控制权始终在 DSH。
 
+![dsh-plugin-weixin：在微信里与 DSH Agent 对话](assets/hero.png)
+
+![一条语音的旅程：SILK 转码、本地 ASR、逐级降级](assets/voice-pipeline.png)
+
 ## 当前状态
 
 **已真机验证**：插件加载、扫码登录、长轮询收消息、白名单、去重、开 DSH 会话、读回复、分段回发、
