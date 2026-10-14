@@ -920,9 +920,22 @@ window.__ModuleLoader__.load({
 												lineHeight: "20px",
 											},
 										},
+										// The repo id is what transcription is
+										// configured with; the folder name is what
+										// Finder shows. Both are useful, and showing
+										// only the folder hid the fact that the slash
+										// in the repo id became `__`.
 										createElement("span", {
-											style: { color: C.labelPrimary, overflowWrap: "anywhere", minWidth: 0 },
-										}, m.name),
+											style: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0 },
+										},
+											createElement("span", {
+												style: { color: C.labelPrimary, overflowWrap: "anywhere" },
+											}, m.repoId ?? m.name),
+											m.repoId && m.repoId !== m.name
+												? createElement("span", {
+														style: { color: C.labelTertiary, fontSize: 11, overflowWrap: "anywhere" },
+													}, m.name)
+												: null),
 										createElement("span", { style: { color: C.labelTertiary, flex: "0 0 auto" } },
 											`${(m.sizeBytes / 1048576).toFixed(0)} MB`))))
 						: createElement("p", { style: captionStyle }, t("No models installed yet", "尚未安装模型"))),

@@ -584,3 +584,103 @@ test('a Remote call through a Proxy still reaches the download body', async () =
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('a repo id downloads into ONE directory, not one per slash', () => {
+  // The bug: `path.join(modelDir, "mlx-community/whisper-small-mlx")` makes two
+  // levels, and listModels only scans the first -- so a completed 481 MB
+  // download was invisible and the card said "尚未安装模型".
+  return import('../src/asr-remote.js').then(({ downloadDirFor: flat }) => {
+    assert.equal(flat('mlx-community/whisper-small-mlx'), 'mlx-community__whisper-small-mlx')
+    assert.ok(!flat('mlx-community/whisper-small-mlx').includes('/'), 'must not contain a separator')
+
+    // Two repos that share a name must not collide: taking the last segment
+    // would make them overwrite each other.
+    assert.notEqual(flat('a/whisper-small'), flat('b/whisper-small'))
+
+    // Nothing a repo id can contain may escape the model directory.
+    for (const hostile of ['../etc/passwd', 'a/../../b', 'C:/windows', 'x/..', '/abs/path', 'a\\b']) {
+      const name = flat(hostile)
+      assert.ok(!name.includes('/'), `${hostile} must not introduce a separator`)
+      assert.ok(!name.includes('\\'), `${hostile} must not introduce a backslash`)
+      assert.notEqual(name, '..', `${hostile} must not become a parent reference`)
+      assert.ok(!nodePath.isAbsolute(name), `${hostile} must not be absolute`)
+      assert.equal(nodePath.basename(name), name, `${hostile} must stay a single path segment`)
+    }
+  })
+})
+
+test('a model downloaded one level too deep is adopted, not re-downloaded', async () => {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-adopt-'))
+  try {
+    // The pre-fix layout, weights and all.
+    fs.mkdirSync(nodePath.join(root, 'mlx-community/whisper-small-mlx'), { recursive: true })
+    fs.writeFileSync(nodePath.join(root, 'mlx-community/whisper-small-mlx/config.json'), '{}')
+    fs.writeFileSync(nodePath.join(root, 'mlx-community/whisper-small-mlx/weights.npz'), 'w'.repeat(512))
+
+    // A model that is already at the top level must be left exactly where it is.
+    fs.mkdirSync(nodePath.join(root, 'plain-model'), { recursive: true })
+    fs.writeFileSync(nodePath.join(root, 'plain-model/config.json'), '{}')
+
+    const controller = new AsrController(new Context(), { modelDir: root })
+    const listed = await controller.listModels()
+
+    const names = listed.models.map((m) => m.repoId).sort()
+    assert.deepEqual(names, ['mlx-community/whisper-small-mlx', 'plain-model'], 'both models must be listed')
+    for (const model of listed.models) {
+      if (model.name !== 'plain-model') continue
+      assert.equal(model.path, nodePath.join(root, 'plain-model'), 'an already-flat model must not be moved')
+    }
+
+    // The heavy file survived the rename.
+    const moved = nodePath.join(root, 'mlx-community__whisper-small-mlx/weights.npz')
+    assert.equal(fs.readFileSync(moved, 'utf8').length, 512, 'the weights must survive the adoption')
+
+    // Idempotent: a second call is a no-op, not a duplicate.
+    const again = await controller.listModels()
+    assert.equal(again.models.length, 2)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a download lands where the listing looks for it', async () => {
+  // The two halves must agree. Asserting them separately let the download path
+  // and the scan path drift apart, which is exactly what happened.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController, downloadDirFor } = await import('../src/asr-remote.js')
+  const host = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
+
+  // The download target must be modelDir + the FLAT name, never + the raw repo.
+  assert.match(
+    host,
+    /const target = path\.join\(this\.modelDir, downloadDirFor\(repoId\)\)/,
+    'the download target must be flattened',
+  )
+  // Strip comments first: the explanation above the fix quotes the buggy line
+  // verbatim, and a plain substring search would match its own documentation.
+  const code = host.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  assert.ok(
+    !/path\.join\(this\.modelDir, repoId\)/.test(code),
+    'the raw repo id must never be joined onto the model dir',
+  )
+
+  // And the flat name really is what a completed download produces.
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-land-'))
+  try {
+    const target = nodePath.join(root, downloadDirFor('mlx-community/whisper-small-mlx'))
+    fs.mkdirSync(target, { recursive: true })
+    fs.writeFileSync(nodePath.join(target, 'config.json'), '{}')
+    const controller = new AsrController(new Context(), { modelDir: root })
+    const listed = await controller.listModels()
+    assert.deepEqual(
+      listed.models.map((m) => m.repoId),
+      ['mlx-community/whisper-small-mlx'],
+      'a model written to the download target must appear in the listing',
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

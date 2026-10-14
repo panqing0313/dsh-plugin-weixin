@@ -296,6 +296,97 @@ function readPersistedDownloadSettings() {
     }
 }
 
+/**
+ * The single directory a repo id downloads into.
+ *
+ * A repo id is `org/name`, and `path.join(modelDir, "org/name")` creates TWO
+ * levels -- so the model lands one level deeper than `listModels` looks and the
+ * card reported "尚未安装模型" while 481 MB of weights sat on disk. Flat is
+ * what the listing, and the ASR bridge's own lookup, both expect.
+ *
+ * The slash becomes `__` rather than being dropped, so `org/whisper-small` and
+ * `other/whisper-small` stay separate: taking the last segment would make two
+ * different models silently share one directory and overwrite each other.
+ *
+ * Characters outside a conservative set are escaped, so a repo id can never
+ * introduce a path separator, a dot segment, or a Windows drive prefix.
+ */
+export function downloadDirFor(repoId) {
+    const flat = String(repoId ?? "")
+        .trim()
+        .replace(/\/+/g, "__")
+        .replace(/[^A-Za-z0-9._-]/g, (ch) => `_${ch.codePointAt(0).toString(16)}_`)
+        // A leading dot would hide the directory; a leading dash is fine on
+        // disk but reads like an option in a shell.
+        .replace(/^\./, "_");
+    return flat === "" ? "_" : flat;
+}
+
+/**
+ * The repo id of an already-downloaded model directory.
+ *
+ * `downloadDirFor` is not injective -- it replaces `/` with `__` and `_` is a
+ * legal character in a repo name -- so this is a best-effort label, not a
+ * round-trip. It exists so the card can hand the ASR bridge a usable name
+ * instead of a directory that no longer says what it is.
+ */
+export function repoIdForFolder(folder) {
+    return String(folder ?? "").replace(/__/g, "/");
+}
+
+/**
+ * Move a model out of the pre-fix nested layout, in place.
+ *
+ * Before `downloadDirFor` existed, `path.join(modelDir, "org/name")` created
+ * two levels, so an existing download sits at `<dir>/<org>/<name>` where the
+ * listing never looks. Moving it is cheap (a rename, no copying) and is the
+ * difference between "your model is here" and re-fetching 459 MB; the moved
+ * tree is exactly what `downloadDirFor` now produces, so the two paths agree.
+ *
+ * Only the unambiguous shape is adopted: an org directory with no config.json
+ * of its own. If the org directory IS a model (it has config.json), the flat
+ * scan already sees it and it is left alone.
+ */
+function adoptNestedModels(dir) {
+    let orgs = [];
+    try {
+        orgs = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+        return;
+    }
+    for (const org of orgs) {
+        if (!org.isDirectory()) continue;
+        const orgPath = path.join(dir, org.name);
+        if (fs.existsSync(path.join(orgPath, "config.json"))) continue; // a model in its own right
+        let children = [];
+        try {
+            children = fs.readdirSync(orgPath, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const child of children) {
+            if (!child.isDirectory()) continue;
+            if (!fs.existsSync(path.join(orgPath, child.name, "config.json"))) continue;
+            const from = path.join(orgPath, child.name);
+            const to = path.join(dir, downloadDirFor(`${org.name}/${child.name}`));
+            if (fs.existsSync(to)) continue; // never overwrite a good model
+            try {
+                fs.renameSync(from, to);
+            } catch {
+                // a cross-device or permission failure simply leaves it where
+                // it is; the listing must not fail because a repair could not run
+            }
+        }
+        // Remove the org directory only once it is empty: anything unexpected
+        // inside means it is not the layout this repair understands.
+        try {
+            if (fs.readdirSync(orgPath).length === 0) fs.rmdirSync(orgPath);
+        } catch {
+            // leaves the (now empty) org directory behind; harmless
+        }
+    }
+}
+
 function listModels(dir) {
     const out = [];
     let entries = [];
@@ -322,7 +413,9 @@ function listModels(dir) {
         } catch {
             // ignore unreadable dirs
         }
-        out.push({ name: ent.name, path: modelDir, sizeBytes: bytes });
+        // `repoId` is what a transcription would be configured with; `name` is
+        // the directory on disk, which is what a person browsing Finder sees.
+        out.push({ name: ent.name, path: modelDir, repoId: repoIdForFolder(ent.name), sizeBytes: bytes });
     }
     return out;
 }
@@ -375,6 +468,14 @@ export class AsrController extends TypertRemoteService {
 
     /** Local models already usable (directory with config.json). */
     async listModels() {
+        // Repair the older layout first, so a model downloaded before the flat
+        // naming fix is found rather than re-downloaded. Best-effort: a failure
+        // here must not stop the listing from answering.
+        try {
+            adoptNestedModels(this.modelDir);
+        } catch {
+            // listing still works on whatever the flat scan finds
+        }
         return { modelDir: this.modelDir, models: listModels(this.modelDir) };
     }
 
@@ -415,7 +516,11 @@ export class AsrController extends TypertRemoteService {
         fs.mkdirSync(this.modelDir, { recursive: true });
         // `startedAt` lets the card show elapsed time without inventing a rate
         // from a percentage it cannot date.
-        const target = path.join(this.modelDir, repoId);
+        //
+        // NOT `path.join(this.modelDir, repoId)`: the repo id contains a slash,
+        // which creates a second directory level and hides the model from
+        // listModels. See downloadDirFor.
+        const target = path.join(this.modelDir, downloadDirFor(repoId));
         this.downloads.set(repoId, { status: "running", message: "", percent: 0, startedAt: Date.now() });
 
         // Deliberately NOT the `hf` CLI. On 1.17.0 it requests huggingface.co
