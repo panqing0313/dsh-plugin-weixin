@@ -51,7 +51,7 @@ window.__ModuleLoader__.load({
 					namespace: "weixin",
 					method: "poll",
 					invocation: { kind: "direct" },
-					parameters: [{ name: "sessionKey", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/poll:param`, create: _str } }],
+					parameters: [{ name: "sessionKey", wire: "sessionKey", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/poll:param`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/poll:result`, create: _statusResult },
 				},
 				{
@@ -61,8 +61,8 @@ window.__ModuleLoader__.load({
 					method: "submitVerifyCode",
 					invocation: { kind: "direct" },
 					parameters: [
-						{ name: "sessionKey", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/submitVerifyCode:p0`, create: _str } },
-						{ name: "code", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/submitVerifyCode:p1`, create: _str } },
+						{ name: "sessionKey", wire: "sessionKey", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/submitVerifyCode:p0`, create: _str } },
+						{ name: "code", wire: "code", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/submitVerifyCode:p1`, create: _str } },
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/submitVerifyCode:result`, create: _statusResult },
 				},
@@ -72,7 +72,7 @@ window.__ModuleLoader__.load({
 					namespace: "weixin",
 					method: "cancel",
 					invocation: { kind: "direct" },
-					parameters: [{ name: "sessionKey", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/cancel:p0`, create: _str } }],
+					parameters: [{ name: "sessionKey", wire: "sessionKey", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/cancel:p0`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/cancel:result`, create: _statusResult },
 				},
 				{
@@ -100,7 +100,7 @@ window.__ModuleLoader__.load({
 					namespace: "weixinAsr",
 					method: "downloadModel",
 					invocation: { kind: "direct" },
-					parameters: [{ name: "repo", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadModel:p0`, create: _str } }],
+					parameters: [{ name: "repo", wire: "repo", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadModel:p0`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadModel:result`, create: _statusResult },
 				},
 				{
@@ -109,7 +109,7 @@ window.__ModuleLoader__.load({
 					namespace: "weixinAsr",
 					method: "downloadStatus",
 					invocation: { kind: "direct" },
-					parameters: [{ name: "repo", wire: "json", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadStatus:p0`, create: _str } }],
+					parameters: [{ name: "repo", wire: "repo", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadStatus:p0`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadStatus:result`, create: _statusResult },
 				},
 			],
