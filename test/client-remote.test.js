@@ -310,6 +310,62 @@ test('the directory chooser unwraps its Remote result and survives its absence',
   )
 })
 
+test('the card styles itself with host tokens, not hardcoded colors', () => {
+  // The card renders inside the app shell, which has both light and dark
+  // themes. A literal color is correct in exactly one of them, and the earlier
+  // version leaned on `opacity` for hierarchy — which in a dark theme produces
+  // mud instead of a readable secondary tone.
+  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+
+  // `opacity` on a disabled control is legitimate; using it as a text tone is not.
+  const opacityUses = [...source.matchAll(/opacity: ([0-9.]+)/g)]
+  for (const match of opacityUses) {
+    const at = match.index
+    const window = source.slice(Math.max(0, at - 120), at + 40)
+    assert.ok(
+      /disabled|buttonStyleFor/.test(window),
+      `opacity ${match[1]} is used as a text tone, not for a disabled state`,
+    )
+  }
+
+  // Named colors and hex literals must not appear as text/background styles.
+  for (const bad of ['crimson', '#d4380d', 'color: "red"']) {
+    assert.ok(!source.includes(bad), `hardcoded color ${bad} breaks the other theme`)
+  }
+
+  // Every token the vocabulary names must actually be a resolved alias, and the
+  // text tones must come from the label scale rather than raw values.
+  assert.match(source, /var\(--dsw-alias-label-primary/, 'primary text must use the label token')
+  assert.match(source, /var\(--dsw-alias-label-secondary/, 'secondary text must use the label token')
+  assert.match(source, /var\(--dsw-alias-border-l2/, 'borders must use the border token')
+  assert.match(source, /var\(--dsw-alias-state-success-primary/, 'the ok state must use the state token')
+})
+
+test('every state the card renders matches what the host actually reports', () => {
+  // The card briefly rendered a `status === "downloading"` branch and a
+  // `progress` percentage. The host reports only running/done/failed/idle and no
+  // percentage, so that branch was dead code and the progress figure would have
+  // been invented. Pin the vocabulary to the host's.
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  // CLIENT_PATH is a URL, so resolve the host half as a sibling URL.
+  const host = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
+  const hostStatuses = new Set([...host.matchAll(/status: "(\w+)"/g)].map((m) => m[1]))
+  assert.ok(hostStatuses.size > 0, 'expected the host to report statuses')
+
+  const dlBranches = [...client.matchAll(/dlStatus\.status === "(\w+)"/g)].map((m) => m[1])
+  assert.ok(dlBranches.length > 0, 'expected the card to render download status')
+  for (const status of dlBranches) {
+    assert.ok(
+      hostStatuses.has(status),
+      `the card renders dlStatus "${status}", which the host never reports (host: ${[...hostStatuses].join(', ')})`,
+    )
+  }
+  assert.ok(
+    !/dlStatus\.progress/.test(client),
+    'the host reports no percentage, so a progress figure would be fabricated',
+  )
+})
+
 test('the model directory field offers the host chooser and says so when absent', () => {
   // A wrong model directory only surfaces much later as "no model available",
   // and typing an absolute path by hand is the likeliest way to get one. The
