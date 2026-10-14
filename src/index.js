@@ -27,6 +27,8 @@ import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
+import { WeixinLoginController } from './login-remote.js'
+import { AsrController } from './asr-remote.js'
 import {
   DEFAULT_CDN_BASE_URL,
   DEFAULT_MAX_INBOUND_MEDIA_BYTES,
@@ -92,6 +94,18 @@ export const Config = z.object({
         .dict(z.string())
         .default({})
         .description('Extra environment for the ASR bridge, e.g. HF_HOME, DSH_WEIXIN_ASR_MODEL or DSH_WEIXIN_ASR_LANGUAGE.'),
+      model: z
+        .string()
+        .default('')
+        .description(
+          'Whisper model location for transcription. A Hugging Face repo id (mlx-community/whisper-small-mlx) or an absolute path to a local model directory. Empty lets the ASR bridge default apply.',
+        ),
+      modelDir: z
+        .string()
+        .default('')
+        .description(
+          'Directory where downloadable voice models are stored and looked up. Empty defaults to ~/.dsh/weixin/asr-models.',
+        ),
     })
     .default({})
     .description('Voice transcription through an external bridge process. Absent or empty command means voice notes are delivered as files.'),
@@ -111,6 +125,20 @@ export function apply(ctx, config) {
   if (config.enabled === false) {
     log('disabled by configuration; not starting the Weixin loop')
     return
+  }
+
+  // Settings-page services: QR login orchestration and ASR model management.
+  // Registered regardless of enabled so a disabled plugin can still be
+  // configured and logged in from the UI before being turned on.
+  try {
+    ctx.plugin(WeixinLoginController, {})
+  } catch (error) {
+    warn(`settings login service unavailable: ${String(error)}`)
+  }
+  try {
+    ctx.plugin(AsrController, { modelDir: config.asr?.modelDir?.trim() || undefined })
+  } catch (error) {
+    warn(`settings ASR service unavailable: ${String(error)}`)
   }
 
   ctx.effect(() => {
