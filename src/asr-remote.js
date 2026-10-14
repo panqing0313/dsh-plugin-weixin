@@ -330,8 +330,20 @@ function listModels(dir) {
 export class AsrController extends TypertRemoteService {
     static inject = ["typert"];
 
-    /** In-flight downloads, by repo, so each can be cancelled on its own. */
-    #abort;
+    /**
+     * In-flight downloads, by repo, so each can be cancelled on its own.
+     *
+     * A PLAIN property, deliberately not a `#private` field. The gateway calls
+     * a Remote method on the receiver it reads back from the Cordis context
+     * (`receiverContext.extend({ invocation }).get(descriptor.service)`), which
+     * is a traced Proxy of this service rather than the instance the
+     * constructor built. A private field is keyed by the exact object identity
+     * and a Proxy does not forward that identity, so `#abort` threw
+     * "Cannot read private member #abort from an object whose class did not
+     * declare it" the moment a download started -- while every other method
+     * worked, because public reads go through the Proxy's get trap.
+     */
+    abortControllers;
 
     constructor(ctx, options = {}) {
         // Validate BEFORE super(), and before anything else can fail. A bad
@@ -358,7 +370,7 @@ export class AsrController extends TypertRemoteService {
         this.hfEndpoint = hfEndpoint ?? DEFAULT_ENDPOINT;
         this.hfProxy = hfProxy;
         this.downloads = new Map(); // modelId -> {status, message}
-        this.#abort = new Map(); // modelId -> AbortController, so a download can stop
+        this.abortControllers = new Map(); // modelId -> AbortController, so a download can stop
     }
 
     /** Local models already usable (directory with config.json). */
@@ -411,13 +423,13 @@ export class AsrController extends TypertRemoteService {
         // weight file never starting. The mirror serves the same bytes at
         // 16 MB/s, so the CLI was the obstacle, not the network.
         const controller = new AbortController();
-        this.#abort.set(repoId, controller);
-        void this.#runHttpDownload(repoId, target, controller.signal);
+        this.abortControllers.set(repoId, controller);
+        void this.runHttpDownload(repoId, target, controller.signal);
         return { started: true, message: `开始下载 ${repoId}` };
     }
 
     /** Drive one HTTP download to completion, folding progress into `downloads`. */
-    async #runHttpDownload(repoId, target, signal) {
+    async runHttpDownload(repoId, target, signal) {
         const startedAt = this.downloads.get(repoId)?.startedAt ?? Date.now();
         try {
             const files = await listRepoFiles(this.hfEndpoint, repoId, { proxy: this.hfProxy, signal });
@@ -472,7 +484,7 @@ export class AsrController extends TypertRemoteService {
                 message: `${repoId} 下载失败：${detail}。若本机无法直连，请在插件配置里填写 hfProxy，或换一个可用的 hfEndpoint。`,
             });
         } finally {
-            this.#abort.delete(repoId);
+            this.abortControllers.delete(repoId);
         }
     }
 

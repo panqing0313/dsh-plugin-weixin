@@ -523,3 +523,64 @@ test('the declared parameter count matches the host method signature', async () 
     'the host signature must take exactly the declared parameters, positionally',
   )
 })
+
+test('no Remote service method touches a #private member', async () => {
+  // The gateway calls a Remote method on the receiver it reads back from the
+  // Cordis context, which is a traced Proxy of the service -- not the instance
+  // the constructor built. A `#private` field is keyed by exact object
+  // identity, and a Proxy does not carry that identity, so the read throws
+  //   Cannot read private member #abort from an object whose class did not
+  //   declare it
+  // Only the reachable path is affected, which is what makes it a trap: every
+  // other method on the service keeps working, so the class looks healthy until
+  // the one code path that touches the field is exercised.
+  for (const file of ['../src/asr-remote.js', '../src/login-remote.js']) {
+    const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8')
+    // Strip comments: the explanation above naturally quotes `#abort`.
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n')
+
+    const privates = [...code.matchAll(/(^|[\s{(=])#([A-Za-z_]\w*)/gm)].map((m) => m[2])
+    assert.deepEqual(
+      [...new Set(privates)],
+      [],
+      `${file} declares #private members; a Remote method reaches this class through a Proxy, ` +
+        'which cannot read them. Use a plain property instead.',
+    )
+  }
+})
+
+test('a Remote call through a Proxy still reaches the download body', async () => {
+  // The behavioural half of the guard above: it must be possible to start a
+  // download through a Proxy-wrapped service, which is how the gateway calls it.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-proxy-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    const real = new AsrController(new Context(), { modelDir: nodePath.join(root, 'models') })
+    // Bind methods to the target: the gateway reads the method off the traced
+    // receiver, and private *methods* would fail the same way fields do.
+    const proxied = new Proxy(real, {
+      get: (t, p, r) => (typeof t[p] === 'function' ? t[p].bind(t) : Reflect.get(t, p, r)),
+    })
+
+    const started = await proxied.downloadModel('probe/nonexistent-model')
+    assert.equal(started.started, true, 'the call must reach the method body')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const status = await proxied.downloadStatus('probe/nonexistent-model')
+    assert.ok(
+      ['running', 'failed', 'idle'].includes(status.status),
+      `the status read must work through the Proxy too, got ${JSON.stringify(status)}`,
+    )
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
