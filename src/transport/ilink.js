@@ -1,0 +1,409 @@
+/**
+ * Long-poll inbound transport for the Weixin iLink Bot API, built on the
+ * vendored Tencent transport (`vendor/openclaw-weixin`, MIT).
+ *
+ * Implements the seam the channel core expects: `start(onMessage)`, `send()`,
+ * `stop()`.
+ *
+ * Why the loop lives here instead of reusing the upstream monitor: upstream's
+ * `src/monitor/monitor.ts` requires a full OpenClaw `channelRuntime`
+ * (it throws "channelRuntime missing on monitor opts") and routes each message
+ * through OpenClaw's own ingress/dispatch. dsh-weixin owns its own dispatch —
+ * one Weixin conversation maps to one DSH agent session — so it reuses only the
+ * pure HTTP layer and drives getUpdates itself. The retry policy mirrors the
+ * upstream monitor: three consecutive failures trigger a 30s backoff, single
+ * failures retry after 2s.
+ * @module dsh-weixin/transport/ilink
+ */
+import { getUpdates, sendMessage, getConfig, sendTyping, notifyStart, notifyStop, classifyFetchError } from '../../vendor/openclaw-weixin/api/api.js'
+import { MessageItemType, MessageState, MessageType, TypingStatus } from '../../vendor/openclaw-weixin/api/types.js'
+import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from '../../vendor/openclaw-weixin/storage/sync-buf.js'
+import { CDN_BASE_URL as DEFAULT_CDN_BASE_URL } from '../../vendor/openclaw-weixin/auth/accounts.js'
+
+/** Consecutive failures tolerated before the long backoff kicks in. */
+const MAX_CONSECUTIVE_FAILURES = 3
+const BACKOFF_DELAY_MS = 30_000
+const RETRY_DELAY_MS = 2_000
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Reduce an iLink `WeixinMessage` to the channel's {@link InboundMessage}.
+ *
+ * Returns `null` for messages that carry nothing this channel can act on
+ * (bot echoes, non-final states, or items of a kind with no decoder here) so
+ * the caller can skip them without special-casing upstream shapes.
+ *
+ * @param {any} raw
+ * @returns {any|null}
+ */
+/** iLink sends `""` for "not a group"; only a non-blank value is a group id. */
+function blankToUndefined(value) {
+  return typeof value === 'string' && value.trim() === '' ? undefined : value
+}
+
+/**
+ * Which payload field each media item kind carries, and the media kind name
+ * this channel uses for it.
+ *
+ * The field names come straight from the protocol: an `ImageItem` nests its
+ * CDN reference under `image_item`, a `FileItem` under `file_item`, and so on.
+ * Keeping the map here (rather than a chain of `if`s) means the four kinds
+ * cannot drift apart in how they are unwrapped or in what they are called
+ * downstream.
+ */
+const MEDIA_ITEM_KINDS = new Map([
+  [MessageItemType.IMAGE, { kind: 'image', field: 'image_item' }],
+  [MessageItemType.VOICE, { kind: 'voice', field: 'voice_item' }],
+  [MessageItemType.FILE, { kind: 'file', field: 'file_item' }],
+  [MessageItemType.VIDEO, { kind: 'video', field: 'video_item' }],
+])
+
+/**
+ * Pull one media item into the flat descriptor the downloader consumes.
+ *
+ * Only fields the downloader actually reads are copied, and `undefined` values
+ * are dropped so the descriptor stays comparable with a literal in tests. An
+ * item with no CDN reference at all still yields a descriptor — it just carries
+ * `media: {}`, which `src/media/inbound.js` reports as a download failure
+ * rather than silently ignoring. Returning a descriptor for a reference-less
+ * item is deliberate: "WeChat sent a picture we cannot fetch" is information
+ * the user must receive, and the old `unsupported` path is what hid it.
+ *
+ * @param {any} item
+ * @param {{ kind: string, field: string }} shape
+ */
+function normalizeMediaItem(item, shape) {
+  const payload = item[shape.field] ?? {}
+  const media = payload.media ?? {}
+  /** @type {Record<string, any>} */
+  const out = { kind: shape.kind }
+  const put = (key, value) => {
+    if (value !== undefined && value !== null) out[key] = value
+  }
+  put('encryptQueryParam', media.encrypt_query_param)
+  put('aesKey', media.aes_key)
+  put('fullUrl', media.full_url)
+  // FileItem names the attachment; VoiceItem carries a playtime. Both are
+  // display metadata only — never a path (see src/media/inbound.js).
+  put('fileName', payload.file_name)
+  put('size', payload.len ?? payload.file_size ?? payload.mid_size ?? payload.video_size)
+  // ImageItem keeps the AES key hex-encoded beside the media block instead of
+  // inside it; the downloader prefers this one when present.
+  put('aesKeyHex', payload.aeskey)
+  return out
+}
+
+export function normalizeInbound(raw) {
+  // Our own echoes: never feed them back to the agent (loop guard).
+  if (raw.message_type === MessageType.BOT) return null
+  if (raw.message_state !== undefined && raw.message_state !== MessageState.FINISH && raw.message_state !== MessageState.NEW) {
+    return null
+  }
+  const items = Array.isArray(raw.item_list) ? raw.item_list : []
+  const from = raw.from_user_id ?? ''
+  // A 1:1 message carries `group_id: ""`, not an absent field, so `??` alone
+  // would make the conversation id the empty string and every reply would be
+  // addressed to nobody. Treat blank as absent the way the peer id must be.
+  const conversationId = blankToUndefined(raw.group_id) ?? from
+  const contextToken = raw.context_token ?? ''
+  const id = String(raw.message_id ?? raw.client_id ?? '')
+  const timestamp = raw.create_time_ms ?? Date.now()
+
+  // A WeChat photo arrives as an IMAGE item plus a TEXT item holding the
+  // caption the sender typed with it, so both are collected in one pass
+  // instead of the text winnowing the media out.
+  /** @type {Array<Record<string, any>>} */
+  const media = []
+  let caption
+  for (const item of items) {
+    if (item?.type === MessageItemType.TEXT && typeof item?.text_item?.text === 'string' && item.text_item.text !== '') {
+      caption ??= item.text_item.text
+      continue
+    }
+    const shape = MEDIA_ITEM_KINDS.get(item?.type)
+    if (shape !== undefined) media.push(normalizeMediaItem(item, shape))
+  }
+
+  if (media.length > 0) {
+    return {
+      id,
+      senderId: from,
+      conversationId,
+      contextToken,
+      type: media.length === 1 ? media[0].kind : 'media',
+      media,
+      ...(caption === undefined ? {} : { text: caption }),
+      timestamp,
+    }
+  }
+  if (caption !== undefined) {
+    return { id, senderId: from, conversationId, type: 'text', text: caption, contextToken, timestamp }
+  }
+  // Carry the routing fields anyway, so the caller can send a "not
+  // supported" notice back to the conversation that produced it.
+  const kind = items.length > 0 ? `item type ${items[0]?.type}` : 'no items'
+  return { id, senderId: from, conversationId, contextToken, unsupported: kind }
+}
+
+/**
+ * Run one message through the handler with its own error boundary.
+ *
+ * @param {(message: any) => Promise<void>} onMessage
+ * @param {any} message
+ * @param {(line: string) => void} errLog
+ */
+async function dispatchMessage(onMessage, message, errLog) {
+  try {
+    await onMessage(message)
+  } catch (error) {
+    errLog(`message ${message.id || '(no id)'} failed: ${String(error)}`)
+  }
+}
+
+/**
+ * Long-poll driver for one Weixin account.
+ */
+export class ILinkTransport {
+  /**
+   * @param {object} options
+   * @param {string} options.accountId
+   * @param {string} options.baseUrl
+   * @param {string} options.token
+   * @param {string} [options.cdnBaseUrl]  Weixin CDN root for outbound media; the
+   *   upstream default when unset.
+   * @param {number} [options.longPollTimeoutMs]
+   * @param {(line: string) => void} [options.log]
+   * @param {(line: string) => void} [options.errLog]
+   */
+  constructor(options) {
+    this.accountId = options.accountId
+    this.baseUrl = options.baseUrl
+    this.token = options.token
+    this.cdnBaseUrl = options.cdnBaseUrl ?? DEFAULT_CDN_BASE_URL
+    this.longPollTimeoutMs = options.longPollTimeoutMs ?? 35_000
+    this.log = options.log ?? (() => {})
+    this.errLog = options.errLog ?? options.log ?? (() => {})
+    this.syncBufPath = getSyncBufFilePath(this.accountId)
+    this.abort = new AbortController()
+    this.running = false
+    this.loopPromise = null
+    this.typingTicket = undefined
+  }
+
+  /**
+   * @param {(message: any) => Promise<void>} onMessage
+   */
+  async start(onMessage) {
+    if (this.running) return
+    this.running = true
+    this.abort = new AbortController()
+    // Best-effort startup notification; a failure here must not block polling.
+    try {
+      await notifyStart({ baseUrl: this.baseUrl, token: this.token })
+    } catch (error) {
+      this.log(`notifyStart failed (continuing): ${String(error)}`)
+    }
+    this.loopPromise = this.#loop(onMessage)
+  }
+
+  async #loop(onMessage) {
+    let consecutiveFailures = 0
+    while (this.running && !this.abort.signal.aborted) {
+      let buf = loadGetUpdatesBuf(this.syncBufPath)
+      try {
+        const resp = await getUpdates({
+          baseUrl: this.baseUrl,
+          token: this.token,
+          get_updates_buf: buf ?? '',
+          timeoutMs: this.longPollTimeoutMs,
+          abortSignal: this.abort.signal,
+        })
+        if (resp.ret !== undefined && resp.ret !== 0) {
+          throw new Error(`getUpdates ret=${resp.ret} errmsg=${resp.errmsg ?? '(none)'}`)
+        }
+        consecutiveFailures = 0
+        if (typeof resp.get_updates_buf === 'string' && resp.get_updates_buf !== buf) {
+          saveGetUpdatesBuf(this.syncBufPath, resp.get_updates_buf)
+        }
+        // Honour a server-directed shorter poll interval.
+        if (typeof resp.longpolling_timeout_ms === 'number' && resp.longpolling_timeout_ms > 0) {
+          this.longPollTimeoutMs = resp.longpolling_timeout_ms
+        }
+        const msgs = Array.isArray(resp.msgs) ? resp.msgs : []
+        for (const raw of msgs) {
+          const message = normalizeInbound(raw)
+          if (message === null) continue
+          // Deliver sequentially: a Weixin conversation is one ordered
+          // conversation, and the agent session is single-threaded.
+          //
+          // The handler runs OUTSIDE this try: a failing turn (bad send, agent
+          // error) is not a poll failure, and folding it in here would both
+          // mislabel it and trip the poll backoff for an unrelated reason.
+          await dispatchMessage(onMessage, message, this.errLog)
+        }
+      } catch (error) {
+        if (!this.running || this.abort.signal.aborted) break
+        consecutiveFailures += 1
+        const classified = classifyFetchError(error)
+        this.errLog(`getUpdates failed (${classified.type}): ${classified.description}`)
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
+          await sleep(BACKOFF_DELAY_MS)
+          consecutiveFailures = 0
+        } else {
+          await sleep(RETRY_DELAY_MS)
+        }
+      }
+    }
+  }
+
+  /**
+   * Send one text reply, split into chunks by the caller.
+   * @param {any} message
+   */
+  async send(message) {
+    const item = { type: MessageItemType.TEXT, text_item: { text: message.text ?? '' } }
+    await sendMessage({
+      baseUrl: this.baseUrl,
+      token: this.token,
+      body: this.#body({ conversationId: message.conversationId, item, contextToken: message.contextToken }),
+    })
+  }
+
+  /**
+   * Upload one local file to the Weixin CDN and send it as an IMAGE, VIDEO or
+   * FILE item, routed by MIME type.
+   *
+   * This is the transport's half of the outbound-media seam: it owns the iLink
+   * credentials, the routing fields and the context-token echo, and delegates
+   * the decision (is this path allowed? is it a file? how big?) as well as the
+   * upload itself to `src/media/outbound.js`. Keeping the item construction here
+   * — rather than in the media layer — means FILE/IMAGE/VIDEO items go through
+   * the same `#body()` envelope as text, so they cannot drift apart on
+   * `message_type`, `message_state` or `context_token`.
+   *
+   * The context-token echo is mandatory for media too: iLink routes the reply
+   * by it exactly as it does for text.
+   *
+   * @param {object} params
+   * @param {string} params.filePath  Local file to upload.
+   * @param {string} params.conversationId  Peer id (`to_user_id`).
+   * @param {string} [params.contextToken]
+   * @param {string} [params.cdnBaseUrl]
+   * @param {string} [params.caption]  Optional text sent as its own item first.
+   * @returns {Promise<{ kind: string, filekey?: string, serverMessageId?: string }>}
+   * @throws when the upload or the send fails; the caller degrades to text.
+   */
+  async sendMedia({ filePath, conversationId, contextToken, cdnBaseUrl, caption }) {
+    const { sendOutboundMedia, mediaSendOptions } = await import('../media/outbound.js')
+    const opts = mediaSendOptions({
+      baseUrl: this.baseUrl,
+      token: this.token,
+      accountId: this.accountId,
+    })
+    const result = await sendOutboundMedia({
+      filePath,
+      to: conversationId,
+      contextToken: contextToken ?? this.#fallbackContextToken(),
+      cdnBaseUrl: cdnBaseUrl ?? this.cdnBaseUrl,
+      opts,
+      ...(caption === undefined || caption === '' ? {} : { text: caption }),
+    })
+    this.log(`sent ${result.kind} media ${filePath} to ${conversationId}`)
+    return result
+  }
+
+  /**
+   * Build the iLink envelope shared by every outbound item kind.
+   *
+   * One place for the invariants: the bot message type, the FINISH state (iLink
+   * ignores a non-final item), a fresh client id per request, and the echoed
+   * `context_token` that routes the reply. `item_list` is always exactly one
+   * item because that is what upstream's send pipeline does for the same reason.
+   *
+   * @param {object} params
+   * @param {string} params.conversationId
+   * @param {any} params.item
+   * @param {string} [params.contextToken]
+   */
+  #body({ conversationId, item, contextToken }) {
+    const body = {
+      msg: {
+        from_user_id: '',
+        to_user_id: conversationId,
+        client_id: `dsh-weixin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        message_type: MessageType.BOT,
+        message_state: MessageState.FINISH,
+        item_list: [item],
+      },
+    }
+    // iLink routes a reply by context token; without the echo the message can
+    // be rejected or delivered to the wrong conversation.
+    const token = contextToken ?? this.#fallbackContextToken()
+    if (token) body.msg.context_token = token
+    return body
+  }
+
+  /**
+   * Last-resort context token when the inbound message carried none: the
+   * account's `typing_ticket` from getConfig. Usually absent, in which case the
+   * send proceeds without a token (the upstream contract allows it).
+   */
+  #fallbackContextToken() {
+    return this.typingTicket
+  }
+
+  /** Refresh the typing ticket used as a fallback context token. */
+  async refreshConfig() {
+    try {
+      const resp = await getConfig({ baseUrl: this.baseUrl, token: this.token, ilinkUserId: '' })
+      if (typeof resp?.typing_ticket === 'string' && resp.typing_ticket) {
+        this.typingTicket = resp.typing_ticket
+      }
+    } catch (error) {
+      this.log(`getConfig failed (typing ticket unavailable): ${String(error)}`)
+    }
+  }
+
+  /**
+   * Show (or clear) the "typing" indicator in the Weixin conversation.
+   *
+   * iLink needs a `typing_ticket` from getConfig, not the message's context
+   * token; without a ticket the indicator is silently unavailable and this is a
+   * no-op. The ticket is per-account, not per-conversation, but `ilink_user_id`
+   * selects the peer.
+   */
+  async setTyping(active, conversationId) {
+    if (!this.typingTicket) return
+    try {
+      await sendTyping({
+        baseUrl: this.baseUrl,
+        token: this.token,
+        body: {
+          ilink_user_id: conversationId,
+          typing_ticket: this.typingTicket,
+          status: active ? TypingStatus.TYPING : TypingStatus.CANCEL,
+        },
+      })
+    } catch {
+      // A typing indicator is cosmetic; never fail a turn over it.
+    }
+  }
+
+  async stop() {
+    if (!this.running) return
+    this.running = false
+    this.abort.abort()
+    try {
+      await this.loopPromise
+    } catch {
+      // The loop swallows its own errors; nothing to propagate.
+    }
+    try {
+      await notifyStop({ baseUrl: this.baseUrl, token: this.token })
+    } catch {
+      // Shutting down; a failed notification is not actionable.
+    }
+  }
+}

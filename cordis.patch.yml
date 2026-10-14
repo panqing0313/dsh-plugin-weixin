@@ -1,0 +1,30 @@
+# dsh-plugin-weixin bundle patch layer.
+#
+# The row `id` below stays `dsh-weixin` on purpose: it is the stable identity
+# that was deployed in existing profiles, and renaming it would leave the old
+# row behind. The package `name` is what the loader resolves.
+#
+# `insert` mounts a plugin row into the loader. `name` is the package name (the
+# loader resolves it through normal node resolution from the profile's
+# node_modules), and `id` is the row's stable identity — the id the settings
+# service addresses this plugin's preferences by.
+#
+# `disabled` guards a double mount when the same package is already listed
+# (for example by another bundle's patch layer), so installing this bundle twice
+# cannot start two long-poll loops on one WeChat account.
+- insert:
+    - id: dsh-weixin
+      name: 'dsh-plugin-weixin'
+      config:
+        enabled: true
+        # Empty means deny-everyone. Fill in the Weixin user id(s) you scanned
+        # with, then reload; anything else is refused before a session exists.
+        allowedSenders: []
+        maxMessageLength: 1500
+        progressAfterMs: 45000
+        maxTurnWaitMs: 1200000
+        typingIndicator: true
+      # Must stay a single-line scalar: the loader evaluates this with eval(),
+      # and `entries()` yields entry records, not [id, entry] tuples — the
+      # row's identity lives on `entry.options.id`, not in a destructured key.
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === 'dsh-plugin-weixin' && e.options.id !== 'dsh-weixin' && !e.disabled)"

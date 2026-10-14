@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-weixin-vendored",
+  "version": "2.4.10",
+  "private": true,
+  "type": "module",
+  "ilink_appid": "bot",
+  "description": "Vendored subset of @tencent-weixin/openclaw-weixin 2.4.10 (MIT): the iLink transport (api/, auth/, storage/, util/), the CDN upload/download and AES-128-ECB media layer (cdn/, media/) and the messaging layer (markdown-filter.js, send.js, send-media.js, quote-store.js). The three openclaw/plugin-sdk imports and one package-internal getMediaLabel import are redirected to ./openclaw-shim.js; see THIRD-PARTY-NOTICES.md.",
+  "license": "MIT"
+}

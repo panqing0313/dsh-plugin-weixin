@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+coverage/
+
+# secrets — never commit these. The iLink account file holds the bot session;
+# anyone with it can speak as this account.
+.env
+*.session.json
+session.json
+*.credential*
+accounts.json
+
+# captured WeChat media
+*.silk
+*.wav
+login-qr.png
+
+# scratch
+.DS_Store
+.npmcache/
+*.tgz
+scratch/
+
+# local ASR service (Python venv + model cache + server script) lives outside
+# this repo on purpose: the model is ~670MB and platform-specific.
+asr-server.py

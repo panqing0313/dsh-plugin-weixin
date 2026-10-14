@@ -1,0 +1,74 @@
+{
+  "name": "dsh-plugin-weixin",
+  "version": "0.1.0",
+  "description": "Weixin (personal WeChat, iLink Bot API) channel plugin for DeepSeek Harness — command a DSH agent from WeChat, with images, files and voice-note transcription.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "weixin",
+    "wechat",
+    "ilink",
+    "channel",
+    "bot",
+    "asr"
+  ],
+  "homepage": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/REPLACE_WITH_YOUR_GITHUB_USERNAME/dsh-weixin/issues"
+  },
+  "scripts": {
+    "login": "node bin/login.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:watch": "node --test --watch \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
+  },
+  "optionalDependencies": {
+    "silk-wasm": "^3.7.1"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "bin",
+    "vendor",
+    "cordis.patch.yml",
+    "README.md",
+    "THIRD-PARTY-NOTICES.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.6"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1
+  }
+}
