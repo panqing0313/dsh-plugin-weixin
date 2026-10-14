@@ -212,6 +212,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
       [...methods].sort(),
       [
         'weixin/cancel',
+        'weixin/logout',
         'weixin/poll',
         'weixin/startLogin',
         'weixin/status',
@@ -420,6 +421,44 @@ test('the card styles itself with host tokens, not hardcoded colors', () => {
   assert.match(source, /var\(--dsw-alias-state-success-primary/, 'the ok state must use the state token')
 })
 
+test('every host remote method has a client descriptor, and vice versa', async () => {
+  // The two halves declare the same surface in two places that cannot see each
+  // other: the host lists method names in `remoteMethods(...)`, and the browser
+  // hand-writes a descriptor per method for `$mount` to validate. Nothing at
+  // runtime compares them. A method the host exposes but the client never
+  // declares is simply unreachable from the card, and a client descriptor with
+  // no host method fails only when the user clicks it. Both were live risks for
+  // `logout`, which had to be added to both lists in one commit.
+  const registration = loadClientModule()
+  const mod = registration.factory(fakeRequire)
+  let mounted
+  const ctx = fakeCtx({ onMount: (c) => { mounted = c } })
+  await mod.apply(ctx)
+
+  const hostSource = fs.readFileSync(new URL('../src/login-remote.js', import.meta.url), 'utf8')
+  const hostMethods = new Set(
+    [...hostSource.matchAll(/remoteMethods\(\s*\w+\s*,\s*\[([^\]]*)\]/g)]
+      .flatMap((m) => [...m[1].matchAll(/"(\w+)"/g)].map((x) => x[1])),
+  )
+  assert.ok(hostMethods.size > 0, 'expected the host to declare remote methods')
+
+  const clientMethods = new Set(
+    mounted.descriptors.filter((d) => d.namespace === 'weixin').map((d) => d.method),
+  )
+  assert.deepEqual(
+    [...clientMethods].sort(),
+    [...hostMethods].sort(),
+    'the weixin namespace must expose exactly the methods the host declares',
+  )
+  for (const descriptor of mounted.descriptors.filter((d) => d.namespace === 'weixin')) {
+    assert.equal(
+      descriptor.service,
+      'weixinLoginController',
+      `${descriptor.id} must target the login controller`,
+    )
+  }
+})
+
 test('every state the card renders matches what the host actually reports', () => {
   // The card briefly rendered a `status === "downloading"` branch and a
   // `progress` percentage. The host reports only running/done/failed/idle and no
@@ -586,4 +625,31 @@ test('clearing the proxy sends the empty value, not the stale one', () => {
     /onClick: \(\) => saveProxy\(proxyInput\)/,
     'the Save button must wrap the handler so it receives the input, not the event',
   )
+})
+
+test('the log out button is offered only when bound, and stays non-primary', () => {
+  // Two ways this button can hurt the operator:
+  //   - Showing it with nothing bound makes a destructive action reachable in a
+  //     state where it can only report "nothing removed".
+  //   - Making it the primary button puts "delete my credentials" where "scan
+  //     to log in" belongs, one mis-click from the action the card exists for.
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+
+  const handler = client.match(/const leaveAccount = async \(\) => \{[\s\S]*?\n\t\t\t\};/)
+  assert.ok(handler, 'leaveAccount must stay a findable handler')
+  assert.match(handler[0], /ctx\.remote\.weixin\.logout\(/, 'it must call the host logout')
+  assert.match(handler[0], /globalThis\.confirm/, 'a destructive action must ask first')
+  // Cancelling the prompt must not proceed.
+  assert.match(handler[0], /if \(ok === false\) return/, 'a declined confirmation must stop')
+  // The empty string means "whatever is bound"; the host decides which account.
+  assert.match(handler[0], /\.logout\(""\)/, 'it must not guess an account id')
+
+  // The button itself: present only under `bound`, and styled as a plain button
+  // rather than the primary one.
+  const button = client.match(/onClick: leaveAccount,[\s\S]{0,120}?buttonStyleFor\(loggingOut\)/)
+  assert.ok(button, 'the logout button must use buttonStyleFor(), not primaryButtonStyle')
+  assert.doesNotMatch(button[0], /primaryButtonStyle/, 'logout must never be the primary action')
+
+  // Guarded by `bound` in the same conditional the login button uses.
+  assert.match(client, /bound\s*\n?\s*\?\s*createElement\("button", \{\s*\n\s*onClick: leaveAccount,/)
 })

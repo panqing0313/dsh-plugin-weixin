@@ -13,6 +13,8 @@ import {
     listIndexedWeixinAccountIds,
     saveWeixinAccount,
     registerWeixinAccountId,
+    clearWeixinAccount,
+    unregisterWeixinAccountId,
 } from "../vendor/openclaw-weixin/auth/accounts.js";
 import { stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
@@ -193,6 +195,44 @@ export class WeixinLoginController extends TypertRemoteService {
         return { cancelled: true };
     }
 
+    /**
+     * Forget a bound account: delete its saved credentials and drop it from the
+     * index, so the card returns to "not logged in".
+     *
+     * Only the credential is removed. Session history and the operator's own
+     * settings (allowlist, model directory) live elsewhere and are deliberately
+     * kept — logging out is "stop using this account", not "erase the setup".
+     *
+     * There is no server-side revocation to call: the token is a session, and
+     * dropping it locally is what makes the plugin stop using it. A bot the
+     * server no longer serves cannot be unbound from here either — this only
+     * stops *this* host from trying.
+     *
+     * The poll loop keeps the credentials it started with until it restarts, so
+     * a logout takes full effect on the next reload; the card says so.
+     */
+    async logout(accountId) {
+        const wanted = String(accountId ?? "").trim();
+        const ids = wanted ? [wanted] : listIndexedWeixinAccountIds();
+        if (ids.length === 0) {
+            return { removed: [], reloadRequired: false };
+        }
+        const removed = [];
+        for (const id of ids) {
+            // Only touch accounts we actually hold: a caller must not be able to
+            // name an arbitrary path, and a typo should not report success.
+            const acct = loadWeixinAccount(id);
+            if (!acct?.token) continue;
+            clearWeixinAccount(id);
+            unregisterWeixinAccountId(id);
+            removed.push(id);
+        }
+        // Any in-flight QR session belongs to the account that just went away.
+        logins.clear();
+        this.sessionExpired = false;
+        return { removed, reloadRequired: removed.length > 0 };
+    }
+
     /** Account status for the settings card: which account is bound, state dir. */
     async status() {
         const ids = listIndexedWeixinAccountIds();
@@ -241,4 +281,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout"]);

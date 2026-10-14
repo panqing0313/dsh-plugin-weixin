@@ -84,6 +84,15 @@ window.__ModuleLoader__.load({
 					parameters: [],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/status:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/logout`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "logout",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/logout:p0`, create: _str } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/logout:result`, create: _statusResult },
+				},
 				// weixinAsr namespace (AsrController)
 				{
 					id: `${PKG}#weixinAsr/listModels`,
@@ -475,6 +484,8 @@ window.__ModuleLoader__.load({
 			const [message, setMessage] = react.useState("");
 			const [accounts, setAccounts] = react.useState([]);
 			const [sessionExpired, setSessionExpired] = react.useState(false);
+			const [loggingOut, setLoggingOut] = react.useState(false);
+			const [logoutNotice, setLogoutNotice] = react.useState("");
 			const [copied, setCopied] = react.useState(false);
 			const pollRef = react.useRef(null);
 
@@ -558,6 +569,44 @@ window.__ModuleLoader__.load({
 				setMessage("");
 			};
 
+			/**
+			 * Forget the bound account, after asking.
+			 *
+			 * The confirmation is not ceremony: the credentials are the only copy
+			 * of the login, and recovering them means scanning again. It also
+			 * names the account, because an operator with more than one bound
+			 * account must see which one is about to go.
+			 */
+			const leaveAccount = async () => {
+				const which = accounts.map((a) => a.accountId).join(", ");
+				const ok = globalThis.confirm?.(
+					t(
+						`Log out ${which || "this account"}? Its saved credentials are deleted and you will have to scan the QR code again.`,
+						`确定退出登录 ${which || "当前账号"}？将删除已保存的登录凭证，需要重新扫码才能再次使用。`,
+					),
+				);
+				if (ok === false) return;
+				setLoggingOut(true);
+				setLogoutNotice("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.logout(""));
+					const removed = Array.isArray(r?.removed) ? r.removed : [];
+					if (removed.length === 0) {
+						setLogoutNotice(t("No saved account was found to remove.", "没有找到可退出的账号。"));
+					} else {
+						setLogoutNotice(t(
+							"Credentials deleted. Reload DSH to stop the running poll loop, then scan again to re-bind.",
+							"凭证已删除。请重载 DSH 以停止正在运行的轮询，然后重新扫码绑定。",
+						));
+					}
+					await refreshStatus();
+				} catch (err) {
+					setLogoutNotice(String(err?.message ?? err));
+				} finally {
+					setLoggingOut(false);
+				}
+			};
+
 			const copyLink = async () => {
 				if (!qrUrl) return;
 				try {
@@ -613,7 +662,23 @@ window.__ModuleLoader__.load({
 								style: primaryButtonStyle,
 							}, bound || sessionExpired
 								? t("Scan again to log in", "重新扫码登录")
-								: t("Scan QR code to log in", "扫码登录微信")))
+								: t("Scan QR code to log in", "扫码登录微信")),
+							// Only offered when there is something to forget. A
+							// logout is destructive, so it is never the primary
+							// button and it asks first.
+							bound
+								? createElement("button", {
+										onClick: leaveAccount,
+										disabled: loggingOut,
+										style: buttonStyleFor(loggingOut),
+									}, loggingOut
+										? t("Logging out…", "正在退出…")
+										: t("Log out", "退出登录"))
+								: null)
+					: null,
+
+				logoutNotice
+					? createElement("div", { style: hintStyle }, logoutNotice)
 					: null,
 
 				state.phase === "qr"
