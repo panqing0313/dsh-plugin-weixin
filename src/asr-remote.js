@@ -5,15 +5,32 @@
 // (b) see which models are already present locally. The model *path* itself
 // is configured through the plugin Config schema (asr.model), so the settings
 // form already covers selection; this controller handles the download part.
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import http from "node:http";
+import https from "node:https";
+import { connect as tlsConnect } from "node:tls";
 import { TypertRemoteService, Remote, RemoteError } from "@deepseek-ai/dsh-typert-protocol";
 import { stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 
 const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
+
+/**
+ * The endpoint a plain HTTP download uses when the operator names none.
+ *
+ * The `hf` CLI is not used for downloads any more, and this is why: on
+ * huggingface_hub 1.17.0 it requests huggingface.co for repo metadata even when
+ * HF_ENDPOINT points elsewhere, and on 2.2.0 it stalls at 3/4 files with the
+ * large weight file never starting. The mirror itself is fine -- it serves the
+ * same weights at 16 MB/s -- so the CLI, not the network, was the obstacle.
+ *
+ * 0 means "download directly". "auto" resolves to this. An operator behind a
+ * blocked network sets hfEndpoint to https://hf-mirror.com (or leaves "auto"),
+ * and one who needs the official site or a corporate mirror sets it explicitly.
+ */
+const DEFAULT_ENDPOINT = "https://hf-mirror.com";
 
 const ASR_CONFIG_FILE = "asr-config.json";
 
@@ -41,6 +58,155 @@ export function normalizeProxy(value) {
     return raw;
 }
 
+/**
+ * Issue one GET, optionally through an HTTP proxy, and resolve with the
+ * response stream.
+ *
+ * Node's `fetch` is deliberately not used: it ignores the proxy environment
+ * variables and undici's ProxyAgent is not importable from inside the packaged
+ * app. Since the whole point of `hfProxy` is a network where direct access
+ * fails, a proxy that silently does not apply is worse than none -- the
+ * operator sees a configured field and waits. `http`/`https` are built in and
+ * let the CONNECT tunnel be explicit.
+ *
+ * `redirects` is bounded: a mirror that redirects in a loop must fail rather
+ * than spin.
+ */
+function httpGet(url, { proxy, signal, headers = {}, redirects = 5 } = {}) {
+    return new Promise((resolve, reject) => {
+        const target = new URL(url);
+        const secure = target.protocol === "https:";
+        const onError = (err) => reject(err);
+        if (signal?.aborted) return reject(new Error("aborted"));
+
+        const send = (socket, nodeModule) => {
+            const req = nodeModule.request(
+                {
+                    ...(socket ? { createConnection: () => socket } : {}),
+                    host: target.hostname,
+                    port: target.port || (secure ? 443 : 80),
+                    path: `${target.pathname}${target.search}`,
+                    method: "GET",
+                    headers: { host: target.host, accept: "*/*", ...headers },
+                    signal,
+                },
+                (res) => {
+                    const status = res.statusCode ?? 0;
+                    const location = res.headers.location;
+                    if (status >= 300 && status < 400 && location) {
+                        res.resume();
+                        if (redirects <= 0) {
+                            reject(new Error(`重定向次数过多：${url}`));
+                            return;
+                        }
+                        const next = new URL(location, url).toString();
+                        httpGet(next, { proxy, signal, headers, redirects: redirects - 1 }).then(resolve, reject);
+                        return;
+                    }
+                    resolve({ status, headers: res.headers, body: res });
+                },
+            );
+            req.on("error", onError);
+            req.end();
+        };
+
+        if (!proxy) {
+            send(null, secure ? https : http);
+            return;
+        }
+
+        // HTTPS through a proxy requires a CONNECT tunnel; a proxy will not
+        // forward a TLS stream as a plain absolute-URI request.
+        const proxyUrl = new URL(proxy);
+        const connect = http.request({
+            host: proxyUrl.hostname,
+            port: proxyUrl.port || 80,
+            method: "CONNECT",
+            path: `${target.hostname}:${target.port || (secure ? 443 : 80)}`,
+            headers: { host: `${target.hostname}:${target.port || (secure ? 443 : 80)}` },
+            signal,
+        });
+        connect.on("connect", (res, socket) => {
+            if (res.statusCode !== 200) {
+                socket.destroy();
+                reject(new Error(`代理拒绝连接（CONNECT ${res.statusCode}）`));
+                return;
+            }
+            if (!secure) {
+                send(socket, http);
+                return;
+            }
+            // The tunnel socket must be handed to `http.request`, NOT
+            // `https.request`: the latter would wrap an already-TLS socket in a
+            // second TLS layer, and the handshake dies with "disconnected
+            // before secure TLS connection was established".
+            const tls = tlsConnect({ socket, servername: target.hostname }, () => send(tls, http));
+            tls.on("error", onError);
+        });
+        connect.on("error", onError);
+        connect.end();
+    });
+}
+
+/**
+ * List the files in a repo snapshot, so each can be fetched individually.
+ * The CLI's own manifest handling is what stalls; a plain file list is enough.
+ */
+export async function listRepoFiles(endpoint, repoId, { proxy, signal } = {}) {
+    const base = (endpoint || DEFAULT_ENDPOINT).replace(/\/+$/, "");
+    const res = await httpGet(`${base}/api/models/${repoId}`, {
+        proxy,
+        signal,
+        headers: { accept: "application/json" },
+    });
+    if (res.status < 200 || res.status >= 300) {
+        res.body.resume();
+        throw new RemoteError("repo_unavailable", `无法读取模型信息（HTTP ${res.status}）`, {});
+    }
+    const chunks = [];
+    for await (const chunk of res.body) chunks.push(chunk);
+    let body;
+    try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+        throw new RemoteError("repo_unavailable", "模型信息不是合法 JSON", {});
+    }
+    const files = (body?.siblings ?? []).map((s) => s?.rfilename).filter((n) => typeof n === "string" && n);
+    if (files.length === 0) throw new RemoteError("repo_empty", "该模型没有任何文件", {});
+    return files;
+}
+
+/**
+ * Download one file, reporting byte progress as it arrives.
+ *
+ * Streams rather than buffering: the weights are the whole point and they are
+ * tens of megabytes.
+ */
+export async function downloadFile(endpoint, repoId, file, dest, onProgress, { proxy, signal } = {}) {
+    const base = (endpoint || DEFAULT_ENDPOINT).replace(/\/+$/, "");
+    const parts = String(file).split("/").map(encodeURIComponent).join("/");
+    const url = `${base}/${repoId}/resolve/main/${parts}`;
+    const res = await httpGet(url, { proxy, signal });
+    if (res.status < 200 || res.status >= 300) {
+        res.body.resume();
+        throw new RemoteError("file_unavailable", `${file} 下载失败（HTTP ${res.status}）`, {});
+    }
+    const total = Number(res.headers["content-length"] ?? 0) || 0;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const handle = await fs.promises.open(dest, "w");
+    let written = 0;
+    try {
+        for await (const chunk of res.body) {
+            await handle.write(chunk);
+            written += chunk.length;
+            onProgress?.(written, total);
+        }
+    } finally {
+        await handle.close();
+    }
+    return written;
+}
+
 /** Normalise a Hugging Face endpoint the CLI can talk to. */
 export function normalizeEndpoint(value) {
     const raw = String(value ?? "").trim().replace(/\/+$/, "");
@@ -57,139 +223,11 @@ export function normalizeEndpoint(value) {
     return raw;
 }
 
-// Hugging Face renamed its CLI: `huggingface-cli` is deprecated and, on
-// huggingface_hub >= 1.0, is a stub that exits 1 with nothing but a "no longer
-// works, use hf instead" banner. Prefer `hf` and fall back, because plenty of
-// installs still have only the old entry point (and it still works below 1.0).
-const HF_CLI_CANDIDATES = ["hf", "huggingface-cli"];
-
-/**
- * Windows resolves a bare name through PATHEXT, and what `pip` installs there
- * is a `.cmd` shim rather than the extensionless script POSIX gets. Node's
- * `spawn` only applies PATHEXT for a bare name; given an explicit `.cmd` path
- * it refuses to execute it without a shell (`EINVAL`), because it will not
- * silently reinterpret a program as a shell command. Probing the bare name
- * first covers the PATH case; the suffixes matter when an operator points
- * DSH_WEIXIN_HF_CLI at an install directory instead of relying on PATH.
- */
-const WIN_CLI_SUFFIXES = [".cmd", ".exe", ".bat"];
-
-/** Expand ONE candidate into the concrete names worth probing, in order. */
-function cliCandidates(candidate) {
-    if (process.platform !== "win32" || path.extname(candidate) !== "") return [candidate];
-    return [candidate, ...WIN_CLI_SUFFIXES.map((suffix) => `${candidate}${suffix}`)];
-}
-
-/** Run one candidate, reporting whether it is a usable program. */
-function cliAnswers(command) {
-    try {
-        const probe = spawnSync(command, ["--help"], { stdio: "ignore", timeout: 10_000 });
-        return probe.status === 0;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * The CLI to shell out to, and whether it needs a shell to run.
- *
- * A `.cmd`/`.bat` shim is a shell script, so Node must be told to interpret it —
- * `shell: true` on spawn, `shell` on spawnSync. Without that the download fails
- * with EINVAL on a machine where the CLI is installed and works from a prompt.
- * The reported `command` is what the operator would type, not the resolved
- * `.cmd` path, so a failure message stays recognizable.
- */
-function resolveHfCli() {
-    const override = process.env.DSH_WEIXIN_HF_CLI;
-    if (override) {
-        // An explicit choice is authoritative: do not silently substitute a
-        // different program, but do flag that it needs a shell.
-        return { command: override, shell: needsShell(override) };
-    }
-    for (const bare of HF_CLI_CANDIDATES) {
-        for (const command of cliCandidates(bare)) {
-            // `--help` is cheap and, unlike `version`, exits 0 on both CLIs.
-            if (cliAnswers(command)) return { command, shell: needsShell(command) };
-        }
-    }
-    return { command: HF_CLI_CANDIDATES[0], shell: false };
-}
-
-/** Whether running this program requires letting a shell interpret it. */
-function needsShell(command) {
-    return /\.(cmd|bat)$/i.test(command);
-}
-
-// The old CLI's deprecation banner is pure noise, and so is the progress bar:
-// neither is a reason a download failed, and pasting an example list and a wall
-// of carriage-return updates into a settings card explains nothing. Keep only
-// lines that look like an actual diagnosis.
-const HF_NOISE = /^\s*(hint:|warning:|examples?:|\s*hf )/i;
-
-function summarizeHfFailure(stderr) {
-    const lines = String(stderr)
-        .split(/\r?\n|\r/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        // Progress bars re-draw on one line and arrive as many fragments.
-        .filter((line) => !/^\d+%|[\u2588\u2589\u2591\u2588]|\d+\.\d+[kMG]?B\/s/.test(line))
-        .filter((line) => !HF_NOISE.test(line));
-    return lines.slice(-3).join(" ").slice(0, 400);
-}
-
-// tqdm redraws its bar on one line, so the stream arrives as
-//   "\rFetching 4 files:  25%|██▌  | 1/4 [00:01<00:05, 1.84s/it]"
-// fragments. The last two numbers are a rate and are NOT a percentage; the
-// download percentage is the FIRST `N%` on the line, which is also the only
-// value that means anything while several files are still queued.
-// tqdm prints "<desc>:  25%|<bar>| 1/4 [elapsed<remaining, rate]". The
-// percentage therefore follows a description and a colon; anchoring it to the
-// start of the line matched nothing. The trailing rate (`1.84s/it`,
-// `95.3MB/s`) is NOT a percentage, so take the first `N%` before the bar.
-const TQDM_PERCENT = /(?:^|[\s:])(\d{1,3})%\s*\|/;
-// "1/4" — how many files are finished, useful before any percentage appears.
-const TQDM_COUNT = /\|\s*(\d+)\/(\d+)\s*\[/;
-
-/** Whether a chunk is only a progress redraw, carrying no diagnostic value. */
-export function isProgressOnly(chunk) {
-    const lines = String(chunk)
-        .split(/\r|\n/)
-        .map((line) => line.replace(/\u001b\[[0-9;]*m/g, "").trim())
-        .filter(Boolean);
-    if (lines.length === 0) return true;
-    return lines.every((line) => TQDM_PERCENT.test(line) || HF_NOISE.test(line));
-}
-
-/**
- * Pull one progress reading out of a raw stderr chunk, or null when the chunk
- * holds nothing but banners and retries.
- *
- * @param {string} chunk
- * @returns {{percent: number, files?: {done: number, total: number}}|null}
- */
-export function parseHfProgress(chunk) {
-    const text = String(chunk);
-    // A chunk can carry several redraws; the last one is the current state.
-    const segments = text.split(/\r|\n/).filter((line) => line.trim() !== "");
-    for (let i = segments.length - 1; i >= 0; i -= 1) {
-        const line = segments[i];
-        const percent = TQDM_PERCENT.exec(line.replace(/\u001b\[[0-9;]*m/g, ""));
-        if (!percent) continue;
-        const value = Number(percent[1]);
-        if (!Number.isFinite(value) || value < 0 || value > 100) continue;
-        const count = TQDM_COUNT.exec(line);
-        const reading = { percent: value };
-        if (count) {
-            const done = Number(count[1]);
-            const total = Number(count[2]);
-            if (Number.isFinite(done) && Number.isFinite(total) && total > 0) {
-                reading.files = { done, total };
-            }
-        }
-        return reading;
-    }
-    return null;
-}
+// The download deliberately does NOT shell out to the Hugging Face CLI.
+// Measured on this machine: huggingface_hub 1.17.0 requests huggingface.co
+// for repo metadata even when HF_ENDPOINT points at a mirror, and 2.2.0
+// stalls with the weight file never starting -- while the mirror serves the
+// same bytes at 1.6 MB/s over plain HTTP. The CLI was the obstacle.
 
 /** Best-effort persistence of the runtime-chosen model dir under stateDir(). */
 async function persistModelDir(dir) {
@@ -250,6 +288,9 @@ function listModels(dir) {
 export class AsrController extends TypertRemoteService {
     static inject = ["typert"];
 
+    /** In-flight downloads, by repo, so each can be cancelled on its own. */
+    #abort;
+
     constructor(ctx, options = {}) {
         // Validate BEFORE super(), and before anything else can fail. A bad
         // proxy or endpoint throws here; after super() the same throw would be
@@ -264,6 +305,7 @@ export class AsrController extends TypertRemoteService {
         this.hfEndpoint = hfEndpoint;
         this.hfProxy = hfProxy;
         this.downloads = new Map(); // modelId -> {status, message}
+        this.#abort = new Map(); // modelId -> AbortController, so a download can stop
     }
 
     /** Local models already usable (directory with config.json). */
@@ -295,7 +337,7 @@ export class AsrController extends TypertRemoteService {
     /**
      * Download a model repo (e.g. "mlx-community/whisper-small-mlx") into the
      * model dir. Fire-and-track: returns immediately, progress surfaces via
-     * downloadStatus(). Requires `huggingface-cli`/`hf` or `pip install huggingface_hub`.
+     * downloadStatus(). Fetches over plain HTTP: no CLI and no Python needed.
      */
     async downloadModel(repo) {
         const repoId = String(repo ?? "").trim();
@@ -308,77 +350,77 @@ export class AsrController extends TypertRemoteService {
         fs.mkdirSync(this.modelDir, { recursive: true });
         // `startedAt` lets the card show elapsed time without inventing a rate
         // from a percentage it cannot date.
+        const target = path.join(this.modelDir, repoId);
         this.downloads.set(repoId, { status: "running", message: "", percent: 0, startedAt: Date.now() });
 
-        const cli = resolveHfCli();
-        const args = ["download", repoId, "--local-dir", path.join(this.modelDir, repoId)];
-        if (cli.shell) args.unshift(cli.command);
-        const child = spawn(cli.command, args, {
-            stdio: ["ignore", "pipe", "pipe"],
-            env: {
-                ...process.env,
-                HF_HUB_DISABLE_TELEMETRY: "1",
-                // Only set when configured, so an operator's own HF_ENDPOINT
-                // survives: this must not clobber a working environment.
-                ...(this.hfEndpoint ? { HF_ENDPOINT: this.hfEndpoint } : {}),
-                // Command-line tools ignore the macOS system proxy settings --
-                // only the system network stack (browsers) reads those -- so a
-                // proxy that visibly works in a browser is invisible here until
-                // it is named. Both cases are set because httpx, requests and
-                // curl each prefer a different one.
-                ...(this.hfProxy
-                    ? { HTTPS_PROXY: this.hfProxy, HTTP_PROXY: this.hfProxy, ALL_PROXY: this.hfProxy }
-                    : {}),
-            },
-            // A .cmd/.bat shim is a shell script; Node refuses to run one
-            // without a shell, which is EINVAL on an install that works fine
-            // from a prompt. POSIX never takes this path.
-            ...(cli.shell ? { shell: true } : {}),
-        });
-        let lastError = "";
-        child.stderr.on("data", (d) => {
-            const chunk = String(d);
-            // Keep the tail for diagnostics, but never let a progress redraw
-            // displace a real error: the previous version accumulated raw
-            // stderr and a long download could push the cause out of the
-            // window entirely.
-            if (!isProgressOnly(chunk)) lastError = `${lastError}${chunk}`.slice(-4000);
-            const reading = parseHfProgress(chunk);
-            if (!reading) return;
-            const rec = this.downloads.get(repoId);
-            if (!rec || rec.status !== "running") return;
-            // Fold the reading forward so a later chunk that carries only a
-            // percentage cannot erase a known file count.
-            rec.percent = reading.percent;
-            if (reading.files) rec.files = reading.files;
-        });
-        child.on("error", (err) => {
+        // Deliberately NOT the `hf` CLI. On 1.17.0 it requests huggingface.co
+        // for metadata even with HF_ENDPOINT set; on 2.2.0 it stalls with the
+        // weight file never starting. The mirror serves the same bytes at
+        // 16 MB/s, so the CLI was the obstacle, not the network.
+        const controller = new AbortController();
+        this.#abort.set(repoId, controller);
+        void this.#runHttpDownload(repoId, target, controller.signal);
+        return { started: true, message: `开始下载 ${repoId}` };
+    }
+
+    /** Drive one HTTP download to completion, folding progress into `downloads`. */
+    async #runHttpDownload(repoId, target, signal) {
+        const startedAt = this.downloads.get(repoId)?.startedAt ?? Date.now();
+        try {
+            const files = await listRepoFiles(this.hfEndpoint, repoId, { proxy: this.hfProxy, signal });
+            // Nothing is "done" until the weights are: a config.json alone is
+            // not a usable model, and reporting success on it would leave the
+            // operator with a directory the runtime cannot load.
+            let index = 0;
+            for (const file of files) {
+                index += 1;
+                this.downloads.set(repoId, {
+                    status: "running",
+                    message: "",
+                    percent: Math.round(((index - 1) / files.length) * 100),
+                    files: `${index}/${files.length}`,
+                    file,
+                    startedAt,
+                });
+                await downloadFile(
+                    this.hfEndpoint,
+                    repoId,
+                    file,
+                    path.join(target, file),
+                    (written, total) => {
+                        const within = total > 0 ? written / total : 0;
+                        const rec = this.downloads.get(repoId);
+                        if (!rec || rec.status !== "running") return;
+                        this.downloads.set(repoId, {
+                            ...rec,
+                            percent: Math.min(99, Math.round(((index - 1 + within) / files.length) * 100)),
+                            bytes: written,
+                            bytesTotal: total,
+                        });
+                    },
+                    { proxy: this.hfProxy, signal },
+                );
+            }
+            this.downloads.set(repoId, {
+                status: "done",
+                message: "",
+                percent: 100,
+                files: `${files.length}/${files.length}`,
+                elapsedMs: Date.now() - startedAt,
+            });
+        } catch (error) {
+            if (signal.aborted) {
+                this.downloads.set(repoId, { status: "idle", message: "已取消" });
+                return;
+            }
+            const detail = error?.message ?? String(error);
             this.downloads.set(repoId, {
                 status: "failed",
-                message: `找不到 ${cli.command}，请 pip install -U huggingface_hub：${err.message}`,
+                message: `${repoId} 下载失败：${detail}。若本机无法直连，请在插件配置里填写 hfProxy，或换一个可用的 hfEndpoint。`,
             });
-        });
-        child.on("exit", (code) => {
-            if (code === 0) {
-                const rec = this.downloads.get(repoId) ?? {};
-                this.downloads.set(repoId, {
-                    status: "done",
-                    message: "",
-                    percent: 100,
-                    files: rec.files,
-                    elapsedMs: Date.now() - (rec.startedAt ?? Date.now()),
-                });
-            } else {
-                const detail = summarizeHfFailure(lastError);
-                this.downloads.set(repoId, {
-                    status: "failed",
-                    message: detail
-                        ? `${cli.command} 下载失败：${detail}`
-                        : `${cli.command} 下载失败（exit ${code}），请检查模型名与网络`,
-                });
-            }
-        });
-        return { started: true, message: `开始下载 ${repoId}` };
+        } finally {
+            this.#abort.delete(repoId);
+        }
     }
 
     /** Poll download progress from the UI. */

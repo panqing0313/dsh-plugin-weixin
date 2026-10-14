@@ -9,6 +9,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import nodePath from 'node:path'
+import os from 'node:os'
+import http from 'node:http'
 
 const require$path = () => nodePath
 
@@ -23,238 +25,132 @@ function requireHost() {
 }
 
 
-// The detection block, lifted so it can run against a fake spawn/platform.
-const BODY = HOST.match(/const HF_CLI_CANDIDATES = \[[\s\S]*?\n}\n\n\/\*\* Whether running[\s\S]*?\n}\n/)[0]
-
-// `resolveHfCli` probes PATH with spawnSync, so it cannot be imported into the
-// test process without touching the real machine. Lift the function out and
-// run it against a fake spawn, which also lets us assert the probe contract.
-function loadResolveHfCli(platform = 'darwin') {
-  const body = HOST.match(/const HF_CLI_CANDIDATES = \[[\s\S]*?\n}\n\n\/\*\* Whether running[\s\S]*?\n}\n/)[0]
-  return new Function('spawnSync', 'process', 'path', `${body}; return resolveHfCli`)(
-    undefined,
-    { env: {}, platform },
-    require$path(),
-  )
+// The download path is plain HTTP now, so it can be exercised directly against
+// a local server instead of by pattern-matching source text. These tests drive
+// the real functions; the mirror they talk to is a loopback stub, so they run
+// offline and cannot flake on the network.
+/** A throwaway HTTP server standing in for a model endpoint. */
+async function withServer(handler, run) {
+  const server = http.createServer(handler)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const endpoint = `http://127.0.0.1:${server.address().port}`
+  try {
+    return await run(endpoint)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
 }
 
-test('the download prefers `hf`, because `huggingface-cli` no longer works', () => {
-  const probes = []
-  const resolve = loadResolveHfCli()
-  const spawnSync = (command) => {
-    probes.push(command)
-    // Simulate huggingface_hub >= 1.0: only `hf` answers successfully, and the
-    // deprecated entry point exits non-zero with a banner.
-    return { status: command === 'hf' ? 0 : 1 }
-  }
-  const fn = new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    spawnSync,
-    { env: {}, platform: 'darwin' },
-    nodePath,
-  )
-  assert.deepEqual(fn(), { command: 'hf', shell: false })
-  // `hf` is first, so the broken CLI is never even probed.
-  assert.deepEqual(probes, ['hf'])
-})
-
-test('the download falls back to `huggingface-cli` on installs that only have it', () => {
-  const probes = []
-  const fn = new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    (command) => {
-      probes.push(command)
-      // huggingface_hub < 1.0: `hf` does not exist, the old name still works.
-      return { status: command === 'huggingface-cli' ? 0 : 1 }
+test('the file list comes from the endpoint, not from a CLI', async () => {
+  const { listRepoFiles } = await import('../src/asr-remote.js')
+  await withServer(
+    (req, res) => {
+      assert.match(req.url, /\/api\/models\/mlx-community\/whisper-tiny-mlx$/)
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ siblings: [{ rfilename: 'config.json' }, { rfilename: 'weights.npz' }] }))
     },
-    { env: {}, platform: 'darwin' },
-    nodePath,
-  )
-  assert.deepEqual(fn(), { command: 'huggingface-cli', shell: false })
-  assert.deepEqual(probes, ['hf', 'huggingface-cli'], 'both candidates must be tried in order')
-})
-
-test('DSH_WEIXIN_HF_CLI overrides detection and skips probing entirely', () => {
-  const probes = []
-  const fn = new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    (command) => {
-      probes.push(command)
-      return { status: 0 }
+    async (endpoint) => {
+      const files = await listRepoFiles(endpoint, 'mlx-community/whisper-tiny-mlx')
+      assert.deepEqual(files, ['config.json', 'weights.npz'])
     },
-    { env: { DSH_WEIXIN_HF_CLI: '/opt/custom/hf' }, platform: 'darwin' },
-    nodePath,
   )
-  assert.deepEqual(fn(), { command: '/opt/custom/hf', shell: false })
-  assert.deepEqual(probes, [], 'an explicit override must not be second-guessed')
 })
 
-test('a CLI that cannot be spawned at all still yields a usable default', () => {
-  const fn = new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    () => {
-      throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
+test('a repo with no files is an error, not a silent success', async () => {
+  // Reporting "done" on an empty listing would leave the operator with a
+  // directory the runtime cannot load and no message explaining why.
+  const { listRepoFiles } = await import('../src/asr-remote.js')
+  await withServer(
+    (req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ siblings: [] }))
     },
-    { env: {}, platform: 'darwin' },
-    nodePath,
-  )
-  assert.deepEqual(fn(), { command: 'hf', shell: false })
-})
-
-// Windows: `pip` installs a `.cmd` shim, and Node will not execute one without
-// a shell (EINVAL). Detection must therefore find it and flag it.
-test('on Windows a bare name is probed through PATHEXT suffixes', () => {
-  const resolveWith = (answerFor) => new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    (command) => ({ status: answerFor(command) ? 0 : 1 }),
-    { env: {}, platform: 'win32' },
-    nodePath,
-  )
-  // Only the .cmd shim exists — no extensionless `hf`, no .exe.
-  const found = resolveWith((command) => command === 'hf.cmd')()
-  assert.deepEqual(found, { command: 'hf.cmd', shell: true }, 'a .cmd shim must be found and run via a shell')
-
-  // A real .exe needs no shell.
-  const exe = resolveWith((command) => command === 'hf.exe')()
-  assert.deepEqual(exe, { command: 'hf.exe', shell: false }, 'an .exe must not be wrapped in a shell')
-})
-
-test('a Windows .cmd override is flagged as needing a shell', () => {
-  const fn = new Function('spawnSync', 'process', 'path', `${BODY}; return resolveHfCli`)(
-    () => ({ status: 0 }),
-    { env: { DSH_WEIXIN_HF_CLI: 'C:\\Python\\Scripts\\hf.exe' }, platform: 'win32' },
-    nodePath,
-  )
-  assert.deepEqual(fn(), { command: 'C:\\Python\\Scripts\\hf.exe', shell: false })
-})
-
-test('the download passes shell: true exactly when the CLI is a shim', () => {
-  // Reading the source is the only way to check the spawn call itself; a unit
-  // test of resolveHfCli alone would not notice the flag being dropped.
-  assert.match(HOST, /\.\.\.\(cli\.shell \? \{ shell: true \} : \{\}\)/, 'spawn must set shell for shims')
-  assert.match(HOST, /if \(cli\.shell\) args\.unshift\(cli\.command\)/, 'a shell run needs the command inside the argument list')
-  assert.match(HOST, /spawn\(cli\.command, args, \{/, 'spawn must use the resolved command')
-})
-
-// The failure text is what the operator actually reads, so it must not be the
-// CLI's deprecation banner or a wall of progress-bar fragments.
-function summarize(stderr) {
-  const body = HOST.match(/const HF_NOISE = [\s\S]*?\n}\n/)[0]
-  const fn = new Function(`${body}; return summarizeHfFailure`)
-  return fn()(stderr)
-}
-
-// Verbatim stderr from `huggingface-cli download` on huggingface_hub 1.17.0.
-const DEPRECATION_BANNER = [
-  'Warning: `huggingface-cli` is deprecated and no longer works. Use `hf` instead.',
-  '',
-  'Hint: `hf` is already installed! Use it directly.',
-  '',
-  'Hint: Examples:',
-  '  hf auth login',
-  '  hf download unsloth/gemma-4-31B-it-GGUF',
-  '  hf upload my-cool-model . .',
-  '  hf models ls --search "gemma"',
-  '  hf repos ls --format json',
-  "  hf jobs run python:3.12 python -c 'print(\"Hello!\")'",
-  '  hf --help',
-].join('\n')
-
-test('the deprecation banner is never shown as the failure reason', () => {
-  const message = summarize(DEPRECATION_BANNER)
-  assert.equal(message, '', 'a pure banner carries no diagnosis and must collapse to nothing')
-  for (const noise of ['Hint:', 'Examples:', 'hf auth login', 'hf --help', 'no longer works']) {
-    assert.ok(!message.includes(noise), `failure text must not contain ${JSON.stringify(noise)}`)
-  }
-})
-
-test('a real error survives, with its banner noise stripped', () => {
-  const message = summarize(
-    [
-      'Warning: `huggingface-cli` is deprecated and no longer works. Use `hf` instead.',
-      'Hint: `hf` is already installed! Use it directly.',
-      'huggingface_hub.errors.RepositoryNotFoundError: 404 Client Error. Repository Not Found for url: https://huggingface.co/api/models/nope/nope',
-    ].join('\n'),
-  )
-  assert.ok(message.includes('RepositoryNotFoundError'), 'the actual diagnosis must be kept')
-  assert.ok(message.includes('nope/nope'), 'and it must name the repo that failed')
-  assert.ok(!message.includes('Hint:'), 'banner noise must be stripped')
-})
-
-test('progress-bar redraws are not mistaken for an error', () => {
-  const message = summarize(
-    ['  45%|████████          | 1.2G/2.6G [00:12<00:15, 95.3MB/s]', '  90%|███████████████ | 2.3G/2.6G [00:24<00:03, 98.1MB/s]'].join('\r'),
-  )
-  assert.equal(message, '', 'a progress bar is not a diagnosis')
-})
-
-test('the failure message names the CLI it actually ran', () => {
-  // The old code interpolated `cli` into the spawn-error text but reported the
-  // downloaded exit status bare, so a failed run never said which binary ran.
-  assert.match(HOST, /`\$\{cli\.command\} 下载失败：\$\{detail\}`/, 'exit failures must name the CLI')
-  assert.match(HOST, /`找不到 \$\{cli\.command\}，请 pip install -U huggingface_hub/, 'spawn failures must name the CLI')
-  // And it must not tell the user to install a package they already have.
-  assert.ok(
-    !/请先 pip install huggingface_hub/.test(HOST),
-    'the old message told users to install what the CLI banner says is already installed',
+    async (endpoint) => {
+      await assert.rejects(() => listRepoFiles(endpoint, 'x/y'), (err) => err.code === 'repo_empty')
+    },
   )
 })
 
-// ---- progress parsing -------------------------------------------------------
-// The readings the card shows come from the CLI's own tqdm output on stderr,
-// which redraws one line with \r. These samples are verbatim captures.
-import { parseHfProgress, isProgressOnly } from '../src/asr-remote.js'
-
-const BAR = (pct, done, total, rate = '1.84s/it') =>
-  `\rFetching 4 files: ${String(pct).padStart(3)}%|\u2588\u2588\u258c       | ${done}/${total} [00:01<00:05, ${rate}]`
-
-test('a real tqdm redraw yields its percentage and file count', () => {
-  assert.deepEqual(parseHfProgress(BAR(25, 1, 4)), { percent: 25, files: { done: 1, total: 4 } })
-  assert.deepEqual(parseHfProgress(BAR(0, 0, 4)), { percent: 0, files: { done: 0, total: 4 } })
-  assert.deepEqual(parseHfProgress(BAR(100, 4, 4)), { percent: 100, files: { done: 4, total: 4 } })
-})
-
-test('the trailing rate is not mistaken for the percentage', () => {
-  // tqdm ends the line with a rate such as "95.3MB/s" or "1.84s/it". Anchoring
-  // the percentage to the start of the line matched nothing, and a looser
-  // pattern would have read the rate instead.
-  const reading = parseHfProgress('\rFetching 4 files:  50%|\u2588\u2588\u2588\u2588\u2588     | 2/4 [00:06<00:06, 95.3MB/s]')
-  assert.equal(reading.percent, 50, 'the first N% before the bar is the progress')
-  assert.notEqual(reading.percent, 95, 'the rate must not be read as a percentage')
-})
-
-test('banners and retry notices are not progress', () => {
-  assert.equal(parseHfProgress('Warning: You are sending unauthenticated requests to the HF Hub.'), null)
-  assert.equal(parseHfProgress('no local file found. Retrying..'), null)
-})
-
-test('a chunk of pure progress carries no diagnostic value', () => {
-  assert.equal(isProgressOnly(BAR(25, 1, 4)), true)
-  assert.equal(isProgressOnly('Warning: You are sending unauthenticated requests to the HF Hub.'), true)
-  // A retry notice IS worth keeping — and it must not be swallowed as noise.
-  assert.equal(isProgressOnly('no local file found. Retrying..'), false)
-  assert.equal(isProgressOnly('huggingface_hub.errors.RepositoryNotFoundError: 404'), false)
-})
-
-test('a chunk mixing progress with an error still keeps the error', () => {
-  const mixed = `${BAR(25, 1, 4)}\nRepositoryNotFoundError: 404 Client Error`
-  assert.equal(isProgressOnly(mixed), false, 'an error must never be discarded as progress')
-})
-
-test('the stderr handler actually consults isProgressOnly', () => {
-  // Defining isProgressOnly is not the fix — the handler must call it, or
-  // progress fragments accumulate into lastError and push the real cause out
-  // of the retained tail. Asserting the helper alone let that regression pass.
-  const handler = HOST.match(/child\.stderr\.on\("data"[\s\S]*?\n\s*\}\);/)[0]
-  assert.match(handler, /isProgressOnly\(chunk\)/, 'the handler must filter progress-only chunks out of lastError')
-  assert.match(handler, /parseHfProgress\(chunk\)/, 'and must parse them for progress')
-  // The filter must guard the accumulation, not merely be computed.
-  assert.match(
-    handler,
-    /if \(!isProgressOnly\(chunk\)\)\s*lastError =/,
-    'isProgressOnly must gate the write to lastError',
+test('an unreachable endpoint reports the HTTP status instead of hanging', async () => {
+  const { listRepoFiles } = await import('../src/asr-remote.js')
+  await withServer(
+    (req, res) => {
+      res.statusCode = 404
+      res.end('nope')
+    },
+    async (endpoint) => {
+      await assert.rejects(() => listRepoFiles(endpoint, 'x/y'), (err) => err.code === 'repo_unavailable')
+    },
   )
 })
 
-test('the download reports a percentage so the card has something to show', () => {
-  assert.match(HOST, /percent: 0, startedAt: Date\.now\(\)/, 'a running download must start at a known percentage')
-  assert.match(HOST, /rec\.percent = reading\.percent/, 'readings must be folded into the record')
-  assert.match(HOST, /percent: 100,/, 'a completed download must report completion')
+test('downloadFile streams bytes to disk and reports progress', async () => {
+  // Byte counts are what the card shows now; the old code scraped tqdm output,
+  // so a percentage was only as good as the CLI's redraw cadence.
+  const { downloadFile } = await import('../src/asr-remote.js')
+  const payload = Buffer.alloc(300_000, 7)
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-dl-'))
+  const readings = []
+  await withServer(
+    (req, res) => {
+      assert.match(req.url, /\/resolve\/main\/weights\.npz$/)
+      res.setHeader('content-length', String(payload.length))
+      res.end(payload)
+    },
+    async (endpoint) => {
+      const written = await downloadFile(
+        endpoint,
+        'x/y',
+        'weights.npz',
+        nodePath.join(dir, 'weights.npz'),
+        (w, t) => readings.push([w, t]),
+        {},
+      )
+      assert.equal(written, payload.length)
+    },
+  )
+  const onDisk = fs.readFileSync(nodePath.join(dir, 'weights.npz'))
+  assert.equal(onDisk.length, payload.length, 'the whole file must land, not just the first chunk')
+  assert.deepEqual(onDisk, payload, 'and it must be byte-identical')
+  assert.ok(readings.length > 0, 'progress must be reported')
+  assert.equal(readings.at(-1)[0], payload.length, 'the last reading must be the full size')
+  assert.equal(readings.at(-1)[1], payload.length, 'the total must come from content-length')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('a file inside a subdirectory is fetched and written at that path', async () => {
+  // Repos do nest files; a naive join would either 404 or write to the root.
+  const { downloadFile } = await import('../src/asr-remote.js')
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-dl-'))
+  await withServer(
+    (req, res) => {
+      assert.match(req.url, /\/resolve\/main\/sub\/deep\.json$/, 'the slash must survive encoding')
+      res.end('{}')
+    },
+    async (endpoint) => {
+      await downloadFile(endpoint, 'x/y', 'sub/deep.json', nodePath.join(dir, 'sub', 'deep.json'))
+    },
+  )
+  assert.equal(fs.readFileSync(nodePath.join(dir, 'sub', 'deep.json'), 'utf8'), '{}')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('a missing file fails loudly rather than leaving a truncated model', async () => {
+  const { downloadFile } = await import('../src/asr-remote.js')
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-dl-'))
+  await withServer(
+    (req, res) => {
+      res.statusCode = 403
+      res.end('denied')
+    },
+    async (endpoint) => {
+      await assert.rejects(
+        () => downloadFile(endpoint, 'x/y', 'weights.npz', nodePath.join(dir, 'weights.npz')),
+        (err) => err.code === 'file_unavailable',
+      )
+    },
+  )
+  fs.rmSync(dir, { recursive: true, force: true })
 })
 
 // ---- endpoint configuration -------------------------------------------------
@@ -282,23 +178,30 @@ test('a malformed endpoint is rejected rather than passed to the CLI', () => {
   assert.throws(() => normalizeEndpoint('ftp://x.com'), /http\/https/, 'a non-http scheme must be rejected')
 })
 
-test('the endpoint is exported to the CLI as HF_ENDPOINT, and only when set', () => {
-  // Assert the contract, not the syntax: validation is deliberately lifted
-  // above super(), so it assigns a local first. Pinning the old
-  // `this.hfEndpoint = normalizeEndpoint(` line made a correct refactor look
-  // like a regression.
+test('the endpoint is passed to the HTTP downloader, not to an environment variable', () => {
+  // Validation is deliberately lifted above super(), so it assigns a local
+  // first; assert the contract rather than the exact statement.
   assert.match(HOST, /const hfEndpoint = normalizeEndpoint\(/, 'the controller must normalize its endpoint')
   assert.match(HOST, /this\.hfEndpoint = hfEndpoint;/, 'and keep the normalized value')
   assert.match(
     HOST,
-    /\.\.\.\(this\.hfEndpoint \? \{ HF_ENDPOINT: this\.hfEndpoint \} : \{\}\)/,
-    'HF_ENDPOINT must be set only when configured, so an operator environment is not clobbered',
+    /await listRepoFiles\(this\.hfEndpoint, repoId, \{ proxy: this\.hfProxy, signal \}\)/,
+    'the listing must use the configured endpoint',
+  )
+  assert.match(
+    HOST,
+    /await downloadFile\(\s*this\.hfEndpoint,/,
+    'and so must each file fetch, or a mirror setting would silently do nothing',
   )
 })
 
 test('the config schema exposes hfEndpoint and the plugin passes it through', () => {
   const index = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
-  assert.match(index, /hfEndpoint: z\s*\.string\(\)\s*\.default\(''\)/, 'the config schema must declare hfEndpoint')
+  assert.match(
+    index,
+    /hfEndpoint: z\s*\.string\(\)\s*\.default\('https:\/\/hf-mirror\.com'\)/,
+    'the schema must default to the mainland-reachable mirror, which needs no proxy',
+  )
   assert.match(index, /hfEndpoint: config\.asr\?\.hfEndpoint\?\.trim\(\) \|\| undefined/, 'the controller must receive it')
 })
 
@@ -317,17 +220,83 @@ test('a proxy is accepted only when the CLI could actually use it', () => {
   }
 })
 
-test('the spawn environment actually carries the proxy, and only when set', () => {
-  // Defining normalizeProxy is not the fix: the download is what has to see it.
-  // Command-line tools ignore the macOS system proxy settings, so a value that
-  // never reaches this environment object is exactly the bug being fixed.
-  const env = HOST.match(/env: \{[\s\S]*?\n {12}\},/)[0]
-  assert.match(env, /this\.hfProxy/, 'the spawn env must read hfProxy')
-  assert.match(env, /HTTPS_PROXY: this\.hfProxy/, 'HTTPS_PROXY is required')
-  assert.match(env, /HTTP_PROXY: this\.hfProxy/, 'HTTP_PROXY covers clients that read only that')
-  assert.match(env, /ALL_PROXY: this\.hfProxy/, 'ALL_PROXY covers clients that read only that')
-  // And it must be conditional, or an unset proxy would blank a working one.
-  assert.match(env, /this\.hfProxy\s*\n?\s*\?/, 'the proxy must be spread conditionally')
+test('the proxy is threaded through every request, not merely stored', () => {
+  // Regression risk this pins down: `hfProxy` was validated and saved but the
+  // download never used it, because Node's fetch ignores proxy environment
+  // variables. A configured proxy that silently does not apply is worse than
+  // none -- the operator sees the field filled in and waits forever.
+  assert.match(HOST, /const hfProxy = normalizeProxy\(/, 'the controller must validate the proxy')
+  assert.match(HOST, /this\.hfProxy = hfProxy;/, 'and keep the normalized value')
+  assert.match(
+    HOST,
+    /const res = await httpGet\(url, \{ proxy, signal \}\)/,
+    'downloadFile must hand the proxy to httpGet',
+  )
+  assert.match(
+    HOST,
+    /await downloadFile\(\s*this\.hfEndpoint,[\s\S]*?\{ proxy: this\.hfProxy, signal \}/,
+    'and the controller must pass its proxy down',
+  )
+  // `fetch` must be gone entirely: it cannot honour a proxy here.
+  assert.ok(
+    !/await fetch\(/.test(HOST),
+    'fetch ignores proxy settings and has no importable ProxyAgent in the packaged app',
+  )
+})
+
+test('httpGet tunnels HTTPS through the proxy with CONNECT', async () => {
+  // A proxy will not forward a TLS stream as a plain absolute-URI request, so
+  // this must be a CONNECT tunnel; getting it wrong looks like a proxy that
+  // "does not work" for exactly the secure endpoints that matter.
+  const source = HOST.slice(HOST.indexOf('function httpGet('))
+  const body = source.slice(0, source.indexOf('\n}\n') + 3)
+  assert.match(body, /method: "CONNECT"/, 'HTTPS through a proxy needs a CONNECT tunnel')
+  assert.match(body, /tlsConnect\(\{ socket, servername: target\.hostname \}/, 'the tunnel must be wrapped in TLS')
+  assert.match(body, /createConnection: \(\) => socket/, 'the TLS socket must be reused for the request')
+  // The tunnel socket is ALREADY TLS. Handing it to https.request would wrap
+  // it a second time and the handshake dies with "Client network socket
+  // disconnected before secure TLS connection was established" -- which the
+  // unit tests missed and a real 71 MB download through a real proxy caught.
+  assert.match(
+    body,
+    /tlsConnect\(\{ socket, servername: target\.hostname \}, \(\) => send\(tls, http\)\)/,
+    'the TLS socket must be driven by http.request, never https.request',
+  )
+  assert.ok(
+    !/send\(tls, https\)/.test(body),
+    'https.request on an already-TLS socket double-wraps it',
+  )
+  // And a refused tunnel must fail loudly instead of silently going direct.
+  assert.match(body, /代理拒绝连接/, 'a non-200 CONNECT must be an error')
+})
+
+test('the tunnel actually works end to end through a live proxy stub', async () => {
+  // A real CONNECT server in front of a real HTTPS target would need a
+  // certificate the test cannot mint, so the stub proves the plumbing instead:
+  // the request must arrive at the proxy as CONNECT, with the target named.
+  const seen = []
+  const proxy = http.createServer()
+  // CONNECT does NOT come through the request handler: it is its own event,
+  // which is exactly the trap this test exists to catch in the implementation.
+  proxy.on('connect', (req, socket) => {
+    seen.push(req.url)
+    // Refuse the tunnel, so the call fails fast; the assertion is about what
+    // was sent to the proxy, not about the tunnel succeeding.
+    socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n')
+  })
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+  const port = proxy.address().port
+  const { listRepoFiles } = await import('../src/asr-remote.js')
+  await assert.rejects(
+    () => listRepoFiles('https://example.invalid', 'x/y', { proxy: `http://127.0.0.1:${port}` }),
+    /代理|CONNECT|socket|ECONN/i,
+  )
+  proxy.close()
+  assert.equal(seen.length, 1, 'the proxy must be contacted exactly once')
+  assert.ok(
+    seen[0].includes('example.invalid:443'),
+    `the CONNECT must name the real target, got ${seen[0]}`,
+  )
 })
 
 test('the proxy reaches AsrController from the plugin config', () => {

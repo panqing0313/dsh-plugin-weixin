@@ -110,13 +110,13 @@ export const Config = z.object({
         .string()
         .default('')
         .description(
-          'Proxy URL for the model downloader, passed to the CLI as HTTPS_PROXY (e.g. http://127.0.0.1:7897). Empty inherits the current environment. Command-line tools do not read the macOS system proxy settings, so a proxy that works in the browser is invisible here until it is named. The download is a plain HTTP transfer: it is exactly as fast as this route, and no faster.',
+          'Proxy for the model downloader (e.g. http://127.0.0.1:7897). HTTPS destinations are tunnelled with CONNECT. Leave empty to connect directly, which is what the default mirror needs. Set this only on a network that cannot reach the mirror at all: the download is then exactly as fast as the proxy, and no faster.',
         ),
       hfEndpoint: z
         .string()
-        .default('')
+        .default('https://hf-mirror.com')
         .description(
-          'Hugging Face endpoint for the model downloader, passed to the CLI as HF_ENDPOINT (e.g. https://hf-mirror.com). Empty uses the official site. Note: huggingface_hub 1.17.0 still requests huggingface.co for repo metadata even when this is set, so a mirror alone does not rescue a blocked network — hfProxy does.',
+          'Endpoint the model downloader fetches from. Defaults to https://hf-mirror.com, which is reachable from mainland China without a proxy and serves weights at high speed. Set it to https://huggingface.co to use the official site, or to a corporate mirror. The download is a plain HTTP transfer: it is exactly as fast as the route to this host, and no faster.',
         ),
     })
     .default({})
