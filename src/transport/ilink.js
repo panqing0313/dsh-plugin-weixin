@@ -25,6 +25,34 @@ const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 
+/**
+ * `errcode` the Bot API returns once the saved token stops being accepted. The
+ * credential is a session, not a permanent key, so it expires and the account
+ * has to be logged in again.
+ */
+export const SESSION_EXPIRED_ERRCODE = -14
+
+/**
+ * The server refused the request because the session is no longer valid.
+ *
+ * Distinct from a transport fault: retrying cannot help, and the only recovery
+ * is a fresh login. The caller uses this to stop polling and say so once,
+ * instead of spinning on an error that will never clear.
+ */
+export class SessionRejectedError extends Error {
+  /**
+   * @param {number} errcode
+   * @param {string} [errmsg]
+   */
+  constructor(errcode, errmsg) {
+    super(`getUpdates errcode=${errcode} errmsg=${errmsg ?? '(none)'}`)
+    this.name = 'SessionRejectedError'
+    this.errcode = errcode
+    /** True only for the expiry code, where a re-login is the actual fix. */
+    this.sessionExpired = errcode === SESSION_EXPIRED_ERRCODE
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
@@ -175,6 +203,9 @@ export class ILinkTransport {
    * @param {number} [options.longPollTimeoutMs]
    * @param {(line: string) => void} [options.log]
    * @param {(line: string) => void} [options.errLog]
+   * @param {(error: SessionRejectedError) => void} [options.onSessionRejected]
+   *   Called once when the server refuses the session, so the host can surface
+   *   "log in again" somewhere the operator will actually see it.
    */
   constructor(options) {
     this.accountId = options.accountId
@@ -184,12 +215,28 @@ export class ILinkTransport {
     this.longPollTimeoutMs = options.longPollTimeoutMs ?? 35_000
     this.log = options.log ?? (() => {})
     this.errLog = options.errLog ?? options.log ?? (() => {})
+    this.#onSessionRejected = options.onSessionRejected
     this.syncBufPath = getSyncBufFilePath(this.accountId)
     this.abort = new AbortController()
     this.running = false
     this.loopPromise = null
     this.typingTicket = undefined
+    this.#sessionExpired = false
   }
+
+  /**
+   * Whether the last poll was refused because the saved session expired.
+   *
+   * Exposed so the settings card can say "log in again" instead of showing a
+   * healthy-looking plugin that quietly receives nothing.
+   */
+  get sessionExpired() {
+    return this.#sessionExpired
+  }
+
+  /** Set once the server refuses the session; see {@link SessionRejectedError}. */
+  #onSessionRejected
+  #sessionExpired = false
 
   /**
    * @param {(message: any) => Promise<void>} onMessage
@@ -222,6 +269,16 @@ export class ILinkTransport {
         if (resp.ret !== undefined && resp.ret !== 0) {
           throw new Error(`getUpdates ret=${resp.ret} errmsg=${resp.errmsg ?? '(none)'}`)
         }
+        // The API reports most failures through `errcode`, NOT `ret`: an
+        // expired session comes back as `{errcode:-14, errmsg:"session timeout"}`
+        // with `ret` absent, so the check above passes, `msgs` is empty, and the
+        // loop keeps polling forever while receiving nothing. Messaging then
+        // silently stops working with no error anywhere. Every non-zero
+        // `errcode` is a real failure and has to be raised.
+        if (typeof resp.errcode === 'number' && resp.errcode !== 0) {
+          this.#sessionExpired = resp.errcode === SESSION_EXPIRED_ERRCODE
+          throw new SessionRejectedError(resp.errcode, resp.errmsg)
+        }
         consecutiveFailures = 0
         if (typeof resp.get_updates_buf === 'string' && resp.get_updates_buf !== buf) {
           saveGetUpdatesBuf(this.syncBufPath, resp.get_updates_buf)
@@ -244,6 +301,19 @@ export class ILinkTransport {
         }
       } catch (error) {
         if (!this.running || this.abort.signal.aborted) break
+        // A refused session never recovers on its own, so retrying is pointless
+        // and would bury the one line the operator needs. Report it once, at
+        // the level that reaches the GUI log, and stop polling.
+        if (error instanceof SessionRejectedError) {
+          this.#sessionExpired = error.sessionExpired
+          this.errLog(
+            error.sessionExpired
+              ? 'the Weixin session has expired; messaging is stopped until you log in again (run bin/login.js, then reload)'
+              : `the Weixin API rejected this session (${error.message}); messaging is stopped until you log in again`,
+          )
+          this.#onSessionRejected?.(error)
+          break
+        }
         consecutiveFailures += 1
         const classified = classifyFetchError(error)
         this.errLog(`getUpdates failed (${classified.type}): ${classified.description}`)

@@ -165,6 +165,9 @@ export class WeixinLoginController extends TypertRemoteService {
                     userId: status.ilink_user_id,
                 });
                 registerWeixinAccountId(status.ilink_bot_id);
+                // A completed login writes a usable credential, so any expiry
+                // recorded from an earlier session no longer applies.
+                this.clearSessionExpired();
                 return {
                     status: "confirmed",
                     accountId: status.ilink_bot_id,
@@ -204,7 +207,31 @@ export class WeixinLoginController extends TypertRemoteService {
                 // skip unreadable entries
             }
         }
-        return { accounts, stateDir: stateDir(), pendingLogin: logins.size > 0 };
+        // An expired session is the one failure a saved token cannot reveal: the
+        // file is present and complete, but the server refuses it, so inbound
+        // messaging stops while the card still shows "bound". The transport
+        // records the refusal here so the card can say "log in again".
+        return {
+            accounts,
+            stateDir: stateDir(),
+            pendingLogin: logins.size > 0,
+            sessionExpired: this.sessionExpired === true,
+        };
+    }
+
+    /**
+     * Note that the server refused the saved session.
+     *
+     * Called by the host when the poll loop sees `errcode: -14`. A fresh login
+     * clears it, because the account is then writable again.
+     */
+    markSessionExpired() {
+        this.sessionExpired = true;
+    }
+
+    /** Clear the flag: a completed login means the session is valid again. */
+    clearSessionExpired() {
+        this.sessionExpired = false;
     }
 }
 

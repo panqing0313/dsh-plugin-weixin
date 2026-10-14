@@ -168,6 +168,7 @@ window.__ModuleLoader__.load({
 			const [code, setCode] = react.useState("");
 			const [message, setMessage] = react.useState("");
 			const [accounts, setAccounts] = react.useState([]);
+			const [sessionExpired, setSessionExpired] = react.useState(false);
 			const [copied, setCopied] = react.useState(false);
 			const pollRef = react.useRef(null);
 
@@ -182,6 +183,7 @@ window.__ModuleLoader__.load({
 				try {
 					const s = await callRemote(() => ctx.remote.weixin.status());
 					setAccounts(s?.accounts ?? []);
+					setSessionExpired(s?.sessionExpired === true);
 				} catch {
 					// remote not mounted yet
 				}
@@ -268,6 +270,17 @@ window.__ModuleLoader__.load({
 
 			return createElement("div", { style: { display: "grid", gap: 12 } },
 				createElement("div", { style: { opacity: 0.75 } }, accountLine),
+				// A saved token that the server refuses looks identical to a working
+				// one in this list, so the expiry has to be stated explicitly —
+				// otherwise the account reads as bound while nothing is received.
+				sessionExpired
+					? createElement("div", {
+							style: { color: "#d4380d", lineHeight: 1.5 },
+						}, t(
+							"The saved session has expired, so incoming messages are not being received. Scan again to log in.",
+							"登录已过期，当前收不到微信消息。请重新扫码登录。",
+						))
+					: null,
 				state.phase === "idle" || state.phase === "confirmed" || state.phase === "failed"
 					? createElement("button", { onClick: start }, t("Scan QR code to log in", "扫码登录微信"))
 					: null,

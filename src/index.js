@@ -130,10 +130,17 @@ export function apply(ctx, config) {
   // Settings-page services: QR login orchestration and ASR model management.
   // Registered regardless of enabled so a disabled plugin can still be
   // configured and logged in from the UI before being turned on.
+  //
+  // Kept in a variable because the poll loop reports a refused session back to
+  // it (markSessionExpired), which is what lets the card say "log in again"
+  // instead of showing a healthy-looking bound account that receives nothing.
+  let loginController
   try {
-    ctx.plugin(WeixinLoginController, {})
+    loginController = new WeixinLoginController(ctx, {})
+    ctx.plugin(loginController)
   } catch (error) {
     warn(`settings login service unavailable: ${String(error)}`)
+    loginController = undefined
   }
   // Kept in a variable because the settings UI can change the model directory
   // at runtime (setModelDir); the ASR bridge must use the current value, not
@@ -182,6 +189,22 @@ export function apply(ctx, config) {
         cdnBaseUrl: config.cdnBaseUrl?.trim() || account.cdnBaseUrl || DEFAULT_CDN_BASE_URL,
         log,
         errLog: warn,
+        // An expired session stops inbound messaging with no other symptom —
+        // the plugin looks healthy and simply never replies. Record it on the
+        // login controller so the settings card can say "log in again", and put
+        // the same line in the log the operator watches.
+        onSessionRejected: (error) => {
+          try {
+            loginController?.markSessionExpired?.()
+          } catch {
+            // the card is a convenience; never let it break the loop's report
+          }
+          warn(
+            error.sessionExpired
+              ? `Weixin session expired for ${account.accountId}: log in again from Settings (or run bin/login.js), then reload`
+              : `Weixin session rejected for ${account.accountId} (${error.message}): log in again, then reload`,
+          )
+        },
       })
       const cwd = await resolveCwd(ctx, config, warn)
       bridge = new AgentBridge({
