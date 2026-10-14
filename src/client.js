@@ -126,52 +126,63 @@ window.__ModuleLoader__.load({
 
 		//#region UI components
 
+		/** Outcome of a chooser attempt, so the caller can say what happened. */
+		const PICK_CANCELLED = "cancelled";
+		const PICK_UNAVAILABLE = "unavailable";
+
 		/**
 		 * Open the host's native directory chooser.
 		 *
-		 * The shell already mounts the workspace controller's `directoryPicker`
-		 * Remote (namespace `directoryPicker`, method `pick`), so no new
-		 * dependency is needed — but it belongs to another bundle, which may be
-		 * absent from a minimal profile. Two fallbacks keep the button useful
-		 * rather than merely present:
+		 * The shell mounts the workspace controller's `directoryPicker` Remote on
+		 * every platform — the web client's platform-neutral assembly calls
+		 * `$mount` for it — so the Remote is the ordinary path:
 		 *
 		 *  1. `ctx.remote.directoryPicker.pick()` — the ordinary path.
-		 *  2. `globalThis.__DSH_DIRECTORY_PICKER__.pick()` — the same Electron
-		 *     IPC bridge the shell itself falls back to, used when the Remote is
-		 *     not mounted.
+		 *  2. `globalThis.__DSH_DIRECTORY_PICKER__.pick()` — the Electron IPC
+		 *     bridge. It is injected only when `location.protocol` is
+		 *     `dsh-app:`, so on the http Web GUI it is absent by design.
 		 *
-		 * Returns the chosen absolute path, or null when the operator cancels or
-		 * no chooser exists. Cancelling is not an error, so it must not surface
-		 * as one.
+		 * `ctx` MUST be a context that declares `remote.directoryPicker`. Every
+		 * namespace is its own Cordis service, and reading an undeclared service
+		 * yields `undefined` silently rather than throwing — which is exactly how
+		 * a mounted picker came to look absent.
+		 *
+		 * Returns `{ok: true, path}` with a real path, `{ok: false, reason}`
+		 * with PICK_CANCELLED when the operator dismissed the dialog, or
+		 * PICK_UNAVAILABLE when nothing could be reached. Cancelling is not an
+		 * error, but it must not be reported as a missing capability: collapsing
+		 * the two is what made a working chooser look broken.
 		 */
 		async function pickDirectory(ctx) {
 			const picker = ctx.remote?.directoryPicker;
 			if (picker?.pick !== undefined) {
-				// Built outside the try: a missing AbortController is an
-				// environment fault, not a declined dialog, and letting it be
-				// swallowed would silently downgrade to "no chooser available".
-				const signal =
-					typeof AbortController === "function" ? new AbortController().signal : undefined;
 				try {
-					const result = await picker.pick(signal);
-					const path = unwrap(result);
-					return typeof path === "string" && path !== "" ? path : null;
-				} catch {
-					// A missing capability or a dismissed dialog: fall through to
-					// the bridge rather than reporting a failure the operator
-					// cannot act on.
+					// `pick` takes no positional arguments. Its descriptor is
+					// `parameters: []` with `cancellation: {parameter: "signal"}`,
+					// so the signal travels on the call options, never as arg 0.
+					const path = unwrap(await picker.pick());
+					return typeof path === "string" && path !== ""
+						? { ok: true, path }
+						: { ok: false, reason: PICK_CANCELLED };
+				} catch (error) {
+					// Dismissing the dialog is reported as a cancellation. Any
+					// other failure is a real fault and falls through so the
+					// bridge, when present, still gets its chance.
+					if (isCancellation(error)) return { ok: false, reason: PICK_CANCELLED };
 				}
 			}
 			const bridge = globalThis.__DSH_DIRECTORY_PICKER__;
 			if (bridge?.pick !== undefined) {
 				try {
 					const path = await bridge.pick();
-					return typeof path === "string" && path !== "" ? path : null;
+					return typeof path === "string" && path !== ""
+						? { ok: true, path }
+						: { ok: false, reason: PICK_CANCELLED };
 				} catch {
-					return null;
+					return { ok: false, reason: PICK_UNAVAILABLE };
 				}
 			}
-			return null;
+			return { ok: false, reason: PICK_UNAVAILABLE };
 		}
 
 		/**
@@ -195,6 +206,19 @@ window.__ModuleLoader__.load({
 		/** Call a Remote method and return its unwrapped host value. */
 		async function callRemote(fn, ...args) {
 			return unwrap(await fn(...args));
+		}
+
+		/**
+		 * Whether a Remote failure is a cancellation rather than a fault.
+		 *
+		 * The carrier reports a withdrawn and a cancelled invocation through the
+		 * same `{ok: false, error}` envelope, distinguished only by the error
+		 * code, so the code is what has to be read. Dismissing a file dialog is
+		 * an ordinary outcome and must not be shown as a failure.
+		 */
+		function isCancellation(error) {
+			const code = error?.code ?? error?.name;
+			return code === "cancelled" || code === "canceled" || code === "aborted" || code === "AbortError";
 		}
 
 		function useLocaleText(ctx) {
@@ -593,15 +617,19 @@ window.__ModuleLoader__.load({
 				setBrowseMsg("");
 				try {
 					const picked = await pickDirectory(ctx);
-					if (picked === null) {
-						// Cancelling, or a profile whose shell mounts no chooser.
+					if (picked.ok) {
+						setDirInput(picked.path);
+						return;
+					}
+					// Cancelling needs no message: the operator knows what they
+					// just did, and a note would read as a complaint. Only a
+					// missing chooser is worth explaining.
+					if (picked.reason === PICK_UNAVAILABLE) {
 						setBrowseMsg(t(
 							"No directory chooser is available here; type the path instead.",
 							"当前环境没有目录选择器，请手动输入路径。",
 						));
-						return;
 					}
-					setDirInput(picked);
 				} finally {
 					setPickingDir(false);
 				}
@@ -809,7 +837,17 @@ window.__ModuleLoader__.load({
 
 		async function apply(ctx) {
 			const disposeRemote = await ctx.remote.$mount(TYPERT_REMOTE);
-			const ui = ctx.inject(["remote.weixin", "remote.weixinAsr", "slots", "locale"], registerUi);
+			// Every namespace is its own Cordis service, so each one the card
+			// reaches for must be named here. Reading an undeclared service
+			// returns `undefined` instead of throwing, so a missing entry does
+			// not fail loudly — it silently downgrades a working feature, which
+			// is how the directory chooser came to report itself absent.
+			// `remote.directoryPicker` belongs to the shell's own assembly, not
+			// to this plugin, so it needs the same explicit declaration.
+			const ui = ctx.inject(
+				["remote.weixin", "remote.weixinAsr", "remote.directoryPicker", "slots", "locale"],
+				registerUi,
+			);
 			try {
 				await ui;
 			} catch (error) {

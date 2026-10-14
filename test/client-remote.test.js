@@ -123,6 +123,16 @@ function fakeCtx(hooks = {}) {
     },
     locale: { current: { language: 'zh' } },
   }
+  // The shell mounts this Remote itself (the web client's platform-neutral
+  // assembly calls $mount for the workspace controller), so it is present
+  // before any bundle activates. Modelling it is what lets a test tell a
+  // genuinely absent chooser from one this plugin failed to declare.
+  if (hooks.directoryPicker !== false) {
+    ctx['remote.directoryPicker'] = {
+      namespace: 'directoryPicker',
+      pick: hooks.pick ?? (async () => null),
+    }
+  }
   // Cordis' ctx.inject(deps, callback) returns a Fiber (thenable with dispose);
   // model that, since apply() disposes it on both the happy and error paths.
   // A dependency that is not present is a hard error, exactly like the real
@@ -268,45 +278,112 @@ test('the directory chooser unwraps its Remote result and survives its absence',
   // and it resolves to the same {ok, value} envelope as everything else — the
   // chosen path, or null when the operator cancels. It also belongs to another
   // bundle, so a minimal profile may not have it at all.
+  //
+  // The distinction this test now pins is the one that hid the bug: an operator
+  // who cancels and an environment with no chooser are different outcomes. The
+  // earlier version returned a bare null for both, so a working chooser that
+  // this plugin had merely failed to declare was reported to the user as absent.
   const registration = loadClientModule()
   const mod = registration.factory(fakeRequire)
 
   // 1. The ordinary path: a string path inside the envelope.
-  const picked = []
-  let restored = null
-  const ctxWithPicker = {
+  let calledWith = 'not called'
+  const restored = await mod.pickDirectory({
     remote: {
       directoryPicker: {
-        pick: async (signal) => {
-          picked.push(signal !== undefined)
+        pick: async (...args) => {
+          calledWith = args
           return { ok: true, value: '/Users/someone/models' }
         },
       },
     },
+  })
+  // The module is evaluated in a separate VM realm, so an object it returns has
+  // that realm's Object.prototype and strict deepEqual would reject it for being
+  // a different prototype even when every field matches. Compare own fields.
+  const plain = (value) => JSON.parse(JSON.stringify(value))
+  assert.deepEqual(plain(restored), { ok: true, path: '/Users/someone/models' })
+  assert.deepEqual(
+    calledWith,
+    [],
+    'pick() declares parameters: [] — the signal is a cancellation option, not a positional argument',
+  )
+
+  // 2. Cancelling is a normal outcome, and must be reported as a cancellation
+  //    rather than as a missing chooser.
+  assert.deepEqual(
+    plain(await mod.pickDirectory({
+      remote: { directoryPicker: { pick: async () => ({ ok: true, value: null }) } },
+    })),
+    { ok: false, reason: 'cancelled' },
+  )
+
+  // 3. A rejected Remote whose error is a cancellation is also a cancellation;
+  //    the carrier signals both withdrawal and dismissal through the envelope.
+  assert.deepEqual(
+    plain(await mod.pickDirectory({
+      remote: {
+        directoryPicker: { pick: async () => ({ ok: false, error: { code: 'cancelled' } }) },
+      },
+    })),
+    { ok: false, reason: 'cancelled' },
+  )
+
+  // 4. A rejection that is NOT a cancellation falls through to the bridge, and
+  //    with no bridge present that is an unavailable chooser — never a silent
+  //    success.
+  assert.deepEqual(
+    plain(await mod.pickDirectory({
+      remote: { directoryPicker: { pick: async () => ({ ok: false, error: new Error('boom') }) } },
+    })),
+    { ok: false, reason: 'unavailable' },
+  )
+
+  // 5. A profile whose shell mounts no chooser at all.
+  assert.deepEqual(plain(await mod.pickDirectory({ remote: {} })), { ok: false, reason: 'unavailable' })
+
+  // 6. An empty string is "nothing chosen", never a directory.
+  assert.deepEqual(
+    plain(await mod.pickDirectory({
+      remote: { directoryPicker: { pick: async () => ({ ok: true, value: '' }) } },
+    })),
+    { ok: false, reason: 'cancelled' },
+  )
+})
+
+test('the card declares the services it reads, including ones it does not own', () => {
+  // This is the bug that made "浏览…" do nothing useful in the Web GUI: every
+  // namespace is its own Cordis service, and reading an undeclared one yields
+  // `undefined` instead of throwing. `remote.directoryPicker` belongs to the
+  // shell rather than to this plugin, so it was easy to reach for it without
+  // declaring it — and the card then concluded, silently and wrongly, that the
+  // environment had no chooser.
+  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+
+  const injectCall = source.match(/ctx\.inject\(\s*\[([^\]]*)\]/)
+  assert.ok(injectCall, 'apply() must declare its dependencies with ctx.inject([...])')
+  const declared = [...injectCall[1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+
+  // Every `ctx.remote.<namespace>` the source reads must be declared. `$mount`
+  // is a method on the container itself rather than a namespace service, so it
+  // is excluded; everything else has to appear in the inject list.
+  const read = new Set(
+    [...source.matchAll(/ctx\.remote\??\.([A-Za-z_$][\w$]*)/g)]
+      .map((m) => m[1])
+      .filter((name) => !name.startsWith('$')),
+  )
+  for (const namespace of read) {
+    assert.ok(
+      declared.includes(`remote.${namespace}`),
+      `the card reads ctx.remote.${namespace} but ctx.inject does not declare "remote.${namespace}"`,
+    )
   }
-  restored = await mod.pickDirectory(ctxWithPicker)
-  assert.equal(restored, '/Users/someone/models')
-  assert.deepEqual(picked, [true], 'pick() must receive a cancellation signal')
 
-  // 2. Cancelling is a normal outcome, not an error: envelope ok, value null.
-  const cancelled = await mod.pickDirectory({
-    remote: { directoryPicker: { pick: async () => ({ ok: true, value: null }) } },
-  })
-  assert.equal(cancelled, null)
-
-  // 3. A rejected Remote must not throw at the caller: the bridge fallback or
-  //    an honest null is what the button can act on.
-  const rejected = await mod.pickDirectory({
-    remote: { directoryPicker: { pick: async () => ({ ok: false, error: new Error('not mounted') }) } },
-  })
-  assert.equal(rejected, null)
-
-  // 4. A profile whose shell mounts no chooser at all.
-  assert.equal(await mod.pickDirectory({ remote: {} }), null)
-  // 5. An empty string is "nothing chosen", never a directory.
-  assert.equal(
-    await mod.pickDirectory({ remote: { directoryPicker: { pick: async () => ({ ok: true, value: '' }) } } }),
-    null,
+  // And the namespace that caused the failure must stay declared, because the
+  // shell mounts it and there is no other way to reach it.
+  assert.ok(
+    declared.includes('remote.directoryPicker'),
+    'the host chooser is unreachable unless remote.directoryPicker is declared',
   )
 })
 
@@ -384,7 +461,14 @@ test('the model directory field offers the host chooser and says so when absent'
   assert.match(source, /__DSH_DIRECTORY_PICKER__/, 'the Electron bridge is the fallback')
   // Selecting a directory fills the field; only "Set directory" writes it, so a
   // cancelled dialog can never persist an empty value.
-  assert.match(source, /setDirInput\(picked\)/, 'the chosen path must reach the input')
+  assert.match(source, /setDirInput\(picked\.path\)/, 'the chosen path must reach the input')
+  // A cancelled dialog and a missing chooser are different outcomes: only the
+  // second one is worth a message, and the guard is what keeps them apart.
+  assert.match(
+    source,
+    /picked\.reason === PICK_UNAVAILABLE/,
+    'only an absent chooser may be reported as absent',
+  )
 })
 
 test('a descriptor table that repeats a wire field is rejected, as the runtime does', () => {
