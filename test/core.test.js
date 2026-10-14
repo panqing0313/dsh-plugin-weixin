@@ -16,7 +16,7 @@ import { normalizeInbound } from '../src/transport/ilink.js'
 import { readAssistantReply, streamText, describePending } from '../src/session-reader.js'
 import { sessionIdFor } from '../src/agent-bridge.js'
 import { MessageDeduper } from '../src/message/dedupe.js'
-import { accountsDir, ensureSessionsDir, sessionsDir } from '../src/state.js'
+import { accountsDir, ensureSessionsDir, sessionsDir, configFile, readSavedConfig, withSavedConfig } from '../src/state.js'
 
 test('allowlist denies everyone when no sender is configured', () => {
   assert.equal(isAllowedSender({ allowedSenders: [] }, 'wxid_abc'), false)
@@ -313,4 +313,76 @@ test('a created session is filed under its workspace, and a missing registry nev
   const bare = new AgentBridge({ ctx: { get: (n) => (n === 'agents' ? agents : undefined) }, cwd: '/tmp/x' })
   await bare.attach('room-2')
   assert.equal(created.length, 2)
+})
+
+/**
+ * Run `body` with the state root pointed at a throwaway directory.
+ * @param {(root: string) => void} body
+ */
+function withStateRoot(body) {
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-config-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    body(root)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
+test('saved settings fill in what the composition did not set', () => {
+  withStateRoot((root) => {
+    assert.equal(configFile(), path.join(root, 'config.json'))
+    fs.writeFileSync(
+      configFile(),
+      JSON.stringify({ allowedSenders: ['wxid_saved'], maxMessageLength: 900 }),
+    )
+
+    // Nothing passed in: the saved file is the whole configuration.
+    assert.deepEqual(withSavedConfig({}).allowedSenders, ['wxid_saved'])
+    assert.equal(withSavedConfig({}).maxMessageLength, 900)
+
+    // A field the composition DID set wins. The profile YAML is the live
+    // decision, so an overlay must not make it lie about the running config.
+    const merged = withSavedConfig({ allowedSenders: ['wxid_composed'], cwd: '/tmp/work' })
+    assert.deepEqual(merged.allowedSenders, ['wxid_composed'], 'the saved file overrode an explicit value')
+    assert.equal(merged.cwd, '/tmp/work', 'a key only the composition set must survive')
+    assert.equal(merged.maxMessageLength, 900, 'untouched saved keys must still fill in')
+  })
+})
+
+test('the asr section merges one level deep so editing one field keeps the rest', () => {
+  withStateRoot(() => {
+    fs.writeFileSync(
+      configFile(),
+      JSON.stringify({ asr: { hfEndpoint: 'https://mirror.example', hfProxy: 'http://127.0.0.1:7897' } }),
+    )
+    // The settings card writes modelDir alone; a wholesale replace would drop
+    // the endpoint and the proxy, silently un-doing the download fix.
+    const merged = withSavedConfig({ asr: { modelDir: '/models' } })
+    assert.equal(merged.asr.modelDir, '/models')
+    assert.equal(merged.asr.hfEndpoint, 'https://mirror.example')
+    assert.equal(merged.asr.hfProxy, 'http://127.0.0.1:7897')
+  })
+})
+
+test('a missing or malformed settings file costs preferences, never the plugin', () => {
+  withStateRoot(() => {
+    // Missing file.
+    assert.deepEqual(readSavedConfig(), {})
+    assert.deepEqual(withSavedConfig({ enabled: true }), { enabled: true })
+
+    // Malformed JSON: the plugin must still load and reply.
+    fs.writeFileSync(configFile(), '{ not json')
+    assert.deepEqual(readSavedConfig(), {})
+
+    // Valid JSON that is not an object: a list cannot carry settings.
+    fs.writeFileSync(configFile(), '["wxid_abc"]')
+    assert.deepEqual(readSavedConfig(), {})
+
+    fs.writeFileSync(configFile(), 'null')
+    assert.deepEqual(readSavedConfig(), {})
+  })
 })

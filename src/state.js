@@ -94,6 +94,85 @@ export function ensureInboxDir() {
   return dir
 }
 
+/** File holding the operator's settings for this plugin. */
+export function configFile() {
+  return path.join(stateDir(), 'config.json')
+}
+
+/**
+ * Read the operator's saved settings.
+ *
+ * This is a plain JSON file under the plugin's own state root, deliberately NOT
+ * a profile YAML patch. A profile patch row would have to be *inserted* through
+ * `cordis.patch.yml`, and this package is also installed as a bundle — whose own
+ * patch layer already inserts the same row. Two insertions of one `id` produce
+ * two loader entries, both of which mount, so the account gets two long-poll
+ * loops. DSH's own `dsh-better-sidebar` documentation states the rule: a profile
+ * still carrying the manual mount line must drop it before switching to the
+ * bundle channel. Keeping the settings beside the credentials (which already
+ * live under this state root) sidesteps the composition entirely.
+ *
+ * A missing file, unreadable file, or malformed JSON all resolve to `{}`: this
+ * is a settings overlay, and a corrupt overlay must cost the user their
+ * preferences, never the plugin's ability to load and reply.
+ *
+ * @returns {Record<string, unknown>} saved settings, possibly empty
+ */
+export function readSavedConfig() {
+  const file = configFile()
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return {}
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    process.emitWarning(`dsh-weixin: ignoring malformed ${file}: ${String(error?.message ?? error)}`)
+    return {}
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    process.emitWarning(`dsh-weixin: ignoring ${file}: expected a JSON object`)
+    return {}
+  }
+  return parsed
+}
+
+/**
+ * Merge the operator's saved settings under the composition's own config.
+ *
+ * Precedence: whatever the loader passed wins, and the saved file fills the gaps.
+ * A profile that explicitly sets a field is making a live decision, and an
+ * overlay that silently overrode it would make the YAML lie about the running
+ * configuration. The saved file exists to carry values across reinstalls, not to
+ * outrank a hand edit.
+ *
+ * `asr` is merged one level deeper, because it is the section the settings card
+ * writes into and a wholesale replacement would drop every ASR default the
+ * moment the user changed only the model directory.
+ *
+ * @param {Record<string, unknown>} config config as the loader passed it
+ * @returns {Record<string, unknown>} config with saved values filling gaps
+ */
+export function withSavedConfig(config) {
+  const saved = readSavedConfig()
+  const merged = { ...saved, ...config }
+  const savedAsr = saved.asr
+  if (
+    savedAsr !== null &&
+    typeof savedAsr === 'object' &&
+    !Array.isArray(savedAsr) &&
+    config?.asr !== null &&
+    typeof config?.asr === 'object' &&
+    !Array.isArray(config.asr)
+  ) {
+    merged.asr = { ...savedAsr, ...config.asr }
+  }
+  return merged
+}
+
 /**
  * Point the vendored transport at the DSH state directory.
  *

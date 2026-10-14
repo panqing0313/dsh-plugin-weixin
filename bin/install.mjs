@@ -5,21 +5,37 @@
  * A DSH bundle is just a resolvable package plus two registrations, so this
  * script does exactly three things and nothing else:
  *   1. copy this package (vendored transport included) into
- *      <profile>/node_modules/dsh-weixin, plus the optional runtime dependencies
- *      (qrcode-terminal for bin/login.js, silk-wasm for SILK→WAV decoding) into
- *      <profile>/node_modules — our own node_modules is never copied, so a
- *      dependency that is only reachable from this tree has to be carried;
- *   2. append `dsh-weixin` to `dsh.profile.bundles` in the profile package.json
- *      (so the bundle's own patch layer is applied);
- *   3. append one `- insert:` row to the profile's cordis.patch.yml.
+ *      <profile>/node_modules/dsh-plugin-weixin, plus the optional runtime
+ *      dependencies (qrcode-terminal for bin/login.js, silk-wasm for SILK→WAV
+ *      decoding) into <profile>/node_modules — our own node_modules is never
+ *      copied, so a dependency that is only reachable from this tree has to be
+ *      carried;
+ *   2. append `dsh-plugin-weixin` to `dsh.profile.bundles` in the profile
+ *      package.json, so the bundle's own patch layer — which already mounts the
+ *      plugin row — is applied;
+ *   3. write the operator's settings to <DSH_HOME>/weixin/config.json, and
+ *      delete any `- insert:` row an earlier release of this script left in the
+ *      profile's cordis.patch.yml.
+ *
+ * Step 3 is the correction. Writing that patch row mounts the plugin a SECOND
+ * time: the bundle layer inserts the same row, DSH applies both layers, and an
+ * insert with no top-level `id` appends rather than overrides. The result is two
+ * loader entries for one package, each running its own long-poll loop against
+ * the same WeChat account. The `disabled` guard meant to prevent it compares
+ * `e.options.id` against `'dsh-weixin'`, which both rows equal, so it never
+ * fires. `dsh-better-sidebar` documents the same rule for its own bundle: a
+ * profile still carrying the manual mount line must drop it before switching to
+ * the bundle channel "to avoid double-mounting".
+ *
+ * Settings therefore live beside the credentials under the plugin's state root,
+ * where a reinstall cannot reach them and the loader cannot double-apply them.
  *
  * Both optional dependencies are best-effort: a missing source or a failed copy
  * prints a note and the plugin still loads. Losing them costs convenience
  * (QR rendering, voice decoding), never correctness.
  *
- * Steps 2 and 3 are idempotent: re-running never duplicates an entry. Step 3 is
- * skipped when a row for this id already exists, so an operator who hand-tuned
- * the config keeps their version.
+ * Steps 2 and 3 are idempotent: re-running never duplicates an entry and never
+ * resets a setting the operator already saved.
  *
  * Usage:
  *   node bin/install.mjs [--profile <name>] [--uninstall]
@@ -84,7 +100,9 @@ if (uninstall) {
     fs.writeFileSync(profilePkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
     process.stdout.write(`removed ${PKG_NAME} from dsh.profile.bundles\n`)
   }
-  process.stdout.write(`\n手动删除 ${patchPath} 里的 dsh-weixin 行（脚本不改你手调过的配置），然后重启 DSH。\n`)
+  process.stdout.write(
+    `\n已卸载。凭据和设置保留在 ${path.join(dshHome, 'weixin')}（要彻底清除就删掉这个目录），然后重启 DSH。\n`,
+  )
   process.exit(0)
 }
 
@@ -184,24 +202,36 @@ if (!bundles.includes(PKG_NAME)) {
 }
 if (profileChanged) fs.writeFileSync(profilePkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
 
-// 3. Mount the plugin row.
+// 3. Operator settings.
 //
-// The row is ours, so an existing copy is not "the user's version": it is an
-// older copy of this same file. Replacing it is what lets a corrected `disabled`
-// expression or config default actually reach the profile — preserving it
-// silently strands the fix. The one value that IS the user's is the allowlist,
-// so it is carried across.
-const patch = fs.existsSync(patchPath) ? fs.readFileSync(patchPath, 'utf8') : '[]\n'
-const freshRow = fs.readFileSync(path.join(sourceRoot, 'cordis.patch.yml'), 'utf8').trimEnd()
+// These used to be written into the profile's `cordis.patch.yml` as an
+// `- insert:` row. That row is the double-mount: this package is ALSO installed
+// as a bundle, and a bundle's own patch layer already inserts the same row. DSH
+// applies both layers, and an insert with no top-level `id` APPENDS rather than
+// overrides — so the profile ends up with two loader entries for one package,
+// each starting its own long-poll loop against the same WeChat account. The
+// `disabled` guard that was meant to prevent this compares `e.options.id` to
+// `'dsh-weixin'`, and both rows carry exactly that id, so the comparison is
+// always false and the guard never fires.
+//
+// `dsh-better-sidebar` documents the rule for its own bundle: a profile still
+// carrying the manual mount line must drop it before switching to the bundle
+// channel "to avoid double-mounting (two Node halves, two sidebars)".
+//
+// So the settings no longer live in a loader patch at all. They live beside the
+// credentials, under the plugin's state root, where a reinstall cannot reach
+// them and the loader cannot double-apply them.
+const settingsPath = path.join(dshHome, 'weixin', 'config.json')
 
 /** The values an operator owns and that an upgrade must not silently reset. */
-const KEPT_KEYS = ['allowedSenders', 'allowedChats', 'cwd', 'accountId', 'enabled', 'asr']
+const KEPT_KEYS = ['allowedSenders', 'allowedChats', 'cwd', 'accountId', 'enabled', 'asr', 'maxMessageLength', 'markdownMode']
 
 /**
- * Locate our mounted block by line, so it can be swapped without touching any
- * other bundle's rows. The block includes the file header comment this package
- * ships with: leaving a stale copy behind would accumulate one more duplicated
- * header on every upgrade.
+ * Locate our mounted block in an existing profile patch, by line.
+ *
+ * Only used to REMOVE a row written by an earlier release of this installer.
+ * The block includes the header comment this package used to ship with, because
+ * leaving a stale copy behind would strand an orphan comment.
  *
  * @param {string} text
  * @returns {{start: number, end: number}|undefined} line indices, end exclusive
@@ -215,12 +245,9 @@ function findMountBlock(text) {
   if (!new RegExp(`^\\s*-\\s*id:\\s*${ROW_ID}\\s*$`).test((lines[insertAt + 1] ?? '').trimEnd())) {
     return undefined
   }
-  // Walk back over this package's own header comment (blank-line separated from
-  // whatever precedes it).
   let start = insertAt
   while (start > 0 && lines[start - 1].trimStart().startsWith('#')) start -= 1
   if (start > 0 && lines[start - 1].trim() === '') {
-    // Keep the separator blank line that belongs to the previous row.
     while (start > 0 && lines[start - 1].trim() === '' &&
            (start - 2 < 0 || lines[start - 2].trimStart().startsWith('#'))) {
       start -= 1
@@ -228,30 +255,24 @@ function findMountBlock(text) {
   }
   let end = insertAt + 2
   while (end < lines.length && !/^\s*-\s*insert:\s*$/.test(lines[end])) end += 1
-  // Trailing blank lines belong to the separator, not to our block.
   while (end > insertAt + 2 && lines[end - 1].trim() === '') end -= 1
   return { start, end }
 }
 
 /**
- * Read the operator-owned config values out of the currently mounted row.
+ * Read operator-owned values out of a mounted row, so they survive the move
+ * from the patch file into the settings file.
  *
- * A value is captured as a whole YAML node, not a single line: `allowedSenders`
- * is naturally written as a block sequence
+ * Values are returned as raw YAML text fragments and converted by
+ * {@link parseYamlNode}: this file has no YAML dependency, and the values that
+ * matter (a list of WeChat ids, a boolean, a number, a path) are simple enough
+ * to read exactly.
  *
- *   allowedSenders:
- *     - wxid_abc
- *
- * and a line-anchored `(.+)$` match finds nothing after the colon, which would
- * silently drop the allowlist on every upgrade — the one value the operator had
- * to fill in by hand, and whose loss turns the bot into a silent no-op.
- *
- * Continuation lines are the following lines indented deeper than the key, plus
- * blank lines between them. The capture stops at the next key, so the caller can
- * splice it in verbatim.
+ * A nested mapping comes back as dedented `key: value` lines, so `asr:` yields
+ * `hfProxy: http://...` and {@link parseYamlNode} turns it back into an object.
  *
  * @param {string} block one mounted row, as YAML text
- * @returns {Record<string, string>} key → raw YAML node text (may be multiline)
+ * @returns {Record<string, string>} key → raw YAML node text
  */
 function readKeptValues(block) {
   const lines = block.split('\n')
@@ -260,17 +281,14 @@ function readKeptValues(block) {
     const startAt = lines.findIndex((line) => new RegExp(`^[ \\t]*${key}:[ \\t]*(.*)$`).test(line))
     if (startAt === -1) continue
     const indent = lines[startAt].match(/^[ \t]*/)[0].length
-    // Capture every line with its ABSOLUTE indentation and the node's own base
-    // indent. Trimming them collapsed a nested block to column zero, so a
-    // nested `asr:` came back as a sibling key and was lost on the next
-    // upgrade; making them relative instead then double-counted the step when
-    // spliced, which silently emptied `allowedSenders`. Absolute in, absolute
-    // out is the only pairing where the two halves cannot disagree.
     const collected = []
+    // The first deeper line fixes the child indent, so a nested mapping can be
+    // dedented to column zero and read as its own small document.
+    let childIndent = null
     for (let at = startAt + 1; at < lines.length; at += 1) {
       const line = lines[at]
       if (line.trim() === '') {
-        // A blank line continues the node only if a deeper line follows it.
+        // A blank line continues the node only while a deeper line follows.
         const nextReal = lines.slice(at + 1).find((candidate) => candidate.trim() !== '')
         if (nextReal === undefined) break
         if (nextReal.match(/^[ \t]*/)[0].length <= indent) break
@@ -279,99 +297,96 @@ function readKeptValues(block) {
       }
       const lineIndent = line.match(/^[ \t]*/)[0].length
       if (lineIndent <= indent) break
-      // Comments belong to the template, not to the operator: the fresh row
-      // ships its own, and carrying stale ones forward would duplicate them.
       if (line.trim().startsWith('#')) continue
-      collected.push(line)
+      if (childIndent === null) childIndent = lineIndent
+      // Dedent to the child's own base so the fragment parses standalone; a
+      // negative slice (a line shallower than the base, i.e. a nested block
+      // already at its own column zero) must not eat characters.
+      collected.push(lineIndent <= childIndent ? line.trimStart() : line.slice(childIndent))
     }
-    keep[key] = {
-      keyLine: lines[startAt].slice(indent),
-      bodyIndent: indent,
-      body: collected.join('\n'),
-    }
+    const inline = lines[startAt].slice(indent).replace(new RegExp(`^${key}:[ \\t]*`), '').trim()
+    keep[key] = [inline, ...collected].filter((line, index) => index === 0 || line !== '').join('\n')
   }
   return keep
 }
 
-const block = findMountBlock(patch)
-if (block === undefined) {
-  fs.writeFileSync(patchPath, `${patch.trimEnd()}\n${freshRow}\n`)
-  process.stdout.write(`appended the ${ROW_ID} row to ${patchPath}\n`)
-} else {
-  const lines = patch.split('\n')
-  const keep = readKeptValues(lines.slice(block.start, block.end).join('\n'))
-  let row = freshRow
-  // Keys the operator added that the template does not ship (a nested `asr:`
-  // block, say). `replace` on a missing pattern is a silent no-op, which is how
-  // these values were being deleted on every upgrade -- the loss happened at the
-  // write, not the read, so fixing the capture had no effect.
-  const appended = []
-  for (const [key, entry] of Object.entries(keep)) {
-    // Re-seat the node under the fresh row's own indent: the template decides
-    // where the key sits, the captured text decides what is underneath it.
-    // Continuation lines keep their absolute indentation, shifted by however
-    // far the key itself moved, so nesting is preserved at any depth.
-    const pattern = new RegExp(`^([ \\t]*)${key}:[^\\n]*$`, 'm')
-    const match = row.match(pattern)
-    if (match === null) {
-      appended.push({ key, entry })
-      continue
-    }
-    const targetIndent = match[1]
-    const shift = targetIndent.length - entry.bodyIndent
-    const body = entry.body
-      .split('\n')
-      .map((line) => (line === '' ? '' : ' '.repeat(Math.max(0, shift)) + line))
-      .join('\n')
-    const replacement = body === '' ? `${targetIndent}${entry.keyLine}` : `${targetIndent}${entry.keyLine}\n${body}`
-    row = row.replace(pattern, replacement)
+/**
+ * Convert one raw YAML node captured by {@link readKeptValues} into JSON.
+ *
+ * Only the shapes an operator actually writes are understood; anything else
+ * returns undefined and the key is dropped rather than guessed at.
+ *
+ * @param {string} raw
+ * @returns {unknown}
+ */
+function parseYamlNode(raw) {
+  const text = raw.trim()
+  if (text === '') return undefined
+  const lines = text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+  // Block sequence: every line is `- value`.
+  if (lines.length > 0 && lines.every((line) => line.startsWith('-'))) {
+    return lines.map((line) => line.replace(/^-[ \t]*/, '').replace(/^['"]|['"]$/g, ''))
   }
-  if (appended.length > 0) {
-    // Append at the end of the config mapping: find the last key that belongs to
-    // it and insert after that node, so the new key lands as a sibling rather
-    // than at the row's outer level.
-    const rowLines = row.split('\n')
-    let insertAt = -1
-    let configIndent = null
-    for (let at = 0; at < rowLines.length; at += 1) {
-      const line = rowLines[at]
-      if (!/^[ \t]*config:[ \t]*$/.test(line)) continue
-      configIndent = line.match(/^[ \t]*/)[0].length
-      for (let inner = at + 1; inner < rowLines.length; inner += 1) {
-        const candidate = rowLines[inner]
-        if (candidate.trim() === '' || candidate.trim().startsWith('#')) continue
-        if (candidate.match(/^[ \t]*/)[0].length <= configIndent) break
-        insertAt = inner + 1
-      }
-      break
-    }
-    if (insertAt !== -1) {
-      const childIndent = ' '.repeat(configIndent + 2)
-      const block = appended.flatMap(({ entry }) => {
-        const shift = childIndent.length - entry.bodyIndent
-        const body = entry.body
-          .split('\n')
-          .map((line) => (line === '' ? '' : ' '.repeat(Math.max(0, shift)) + line))
-          .filter((line) => line !== '')
-        return [`${childIndent}${entry.keyLine}`, ...body]
-      })
-      rowLines.splice(insertAt, 0, ...block)
-      row = rowLines.join('\n')
-    }
+  // Flow sequence.
+  if (text.startsWith('[') && text.endsWith(']')) {
+    const body = text.slice(1, -1).trim()
+    return body === '' ? [] : body.split(',').map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
   }
-  const next = [...lines.slice(0, block.start), ...row.split('\n'), ...lines.slice(block.end)].join('\n')
-  fs.writeFileSync(patchPath, next)
-  const kept = Object.keys(keep)
-  process.stdout.write(
-    `refreshed the ${ROW_ID} row in ${patchPath}` +
-      (kept.length > 0 ? ` (kept ${kept.join(', ')})` : '') +
-      '\n',
-  )
+  // Nested mapping: every line is `key: value`, which is how a captured `asr:`
+  // block reads once {@link readKeptValues} dedents it. Without this the block
+  // fell through to the scalar branch and became a string, and the caller then
+  // dropped it for not being an object — silently losing hfProxy.
+  //
+  // YAML requires whitespace (or end of line) after the mapping colon, and this
+  // is load-bearing rather than pedantic: `http://127.0.0.1:7897` contains a
+  // colon, and a looser test reads it as the pair `http` → `//127.0.0.1:7897`.
+  if (lines.length > 0 && lines.every((line) => /^[A-Za-z_][\w]*:([ \t]|$)/.test(line))) {
+    const nested = {}
+    for (const line of lines) {
+      const at = line.indexOf(':')
+      const key = line.slice(0, at).trim()
+      const value = parseYamlNode(line.slice(at + 1))
+      if (value !== undefined) nested[key] = value
+    }
+    return nested
+  }
+  if (text === 'true') return true
+  if (text === 'false') return false
+  if (text === 'null' || text === '~') return null
+  if (/^-?\d+$/.test(text)) return Number(text)
+  return text.replace(/^['"]|['"]$/g, '')
 }
+
+// Migrate: lift the operator's values out of the old patch row, then delete it.
+const patch = fs.existsSync(patchPath) ? fs.readFileSync(patchPath, 'utf8') : '[]\n'
+const block = findMountBlock(patch)
+let migrated = {}
+if (block !== undefined) {
+  const lines = patch.split('\n')
+  migrated = readKeptValues(lines.slice(block.start, block.end).join('\n'))
+  const next = [...lines.slice(0, block.start), ...lines.slice(block.end)].join('\n')
+  fs.writeFileSync(patchPath, next.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n')
+  process.stdout.write(`removed the duplicate ${ROW_ID} mount row from ${patchPath}\n`)
+}
+
+// Merge: an existing settings file wins over the migrated row (it is newer), and
+// a value the operator never set is simply absent, so the schema default applies.
+const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {}
+for (const [key, raw] of Object.entries(migrated)) {
+  if (Object.prototype.hasOwnProperty.call(settings, key)) continue
+  const value = parseYamlNode(raw)
+  if (value === undefined) continue
+  if (key === 'asr' && (value === null || typeof value !== 'object')) continue
+  settings[key] = value
+}
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
+fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
+process.stdout.write(`wrote operator settings → ${settingsPath}\n`)
 
 process.stdout.write(
   `\n完成。接下来：\n` +
     `  1. node ${path.join(targetDir, 'bin', 'login.js')}       # 扫码绑定微信\n` +
-    `  2. 把你的微信 id 填进 ${patchPath} 里 dsh-weixin 行的 allowedSenders\n` +
-    `  3. 重启 DSH\n`,
+    `  2. 重启 DSH\n` +
+    `\n设置存在 ${settingsPath}（不在 node_modules 里，重装不会丢）。\n` +
+    `允许的微信 id 写在 allowedSenders 里；空数组表示谁都不允许。\n`,
 )

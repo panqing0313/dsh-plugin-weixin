@@ -18,7 +18,7 @@
  * @module dsh-weixin
  */
 import z from '@deepseek-ai/schemastery'
-import { configureWeixinStateDir, accountsDir, ensureSessionsDir } from './state.js'
+import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -133,6 +133,12 @@ export function apply(ctx, config) {
   const stateRoot = configureWeixinStateDir()
   const log = (line) => ctx.logger?.info?.(`dsh-weixin: ${line}`)
   const warn = (line) => ctx.logger?.warn?.(`dsh-weixin: ${line}`)
+
+  // Settings the operator saved through the UI live beside the credentials, so
+  // they survive a reinstall of the package. They fill in what the composition
+  // did not set; an explicit value in the profile YAML still wins, because the
+  // YAML is the live decision and an overlay must not make it lie.
+  config = withSavedConfig(config ?? {})
 
   if (config.enabled === false) {
     log('disabled by configuration; not starting the Weixin loop')

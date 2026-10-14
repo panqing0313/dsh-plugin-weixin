@@ -1,11 +1,20 @@
 /**
- * Tests for the installer's cordis.patch.yml handling.
+ * Tests for the installer's settings handling.
  *
  * The row this package mounts carries one value the operator must fill in by
  * hand: `allowedSenders`. The allowlist is deny-by-default, so losing it does
  * not fail loudly — the bot simply stops replying to anything, which is
  * indistinguishable from "the plugin is broken". An upgrade must therefore
  * carry that value across, in whichever YAML shape the operator wrote it.
+ *
+ * It must ALSO not mount the plugin twice. This package is installed as a
+ * bundle, and a bundle's own patch layer already inserts the plugin row. An
+ * installer that additionally inserts a row into the profile's
+ * `cordis.patch.yml` produces two loader entries for one package — an insert
+ * with no top-level `id` appends, it does not override — and each entry starts
+ * its own long-poll loop against the same WeChat account. Historical versions
+ * of this installer did exactly that, so the tests below assert the row is
+ * removed and the settings move to a file the loader never composes.
  *
  * Run with: node --test test/
  */
@@ -21,7 +30,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const INSTALL = path.join(ROOT, 'bin', 'install.mjs')
 
 /** Build a throwaway DSH home with one profile, and return the paths we use. */
-function fakeHome({ patch }) {
+function fakeHome({ patch } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-install-'))
   const profile = path.join(home, 'profiles', 'testprofile')
   fs.mkdirSync(profile, { recursive: true })
@@ -30,7 +39,11 @@ function fakeHome({ patch }) {
     JSON.stringify({ name: 'test-profile', dsh: { profile: { bundles: [] } } }, null, 2),
   )
   if (patch !== undefined) fs.writeFileSync(path.join(profile, 'cordis.patch.yml'), patch)
-  return { home, patchPath: path.join(profile, 'cordis.patch.yml') }
+  return {
+    home,
+    patchPath: path.join(profile, 'cordis.patch.yml'),
+    settingsPath: path.join(home, 'weixin', 'config.json'),
+  }
 }
 
 function runInstall(home) {
@@ -43,165 +56,130 @@ function runInstall(home) {
   return result.stdout
 }
 
-/** Pull the mounted row's config out of the patch file, without a YAML dep. */
-function readRowConfig(text) {
-  const lines = text.split('\n')
-  const idAt = lines.findIndex((line) => /^\s*-\s*id:\s*dsh-weixin\s*$/.test(line))
-  assert.notEqual(idAt, -1, `no dsh-weixin row in:\n${text}`)
-  const configAt = lines.findIndex((line, index) => index > idAt && /^\s*config:\s*$/.test(line))
-  assert.notEqual(configAt, -1, 'the mounted row has no config block')
-  const baseIndent = lines[configAt].match(/^[ \t]*/)[0].length
-  const config = {}
-  let key = null
-  for (let at = configAt + 1; at < lines.length; at += 1) {
-    const line = lines[at]
-    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
-    const indent = line.match(/^[ \t]*/)[0].length
-    if (indent <= baseIndent) break
-    const item = line.match(/^\s*-\s*(.+)$/)
-    if (item !== null && key !== null) {
-      config[key].push(item[1].trim())
-      continue
-    }
-    const entry = line.match(/^\s*([A-Za-z_][\w]*):[ \t]*(.*)$/)
-    if (entry === null) continue
-    key = entry[1]
-    const inline = entry[2].trim()
-    if (inline === '') {
-      // Block sequence (or empty); items are collected on the following lines.
-      config[key] = []
-    } else if (inline.startsWith('[') && inline.endsWith(']')) {
-      // Flow sequence: split on commas, treating `[]` as empty.
-      const body = inline.slice(1, -1).trim()
-      config[key] = body === '' ? [] : body.split(',').map((item) => item.trim())
-    } else {
-      config[key] = [inline]
-    }
-  }
-  return config
+function readSettings(settingsPath) {
+  return JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
 }
 
-test('a block-sequence allowlist survives an upgrade', () => {
-  const { home, patchPath } = fakeHome({
-    patch:
-      '[]\n',
+/** A minimal mounted row, the shape historical installers wrote. */
+function legacyRow({ allowlist }) {
+  return [
+    '# dsh-plugin-weixin bundle patch layer.',
+    '- insert:',
+    '    - id: dsh-weixin',
+    "      name: 'dsh-plugin-weixin'",
+    '      config:',
+    '        enabled: true',
+    allowlist,
+    '        maxMessageLength: 1500',
+    '        typingIndicator: true',
+    '        asr:',
+    '          hfProxy: http://127.0.0.1:7897',
+    "      disabled: !!js \"[...ctx.loader.entries()].some((e) => e.options.name === 'dsh-plugin-weixin' && e.options.id !== 'dsh-weixin' && !e.disabled)\"",
+    '',
+  ].join('\n')
+}
+
+test('a block-sequence allowlist migrates into the settings file', () => {
+  const { home, settingsPath } = fakeHome({
+    patch: legacyRow({ allowlist: '        allowedSenders:\n          - wxid_operator' }),
   })
   runInstall(home)
-  // Write the allowlist the way an operator would: as a block sequence.
-  const installed = fs.readFileSync(patchPath, 'utf8')
-  fs.writeFileSync(
-    patchPath,
-    installed.replace(/^(\s*)allowedSenders:\s*\[\s*\]\s*$/m, '$1allowedSenders:\n$1  - wxid_operator'),
-  )
-  assert.deepEqual(readRowConfig(fs.readFileSync(patchPath, 'utf8')).allowedSenders, ['wxid_operator'])
 
-  // A second install stands in for the next upgrade.
-  runInstall(home)
-  const after = readRowConfig(fs.readFileSync(patchPath, 'utf8'))
   assert.deepEqual(
-    after.allowedSenders,
+    readSettings(settingsPath).allowedSenders,
     ['wxid_operator'],
     'the allowlist was dropped: deny-by-default silently turns the bot into a no-op',
   )
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-test('an inline allowlist survives an upgrade too', () => {
-  const { home, patchPath } = fakeHome({ patch: '[]\n' })
+test('an inline allowlist migrates into the settings file too', () => {
+  const { home, settingsPath } = fakeHome({
+    patch: legacyRow({ allowlist: '        allowedSenders: [wxid_inline, wxid_two]' }),
+  })
   runInstall(home)
-  const installed = fs.readFileSync(patchPath, 'utf8')
-  fs.writeFileSync(
-    patchPath,
-    installed.replace(/^(\s*)allowedSenders:\s*\[\s*\]\s*$/m, '$1allowedSenders: [wxid_inline, wxid_two]'),
-  )
-  runInstall(home)
-  const after = readRowConfig(fs.readFileSync(patchPath, 'utf8'))
-  assert.deepEqual(after.allowedSenders, ['wxid_inline', 'wxid_two'])
-  // The other operator-owned scalars must come across as well.
-  assert.deepEqual(after.enabled, ['true'])
+
+  const settings = readSettings(settingsPath)
+  assert.deepEqual(settings.allowedSenders, ['wxid_inline', 'wxid_two'])
+  // Other operator-owned scalars must come across as real JSON types, not text.
+  assert.equal(settings.enabled, true)
+  assert.equal(settings.maxMessageLength, 1500)
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-test('an upgrade keeps the row singular and does not duplicate the header', () => {
-  const { home, patchPath } = fakeHome({ patch: '[]\n' })
+test('the duplicate mount row is removed, leaving the bundle as the only mount', () => {
+  const { home, patchPath } = fakeHome({
+    patch: legacyRow({ allowlist: '        allowedSenders: [wxid_operator]' }),
+  })
   runInstall(home)
-  runInstall(home)
-  runInstall(home)
+
   const text = fs.readFileSync(patchPath, 'utf8')
-  const rows = [...text.matchAll(/^\s*-\s*id:\s*dsh-weixin\s*$/gm)]
-  assert.equal(rows.length, 1, 'the row was duplicated, which would start two long-poll loops')
   assert.equal(
-    [...text.matchAll(/dsh-weixin — a DSH channel plugin/g)].length,
+    [...text.matchAll(/^\s*-\s*id:\s*dsh-weixin\s*$/gm)].length,
     0,
-    'the installed patch must not accumulate the package README header',
+    'the row survived, which double-mounts the plugin and starts two long-poll loops',
   )
+  assert.doesNotMatch(text, /- insert:/, 'the insert block itself must go, not just the id line')
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-test('a nested block the template does not ship survives an upgrade', () => {
-  // `asr:` is a config key the operator adds by hand and the fresh template never
-  // contains. The rewrite loop replaced it with `row.replace(missingPattern, ...)`,
-  // which is a silent no-op -- so the value was deleted at the WRITE, not the
-  // read, and every fix to the capture logic changed nothing. Losing hfProxy
-  // silently un-does the network fix, and the operator sees a working config.
-  const { home, patchPath } = fakeHome({ patch: '[]\n' })
+test('another bundle\'s rows in the profile patch are left untouched', () => {
+  const other = ['- id: ui-settings', '  name: "@deepseek-ai/dsh-client-ui-settings"', '  config:', '    enabled: false', ''].join('\n')
+  const { home, patchPath } = fakeHome({ patch: `${other}${legacyRow({ allowlist: '        allowedSenders: []' })}` })
   runInstall(home)
-  const installed = fs.readFileSync(patchPath, 'utf8')
-  // Add a nested block the same way an operator would, after the last sibling.
-  fs.writeFileSync(
-    patchPath,
-    installed.replace(/^(\s*)typingIndicator: true\s*$/m, '$1typingIndicator: true\n$1asr:\n$1  hfProxy: http://127.0.0.1:7897'),
-  )
 
-  // Assert on the text: readRowConfig only understands flat keys and would
-  // report every nested block as absent, which is a broken assertion rather
-  // than a broken installer.
-  for (let round = 1; round <= 3; round += 1) {
-    runInstall(home)
-    const text = fs.readFileSync(patchPath, 'utf8')
-    assert.match(
-      text,
-      /^\s*asr:\s*$/m,
-      `round ${round}: the nested asr block was dropped, silently un-fixing the download`,
-    )
-    assert.match(text, /^\s*hfProxy: http:\/\/127\.0\.0\.1:7897\s*$/m, `round ${round}: hfProxy was lost`)
-    const asrIndent = text.split('\n').find((l) => /^\s*asr:\s*$/.test(l)).match(/^\s*/)[0].length
-    const proxyIndent = text.split('\n').find((l) => /^\s*hfProxy:/.test(l)).match(/^\s*/)[0].length
-    assert.equal(proxyIndent, asrIndent + 2, `round ${round}: hfProxy must stay a child of asr`)
-  }
-  fs.rmSync(home, { recursive: true, force: true })
-})
-
-test('a nested block does not displace the keys around it', () => {
-  // Appending the missing key must land it as a child of `config`, not as a
-  // sibling of the row: a wrong indent level makes the row invalid for the
-  // loader, which fails the whole plugin rather than just the setting.
-  const { home, patchPath } = fakeHome({ patch: '[]\n' })
-  runInstall(home)
-  const installed = fs.readFileSync(patchPath, 'utf8')
-  fs.writeFileSync(
-    patchPath,
-    installed
-      .replace(/^(\s*)allowedSenders:\s*\[\s*\]\s*$/m, '$1allowedSenders:\n$1  - wxid_operator')
-      .replace(/^(\s*)typingIndicator: true\s*$/m, '$1typingIndicator: true\n$1asr:\n$1  hfProxy: http://127.0.0.1:7897'),
-  )
-  runInstall(home)
-  const after = readRowConfig(fs.readFileSync(patchPath, 'utf8'))
-  assert.deepEqual(after.allowedSenders, ['wxid_operator'], 'the allowlist must still be there')
-  assert.deepEqual(after.typingIndicator, ['true'], 'the sibling before the insertion point must survive')
-  assert.deepEqual(after.maxMessageLength, ['1500'])
-  const body = fs.readFileSync(patchPath, 'utf8')
-  assert.match(body, /^\s*asr:\s*$/m)
-  assert.match(body, /^\s*hfProxy: http:\/\/127\.0\.0\.1:7897\s*$/m)
-
-  // The appended key must be a CHILD of config: the raw text has to indent it.
   const text = fs.readFileSync(patchPath, 'utf8')
-  const asrLine = text.split('\n').find((line) => /^\s*asr:\s*$/.test(line))
-  const configLine = text.split('\n').find((line) => /^\s*config:\s*$/.test(line))
-  assert.equal(
-    asrLine.match(/^\s*/)[0].length,
-    configLine.match(/^\s*/)[0].length + 2,
-    'asr: must be one level deeper than config:, or the row will not load',
+  assert.match(text, /- id: ui-settings/, 'a neighbouring override was deleted along with our row')
+  assert.match(text, /enabled: false/, 'the neighbouring override lost its config')
+  assert.equal([...text.matchAll(/^\s*-\s*id:\s*dsh-weixin\s*$/gm)].length, 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('a re-run never resets settings the operator already saved', () => {
+  const { home, patchPath, settingsPath } = fakeHome({
+    patch: legacyRow({ allowlist: '        allowedSenders: [wxid_from_patch]' }),
+  })
+  runInstall(home)
+  // The operator edits the settings file, as the settings card would.
+  const edited = readSettings(settingsPath)
+  edited.allowedSenders = ['wxid_hand_edited']
+  fs.writeFileSync(settingsPath, JSON.stringify(edited, null, 2))
+
+  runInstall(home)
+  runInstall(home)
+
+  assert.deepEqual(
+    readSettings(settingsPath).allowedSenders,
+    ['wxid_hand_edited'],
+    'a reinstall overwrote the live settings with stale patch values',
   )
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('a nested block the operator set survives the migration', () => {
+  // `asr.hfProxy` is the network fix. Losing it silently un-does it and the
+  // operator sees a working config, so the nested block must come across.
+  const { home, settingsPath } = fakeHome({
+    patch: legacyRow({ allowlist: '        allowedSenders: []' }),
+  })
+  runInstall(home)
+
+  const settings = readSettings(settingsPath)
+  assert.equal(
+    settings.asr?.hfProxy,
+    'http://127.0.0.1:7897',
+    'the nested asr block was dropped, silently un-fixing the download',
+  )
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('installing into a profile with no patch file still writes settings', () => {
+  const { home, patchPath, settingsPath } = fakeHome()
+  runInstall(home)
+
+  assert.ok(fs.existsSync(settingsPath), 'the settings file must exist even with no legacy row')
+  assert.deepEqual(readSettings(settingsPath), {})
+  // The installer must not create a patch file just to hold a mount row.
+  assert.ok(!fs.existsSync(patchPath) || !/- insert:/.test(fs.readFileSync(patchPath, 'utf8')))
   fs.rmSync(home, { recursive: true, force: true })
 })
