@@ -1,11 +1,11 @@
 // AsrController — settings-page ASR model management.
 //
 // Lets the user (a) download a whisper model into a configurable directory
-// via `huggingface-cli download` (or `hf download` on newer CLIs), and
+// via the Hugging Face CLI, and
 // (b) see which models are already present locally. The model *path* itself
 // is configured through the plugin Config schema (asr.model), so the settings
 // form already covers selection; this controller handles the download part.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -16,6 +16,45 @@ import { remoteMethods } from "./typert-js.js";
 const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
 
 const ASR_CONFIG_FILE = "asr-config.json";
+
+// Hugging Face renamed its CLI: `huggingface-cli` is deprecated and, on
+// huggingface_hub >= 1.0, is a stub that exits 1 with nothing but a "no longer
+// works, use hf instead" banner. Prefer `hf` and fall back, because plenty of
+// installs still have only the old entry point (and it still works below 1.0).
+const HF_CLI_CANDIDATES = ["hf", "huggingface-cli"];
+
+/** The CLI to shell out to: env override, else the first one that answers. */
+function resolveHfCli() {
+    const override = process.env.DSH_WEIXIN_HF_CLI;
+    if (override) return override;
+    for (const candidate of HF_CLI_CANDIDATES) {
+        try {
+            // `--help` is cheap and, unlike `version`, exits 0 on both CLIs.
+            const probe = spawnSync(candidate, ["--help"], { stdio: "ignore", timeout: 10_000 });
+            if (probe.status === 0) return candidate;
+        } catch {
+            // not on PATH; try the next candidate
+        }
+    }
+    return HF_CLI_CANDIDATES[0];
+}
+
+// The old CLI's deprecation banner is pure noise, and so is the progress bar:
+// neither is a reason a download failed, and pasting an example list and a wall
+// of carriage-return updates into a settings card explains nothing. Keep only
+// lines that look like an actual diagnosis.
+const HF_NOISE = /^\s*(hint:|warning:|examples?:|\s*hf )/i;
+
+function summarizeHfFailure(stderr) {
+    const lines = String(stderr)
+        .split(/\r?\n|\r/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        // Progress bars re-draw on one line and arrive as many fragments.
+        .filter((line) => !/^\d+%|[\u2588\u2589\u2591\u2588]|\d+\.\d+[kMG]?B\/s/.test(line))
+        .filter((line) => !HF_NOISE.test(line));
+    return lines.slice(-3).join(" ").slice(0, 400);
+}
 
 /** Best-effort persistence of the runtime-chosen model dir under stateDir(). */
 async function persistModelDir(dir) {
@@ -125,7 +164,7 @@ export class AsrController extends TypertRemoteService {
         fs.mkdirSync(this.modelDir, { recursive: true });
         this.downloads.set(repoId, { status: "running", message: "" });
 
-        const cli = process.env.DSH_WEIXIN_HF_CLI ?? "huggingface-cli";
+        const cli = resolveHfCli();
         const args = ["download", repoId, "--local-dir", path.join(this.modelDir, repoId)];
         const child = spawn(cli, args, {
             stdio: ["ignore", "pipe", "pipe"],
@@ -133,19 +172,25 @@ export class AsrController extends TypertRemoteService {
         });
         let lastError = "";
         child.stderr.on("data", (d) => {
-            lastError = String(d).slice(-400);
+            lastError = `${lastError}${String(d)}`.slice(-4000);
         });
         child.on("error", (err) => {
             this.downloads.set(repoId, {
                 status: "failed",
-                message: `找不到 ${cli}，请先 pip install huggingface_hub：${err.message}`,
+                message: `找不到 ${cli}，请 pip install -U huggingface_hub：${err.message}`,
             });
         });
         child.on("exit", (code) => {
             if (code === 0) {
                 this.downloads.set(repoId, { status: "done", message: "" });
             } else {
-                this.downloads.set(repoId, { status: "failed", message: lastError || `exit ${code}` });
+                const detail = summarizeHfFailure(lastError);
+                this.downloads.set(repoId, {
+                    status: "failed",
+                    message: detail
+                        ? `${cli} 下载失败：${detail}`
+                        : `${cli} 下载失败（exit ${code}），请检查模型名与网络`,
+                });
             }
         });
         return { started: true, message: `开始下载 ${repoId}` };
