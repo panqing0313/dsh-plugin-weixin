@@ -16,6 +16,7 @@ import {
 } from "../vendor/openclaw-weixin/auth/accounts.js";
 import { stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
+import { qrDataUrl } from "./qr-png.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -84,24 +85,33 @@ export class WeixinLoginController extends TypertRemoteService {
         this.botType = options.botType ?? DEFAULT_BOT_TYPE;
     }
 
-    /** Start (or resume) a QR login; returns {qrcodeUrl, sessionKey, status}. */
+    /** Start (or resume) a QR login; returns {qrcodeUrl, qrDataUrl, sessionKey, status}. */
     async startLogin() {
         const existing = [...logins.values()].find((l) => isFresh(l) && l.qrcodeUrl);
         if (existing) {
-            return { qrcodeUrl: existing.qrcodeUrl, sessionKey: existing.sessionKey, status: "wait" };
+            return {
+                qrcodeUrl: existing.qrcodeUrl,
+                qrDataUrl: existing.qrDataUrl,
+                sessionKey: existing.sessionKey,
+                status: "wait",
+            };
         }
         const data = await fetchQrCode(this.botType);
         const sessionKey = randomUUID();
+        const link = data.qrcode_img_content;
+        // Best-effort QR image; the clickable link is always a usable fallback.
+        const qrDataUrlValue = await qrDataUrl(link).catch(() => undefined);
         logins.set(sessionKey, {
             sessionKey,
             qrcode: data.qrcode,
-            qrcodeUrl: data.qrcode_img_content,
+            qrcodeUrl: link,
+            qrDataUrl: qrDataUrlValue,
             startedAt: Date.now(),
             refreshCount: 0,
             pendingVerifyCode: null,
             baseUrl: FIXED_BASE_URL,
         });
-        return { qrcodeUrl: data.qrcode_img_content, sessionKey, status: "wait" };
+        return { qrcodeUrl: link, qrDataUrl: qrDataUrlValue, sessionKey, status: "wait" };
     }
 
     /** One poll step; UI calls this ~every second while the QR page is open. */
@@ -134,8 +144,9 @@ export class WeixinLoginController extends TypertRemoteService {
                 const fresh = await fetchQrCode(this.botType);
                 login.qrcode = fresh.qrcode;
                 login.qrcodeUrl = fresh.qrcode_img_content;
+                login.qrDataUrl = await qrDataUrl(fresh.qrcode_img_content).catch(() => undefined);
                 login.startedAt = Date.now();
-                return { status: "refreshed", qrcodeUrl: login.qrcodeUrl };
+                return { status: "refreshed", qrcodeUrl: login.qrcodeUrl, qrDataUrl: login.qrDataUrl };
             }
             case "binded_redirect":
                 logins.delete(sessionKey);

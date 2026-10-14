@@ -15,6 +15,33 @@ import { remoteMethods } from "./typert-js.js";
 
 const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
 
+const ASR_CONFIG_FILE = "asr-config.json";
+
+/** Best-effort persistence of the runtime-chosen model dir under stateDir(). */
+async function persistModelDir(dir) {
+    try {
+        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ modelDir: dir }, null, 2));
+    } catch {
+        // persistence is a convenience; the in-memory value still applies
+    }
+}
+
+/** Read a previously persisted model dir, if any. */
+function readPersistedModelDir() {
+    try {
+        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (typeof raw?.modelDir === "string" && raw.modelDir.trim()) {
+            return raw.modelDir.trim();
+        }
+    } catch {
+        // no persisted value
+    }
+    return undefined;
+}
+
 function listModels(dir) {
     const out = [];
     let entries = [];
@@ -51,12 +78,34 @@ export class AsrController extends TypertRemoteService {
 
     constructor(ctx, options = {}) {
         super(ctx, "asrController", { namespace: "weixinAsr" });
-        this.modelDir = options.modelDir ?? process.env.DSH_WEIXIN_ASR_MODEL_DIR ?? DEFAULT_MODEL_DIR;
+        this.modelDir =
+            options.modelDir ?? process.env.DSH_WEIXIN_ASR_MODEL_DIR ?? readPersistedModelDir() ?? DEFAULT_MODEL_DIR;
         this.downloads = new Map(); // modelId -> {status, message}
     }
 
     /** Local models already usable (directory with config.json). */
     async listModels() {
+        return { modelDir: this.modelDir, models: listModels(this.modelDir) };
+    }
+
+    /**
+     * Change the model directory at runtime. Persisted so a restart keeps it:
+     * the plugin's config file is updated (best-effort) and the value is also
+     * remembered for the current session. Returns the resolved directory.
+     */
+    async setModelDir(dir) {
+        const target = String(dir ?? "").trim();
+        if (!target || target.includes("\0")) {
+            throw new RemoteError("bad_dir", "目录不能为空", {});
+        }
+        const resolved = path.resolve(target);
+        try {
+            fs.mkdirSync(resolved, { recursive: true });
+        } catch (err) {
+            throw new RemoteError("bad_dir", `无法创建目录：${err?.message ?? err}`, {});
+        }
+        this.modelDir = resolved;
+        await persistModelDir(resolved);
         return { modelDir: this.modelDir, models: listModels(this.modelDir) };
     }
 
@@ -117,4 +166,4 @@ export function defaultModelDir() {
 // referenced so bundlers do not treat stateDir as side-effect-only import
 void stateDir;
 
-remoteMethods(AsrController, ["listModels", "downloadModel", "downloadStatus"]);
+remoteMethods(AsrController, ["listModels", "setModelDir", "downloadModel", "downloadStatus"]);

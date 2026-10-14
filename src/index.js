@@ -135,10 +135,16 @@ export function apply(ctx, config) {
   } catch (error) {
     warn(`settings login service unavailable: ${String(error)}`)
   }
+  // Kept in a variable because the settings UI can change the model directory
+  // at runtime (setModelDir); the ASR bridge must use the current value, not
+  // the one the process started with.
+  let asrController
   try {
-    ctx.plugin(AsrController, { modelDir: config.asr?.modelDir?.trim() || undefined })
+    asrController = new AsrController(ctx, { modelDir: config.asr?.modelDir?.trim() || undefined })
+    ctx.plugin(asrController)
   } catch (error) {
     warn(`settings ASR service unavailable: ${String(error)}`)
+    asrController = undefined
   }
 
   ctx.effect(() => {
@@ -192,7 +198,7 @@ export function apply(ctx, config) {
       // they were before ASR existed. The process is started lazily by the first
       // voice message (model load costs seconds), so an unused install pays
       // nothing for it.
-      const asrSettings = resolveAsrSettings(config)
+      const asrSettings = resolveAsrSettings(config, asrController?.modelDir)
       asrBridge =
         asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
       if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)

@@ -14,6 +14,7 @@
  */
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 /**
@@ -75,4 +76,23 @@ async function writeWithPythonQrcode(text, outFile) {
     if (ok) return true
   }
   return false
+}
+
+/**
+ * Render a login QR code straight to a `data:image/png;base64,…` string, so the
+ * settings UI can show a scannable image without any client-side QR encoder.
+ * Falls back to `undefined` when no encoder is available (the UI then shows the
+ * clickable link instead).
+ * @param {string} text  URL encoded in the QR code.
+ * @returns {Promise<string | undefined>} data URL, or undefined on failure.
+ */
+export async function qrDataUrl(text) {
+  const tmp = path.join(os.tmpdir(), `dsh-weixin-qr-${process.pid}-${Date.now()}.png`)
+  try {
+    const out = await writeQrPng(text, tmp)
+    if (!out) return undefined
+    return `data:image/png;base64,${fs.readFileSync(out).toString('base64')}`
+  } finally {
+    try { fs.unlinkSync(tmp) } catch { /* ignore */ }
+  }
 }

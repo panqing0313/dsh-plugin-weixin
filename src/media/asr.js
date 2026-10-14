@@ -75,9 +75,12 @@ export class AsrError extends Error {
  * it did before ASR existed.
  *
  * @param {object} [config]  The plugin config object.
+ * @param {string} [modelDir]  Runtime model directory (settings UI), which
+ *   overrides the configured one. Lets the bridge resolve a model downloaded
+ *   into a custom directory without editing the config file.
  * @returns {{ command: string, args: string[], env: Record<string, string>, timeoutMs: number } | undefined}
  */
-export function resolveAsrSettings(config) {
+export function resolveAsrSettings(config, modelDir) {
   const settings = config?.asr
   if (settings === undefined || settings === null || settings.enabled === false) return undefined
   const command = typeof settings.command === 'string' ? settings.command.trim() : ''
@@ -98,6 +101,17 @@ export function resolveAsrSettings(config) {
   for (const name of [ENV_MODEL, ENV_LANGUAGE, 'HF_HOME']) {
     const value = env[name]
     if (typeof value === 'string') env[name] = value.trim()
+  }
+  // A model directory chosen in the settings UI (or written into the config)
+  // points HF_HOME and the explicit model path at that tree, so a model
+  // downloaded there is the one transcription actually resolves. An explicit
+  // env/model value in the config still wins, since the user typed it by hand.
+  const chosenDir =
+    (typeof modelDir === 'string' && modelDir.trim() !== '' ? modelDir.trim() : undefined) ??
+    (typeof settings.modelDir === 'string' && settings.modelDir.trim() !== '' ? settings.modelDir.trim() : undefined)
+  if (chosenDir !== undefined) {
+    if (env.HF_HOME === undefined) env.HF_HOME = chosenDir
+    if (env[ENV_MODEL] === undefined) env[ENV_MODEL] = chosenDir
   }
   return { command, args, env, timeoutMs }
 }

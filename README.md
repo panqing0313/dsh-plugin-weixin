@@ -82,6 +82,16 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 凭证写入 `~/.dsh/weixin/openclaw-weixin/accounts/<id>.json`，权限 `0600`，**只在本机**。
 `bin/login.js` 不接收密码，也不会把 token 打印到日志（vendor 自带 redact）。
 
+### 在 DSH 设置页登录
+
+「设置 → 插件 → dsh-plugin-weixin」里也能直接扫码，不用开终端：
+
+- 点「扫码登录微信」后，卡片显示**真正的二维码图片**（host 端把 iLink 返回的登录链接渲染成
+  PNG 再回传，客户端不需要任何二维码库）；
+- 二维码旁边有「在浏览器打开」和「复制链接」——iLink 返回的 `qrcode_img_content` 其实是一个
+  **登录链接**（`https://liteapp.weixin.qq.com/q/...`），不是图片；链接在浏览器里打开同样能扫码；
+- 需要验证码时卡片会切到输入框，提交后继续轮询；二维码过期会自动刷新（最多 3 次）。
+
 ## 授权（重要）
 
 微信文本**不是**授权凭据。因此：
@@ -110,6 +120,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `maxMediaBytes` | `104857600`（100MB） | 出站附件大小上限 |
 | `maxInboundMediaBytes` | `20971520`（20MB） | 入站附件下载大小上限 |
 | `cdnBaseUrl` | 空（未配置） | 入站下载与出站上传的 CDN 根。留空表示「这里没配」：会先用账号记录里的 `cdnBaseUrl`，再退回上游默认 `https://novac2c.cdn.weixin.qq.com/c2c` |
+| `asr.modelDir` | `''` | 语音模型目录；空 = `~/.dsh/weixin/asr-models`。设置页的输入框会覆盖它（并写进 `<stateDir>/asr-config.json`） |
 
 改完配置重载插件即可。
 
@@ -148,9 +159,23 @@ asr:
   command: /path/to/your/venv/bin/python3      # 你自己的 Python 环境
   args: [/path/to/your/asr-server.py]          # 一个按行收发 JSON 的转写服务
   timeoutMs: 60000
+  modelDir: /path/to/models                    # 模型目录（设置页里也能改，见下）
   env:
     HF_HOME: /path/to/your/model-cache         # 模型缓存放哪（可能很大）
 ```
+
+### 模型目录可以自定义
+
+设置页的「语音模型」区块里，目录是一个**可编辑输入框**：
+
+- 改完点「设置目录」，host 端会 `mkdir -p` 并记住这个路径，重启后仍然生效
+  （写在 `<stateDir>/asr-config.json`）；
+- 该目录同时驱动**下载**和**转写**两端：下载的模型落到 `<目录>/<repo>`，
+  转写时 `HF_HOME` 与 `DSH_WEIXIN_ASR_MODEL` 都指向这个目录，所以下载完就能直接用，
+  不用再去改配置文件；
+- 配置里的 `asr.env.HF_HOME` / `asr.env.DSH_WEIXIN_ASR_MODEL` 优先级更高——
+  手写过的值不会被界面覆盖。
+
 
 **本仓库不含 ASR 服务端。** 插件只带客户端：它按上表调用你的 `command`，把 WAV 路径写进 stdin，
 从 stdout 逐行读 JSON 响应。服务端要自己提供（约 30 行 Python），任何能完成

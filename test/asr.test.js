@@ -180,6 +180,28 @@ test('resolveAsrSettings normalizes the bridge environment', () => {
   assert.equal(settings.env.NOT_A_STRING, 5)
 })
 
+test('a custom model directory reaches the bridge, so transcription uses it', () => {
+  // The settings UI writes the directory at runtime (AsrController.setModelDir).
+  // Passing it through must point HF_HOME and the explicit model at that tree,
+  // otherwise a model downloaded there is never the one transcription loads.
+  const settings = resolveAsrSettings({ asr: { command: 'py' } }, '/vol/custom-models')
+  assert.equal(settings.env.HF_HOME, '/vol/custom-models')
+  assert.equal(settings.env.DSH_WEIXIN_ASR_MODEL, '/vol/custom-models')
+
+  // A blank runtime value falls back to the configured directory, and a blank
+  // configured value simply adds nothing.
+  const fromConfig = resolveAsrSettings({ asr: { command: 'py', modelDir: '/vol/from-config' } })
+  assert.equal(fromConfig.env.HF_HOME, '/vol/from-config')
+  const blank = resolveAsrSettings({ asr: { command: 'py', modelDir: '   ' } })
+  assert.equal('HF_HOME' in blank.env, false)
+  assert.equal('DSH_WEIXIN_ASR_MODEL' in blank.env, false)
+
+  // An explicitly typed env value wins over the directory, since the user
+  // named that path on purpose.
+  const explicit = resolveAsrSettings({ asr: { command: 'py', env: { HF_HOME: '/vol/explicit' } } }, '/vol/custom-models')
+  assert.equal(explicit.env.HF_HOME, '/vol/explicit')
+})
+
 // ---------------------------------------------------------------------------
 // The bridge client, against real child processes
 // ---------------------------------------------------------------------------

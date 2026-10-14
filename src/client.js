@@ -95,6 +95,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/listModels:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixinAsr/setModelDir`,
+					service: "asrController",
+					namespace: "weixinAsr",
+					method: "setModelDir",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "dir", wire: "dir", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setModelDir:p0`, create: _str } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setModelDir:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixinAsr/downloadModel`,
 					service: "asrController",
 					namespace: "weixinAsr",
@@ -130,10 +139,12 @@ window.__ModuleLoader__.load({
 		function LoginSection({ ctx, t }) {
 			const [state, setState] = react.useState({ phase: "idle" }); // idle|qr|needcode|confirmed|failed
 			const [qrUrl, setQrUrl] = react.useState(null);
+			const [qrDataUrl, setQrDataUrl] = react.useState(null);
 			const [sessionKey, setSessionKey] = react.useState(null);
 			const [code, setCode] = react.useState("");
 			const [message, setMessage] = react.useState("");
 			const [accounts, setAccounts] = react.useState([]);
+			const [copied, setCopied] = react.useState(false);
 			const pollRef = react.useRef(null);
 
 			const stopPolling = react.useCallback(() => {
@@ -162,9 +173,11 @@ window.__ModuleLoader__.load({
 
 			const start = async () => {
 				setMessage("");
+				setCopied(false);
 				try {
 					const r = await ctx.remote.weixin.startLogin();
-					setQrUrl(r.qrcodeUrl);
+					setQrUrl(r.qrcodeUrl ?? null);
+					setQrDataUrl(r.qrDataUrl ?? null);
 					setSessionKey(r.sessionKey);
 					setState({ phase: "qr" });
 					stopPolling();
@@ -180,7 +193,8 @@ window.__ModuleLoader__.load({
 								setState({ phase: "needcode" });
 								setMessage(p.message ?? "");
 							} else if (p.status === "refreshed") {
-								setQrUrl(p.qrcodeUrl);
+								setQrUrl(p.qrcodeUrl ?? null);
+								setQrDataUrl(p.qrDataUrl ?? null);
 								setState({ phase: "qr" });
 							} else if (p.status === "failed") {
 								stopPolling();
@@ -212,6 +226,17 @@ window.__ModuleLoader__.load({
 				setMessage("");
 			};
 
+			const copyLink = async () => {
+				if (!qrUrl) return;
+				try {
+					await navigator.clipboard.writeText(qrUrl);
+					setCopied(true);
+					setTimeout(() => setCopied(false), 2000);
+				} catch {
+					setMessage(t("Copy failed, please copy manually", "复制失败，请手动复制"));
+				}
+			};
+
 			const accountLine =
 				accounts.length > 0
 					? `${t("Bound", "已绑定")}: ${accounts.map((a) => a.accountId).join(", ")}`
@@ -222,10 +247,20 @@ window.__ModuleLoader__.load({
 				state.phase === "idle" || state.phase === "confirmed" || state.phase === "failed"
 					? createElement("button", { onClick: start }, t("Scan QR code to log in", "扫码登录微信"))
 					: null,
-				state.phase === "qr" && qrUrl
+				state.phase === "qr"
 					? createElement("div", { style: { display: "grid", gap: 8, justifyItems: "center" } },
-							createElement("img", { src: qrUrl, alt: "QR", style: { width: 220, height: 220 } }),
+							qrDataUrl
+								? createElement("img", { src: qrDataUrl, alt: "QR", style: { width: 220, height: 220 } })
+								: qrUrl
+									? createElement("img", { src: qrUrl, alt: "QR", style: { width: 220, height: 220 } })
+									: createElement("div", { style: { opacity: 0.7 } }, t("Loading QR code…", "二维码加载中…")),
 							createElement("div", null, t("Scan with WeChat on your phone", "用手机微信扫码登录")),
+							qrUrl
+								? createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" } },
+										createElement("a", { href: qrUrl, target: "_blank", rel: "noopener noreferrer" },
+											t("Open link in browser", "在浏览器打开")),
+										createElement("button", { onClick: copyLink }, copied ? t("Copied", "已复制") : t("Copy link", "复制链接")))
+								: null,
 							createElement("button", { onClick: cancel }, t("Cancel", "取消")))
 					: null,
 				state.phase === "needcode"
@@ -248,15 +283,19 @@ window.__ModuleLoader__.load({
 		function AsrSection({ ctx, t }) {
 			const [models, setModels] = react.useState([]);
 			const [modelDir, setModelDir] = react.useState("");
+			const [dirInput, setDirInput] = react.useState("");
 			const [repo, setRepo] = react.useState("mlx-community/whisper-small-mlx");
 			const [dlStatus, setDlStatus] = react.useState({});
 			const [busy, setBusy] = react.useState(false);
+			const [savingDir, setSavingDir] = react.useState(false);
+			const [dirMsg, setDirMsg] = react.useState("");
 
 			const refresh = react.useCallback(async () => {
 				try {
 					const r = await ctx.remote.weixinAsr.listModels();
 					setModels(r.models ?? []);
 					setModelDir(r.modelDir ?? "");
+					setDirInput(r.modelDir ?? "");
 				} catch {
 					// remote not mounted yet
 				}
@@ -265,6 +304,24 @@ window.__ModuleLoader__.load({
 			react.useEffect(() => {
 				refresh();
 			}, [refresh]);
+
+			const saveDir = async () => {
+				const target = dirInput.trim();
+				if (!target) return;
+				setSavingDir(true);
+				setDirMsg("");
+				try {
+					const r = await ctx.remote.weixinAsr.setModelDir(target);
+					setModelDir(r.modelDir ?? target);
+					setDirInput(r.modelDir ?? target);
+					setModels(r.models ?? []);
+					setDirMsg(t("Directory updated", "目录已更新"));
+				} catch (err) {
+					setDirMsg(String(err?.message ?? err));
+				} finally {
+					setSavingDir(false);
+				}
+			};
 
 			const download = async () => {
 				if (!repo.trim()) return;
@@ -296,6 +353,16 @@ window.__ModuleLoader__.load({
 			return createElement("div", { style: { display: "grid", gap: 10 } },
 				createElement("div", { style: { opacity: 0.75 } },
 					t("Voice models directory", "语音模型目录"), ": ", modelDir || "—"),
+				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+					createElement("input", {
+						value: dirInput,
+						onChange: (e) => setDirInput(e.target.value),
+						placeholder: modelDir || "/path/to/models",
+						style: { flex: 1 },
+					}),
+					createElement("button", { onClick: saveDir, disabled: savingDir },
+						savingDir ? t("Saving…", "保存中…") : t("Set directory", "设置目录"))),
+				dirMsg ? createElement("div", { style: { opacity: 0.75 } }, dirMsg) : null,
 				models.length > 0
 					? createElement("div", null,
 							createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, t("Installed models", "已安装模型")),
