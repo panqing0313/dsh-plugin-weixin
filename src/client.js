@@ -476,7 +476,7 @@ window.__ModuleLoader__.load({
 		//#endregion design vocabulary
 
 		function LoginSection({ ctx, t }) {
-			const [state, setState] = react.useState({ phase: "idle" }); // idle|qr|needcode|confirmed|failed
+			const [state, setState] = react.useState({ phase: "idle" }); // idle|qr|needcode|confirmed|failed|blocked
 			const [qrUrl, setQrUrl] = react.useState(null);
 			const [qrDataUrl, setQrDataUrl] = react.useState(null);
 			const [sessionKey, setSessionKey] = react.useState(null);
@@ -488,10 +488,15 @@ window.__ModuleLoader__.load({
 			const [logoutNotice, setLogoutNotice] = react.useState("");
 			const [copied, setCopied] = react.useState(false);
 			const pollRef = react.useRef(null);
+			// The session key lives in a ref as well as in state: the poll loop is
+			// asynchronous, and a closure over the render's `sessionKey` would keep
+			// the null the component started with forever.
+			const sessionKeyRef = react.useRef(null);
 
 			const stopPolling = react.useCallback(() => {
+				sessionKeyRef.current = null;
 				if (pollRef.current) {
-					clearInterval(pollRef.current);
+					clearTimeout(pollRef.current);
 					pollRef.current = null;
 				}
 			}, []);
@@ -524,9 +529,19 @@ window.__ModuleLoader__.load({
 					setSessionKey(r?.sessionKey);
 					setState({ phase: "qr" });
 					stopPolling();
-					pollRef.current = setInterval(async () => {
+					sessionKeyRef.current = r?.sessionKey ?? null;
+					// The server holds each status request open for ~30s, so this is a
+					// self-scheduling loop rather than a fixed interval: the next call is
+					// queued only once the previous one has come back. A 1s interval left
+					// ~30 requests in flight at once and swallowed every answer -- which is
+					// where a scan shows up -- so the card could never leave the QR page.
+					const tick = async () => {
+						pollRef.current = null;
+						const key = sessionKeyRef.current;
+						if (!key) return;
+						let next = false;
 						try {
-							const p = await callRemote(() => ctx.remote.weixin.poll(sessionKey));
+							const p = await callRemote(() => ctx.remote.weixin.poll(key));
 							if (p.status === "confirmed") {
 								stopPolling();
 								setState({ phase: "confirmed" });
@@ -535,19 +550,47 @@ window.__ModuleLoader__.load({
 							} else if (p.status === "need_verifycode") {
 								setState({ phase: "needcode" });
 								setMessage(p.message ?? "");
+								next = true;
 							} else if (p.status === "refreshed") {
 								setQrUrl(p.qrcodeUrl ?? null);
 								setQrDataUrl(p.qrDataUrl ?? null);
 								setState({ phase: "qr" });
+								next = true;
 							} else if (p.status === "failed") {
 								stopPolling();
 								setState({ phase: "failed" });
 								setMessage(p.message ?? "");
+								// The host can already hold a credential when a login reports failure,
+								// so re-read the real state instead of trusting the message alone.
+								refreshStatus();
+							} else if (p.status === "alreadyBound") {
+								// The bot is still bound on the server but this host no longer holds
+								// the token, and only the phone can break that link. It is a dead end
+								// until then, so it gets its own state rather than a red caption.
+								stopPolling();
+								setState({ phase: "blocked" });
+								setMessage(p.message ?? "");
+								refreshStatus();
+							} else {
+								next = true;
 							}
-						} catch {
-							// transient poll failure: keep going
+						} catch (err) {
+							// A forgotten session is terminal: the host no longer holds this login,
+							// so polling it again can only fail. Anything else is transient.
+							if (err?.code === "no_login") {
+								stopPolling();
+								setState({ phase: "failed" });
+								setMessage(t("This login is no longer active. Scan again to log in.", "本次登录已失效，请重新扫码登录。"));
+								refreshStatus();
+							} else {
+								next = true;
+							}
 						}
-					}, 1000);
+						if (next && sessionKeyRef.current) {
+							pollRef.current = setTimeout(tick, 1000);
+						}
+					};
+					pollRef.current = setTimeout(tick, 0);
 				} catch (err) {
 					setState({ phase: "failed" });
 					setMessage(String(err?.message ?? err));
@@ -656,6 +699,7 @@ window.__ModuleLoader__.load({
 					: null,
 
 				state.phase === "idle" || state.phase === "confirmed" || state.phase === "failed"
+					|| state.phase === "blocked"
 					? createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
 							createElement("button", {
 								onClick: start,
@@ -737,7 +781,13 @@ window.__ModuleLoader__.load({
 								createElement("button", { onClick: cancel, style: buttonStyle }, t("Cancel", "取消"))))
 					: null,
 
-				message && state.phase !== "needcode"
+				state.phase === "blocked" && message
+					? createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+						createElement("span", null, message))
+					: null,
+
+				message && state.phase !== "needcode" && state.phase !== "blocked"
 					? createElement("div", { style: captionStyle }, message)
 					: null,
 			);

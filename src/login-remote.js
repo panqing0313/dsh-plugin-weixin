@@ -16,6 +16,8 @@ import {
     clearWeixinAccount,
     unregisterWeixinAccountId,
 } from "../vendor/openclaw-weixin/auth/accounts.js";
+import { logger } from "../vendor/openclaw-weixin/util/logger.js";
+import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
@@ -113,14 +115,26 @@ export class WeixinLoginController extends TypertRemoteService {
             pendingVerifyCode: null,
             baseUrl: FIXED_BASE_URL,
         });
+        logger.info(
+            `weixin login: QR issued session=${redactToken(sessionKey)} qrcode=${redactToken(data.qrcode)} linkLen=${link.length}`,
+        );
         return { qrcodeUrl: link, qrDataUrl: qrDataUrlValue, sessionKey, status: "wait" };
     }
 
-    /** One poll step; UI calls this ~every second while the QR page is open. */
+    /**
+     * One poll step. The server long-polls (about 30s) before it answers, so the
+     * card calls this again only once the previous call has returned; it must not
+     * be driven from a fixed interval, or the requests stack up.
+     */
     async poll(sessionKey) {
         const login = logins.get(sessionKey);
         if (!login) throw new RemoteError("no_login", "没有进行中的登录，请重新扫码", {});
         const status = await pollQrStatus(login.baseUrl, login.qrcode, login.pendingVerifyCode);
+        // The login flow used to leave no trace at all, which made a scan that
+        // went nowhere impossible to diagnose after the fact.
+        logger.debug(
+            `weixin login: polled status=${status?.status ?? "(none)"} session=${redactToken(sessionKey)} scanned=${Boolean(status?.ilink_user_id)}`,
+        );
         switch (status.status) {
             case "wait":
                 return { status: "wait" };
@@ -150,9 +164,23 @@ export class WeixinLoginController extends TypertRemoteService {
                 login.startedAt = Date.now();
                 return { status: "refreshed", qrcodeUrl: login.qrcodeUrl, qrDataUrl: login.qrDataUrl };
             }
-            case "binded_redirect":
+            case "binded_redirect": {
+                // The server still has this bot bound to this install, so it
+                // refuses to hand out a new credential. The vendored CLI reads
+                // that as an idempotent success ("已连接过此 OpenClaw"), which is
+                // only true when this host still holds the token; after a log out
+                // the token is gone and the bot cannot be unbound from here, so
+                // the honest answer is a distinct outcome the card can explain.
                 logins.delete(sessionKey);
-                return { status: "failed", message: "该账号已连接过，请先在手机上解除绑定" };
+                logger.info(
+                    `weixin login: server refused a new credential (binded_redirect) session=${redactToken(sessionKey)} localAccounts=${listIndexedWeixinAccountIds().length}`,
+                );
+                return {
+                    status: "alreadyBound",
+                    message:
+                        "服务器仍认为该机器人绑定在本机，但本地凭证已被退出登录删除。请先在手机微信里解除该机器人的绑定，然后重新扫码。",
+                };
+            }
             case "scaned_but_redirect":
                 if (status.redirect_host) login.baseUrl = `https://${status.redirect_host}`;
                 return { status: "scaned" };
@@ -167,6 +195,9 @@ export class WeixinLoginController extends TypertRemoteService {
                     userId: status.ilink_user_id,
                 });
                 registerWeixinAccountId(status.ilink_bot_id);
+                logger.info(
+                    `weixin login: confirmed account=${status.ilink_bot_id} user=${redactToken(status.ilink_user_id)} token=${redactToken(status.bot_token)}`,
+                );
                 // A completed login writes a usable credential, so any expiry
                 // recorded from an earlier session no longer applies.
                 this.clearSessionExpired();

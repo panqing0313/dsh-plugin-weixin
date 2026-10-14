@@ -134,3 +134,53 @@ verifier 独立复核确认：新增的空白串回归测试**两条方向断言
 部署流程与部署后必验项、遗留事项、团队 escalated 状态说明。
 
 其中文档内所有行号引用已逐条对源码核验通过。
+
+## 2026-10-15 — 设置页扫码登录从未成功过（已修复）
+
+**用户报告**：「退出登录后重新扫码登录，手机端微信显示已绑定，但插件还是显示未登录，不是实时的吗」。
+
+**根因（两个独立缺陷，叠加成同一个现象）**
+
+1. **卡片轮询永远在 `poll(null)`**（`src/client.js`）。`start()` 里用
+   `setInterval(() => poll(sessionKey), 1000)` 启动轮询，而该闭包捕获的是**本次渲染**的
+   `sessionKey` —— 此刻仍是 `null`（`setSessionKey` 只排程下一次渲染，不会改写已捕获的变量）。
+   于是每一秒都调 `poll(null)`，宿主 `logins.get(null)` 未命中并抛 `RemoteError("no_login")`，
+   而轮询体的 `catch { /* transient poll failure: keep going */ }` **把它静默吞掉**：界面永远停在
+   二维码页，扫码结果无人处理。`git log -S setInterval -- src/client.js` 只有引入那一笔
+   （`544538c`），即这个循环**从来没有成功过一次**；历史 transcript 里 `"status":"confirmed"` 出现
+   **0 次**，与此互证。CLI（`bin/login.js`）一直正常，所以账号是 10-13 用 CLI 绑上的。
+2. **`get_qrcode_status` 是 30 秒长轮询**（实测三次分别为 30065/30076/30159 ms），因此 1 秒
+   `setInterval` 会在 30 秒内堆积约 30 个悬挂请求。固定间隔本身就不成立的形状。
+
+**附带缺陷**：`binded_redirect` 被当成硬失败。退出登录只删本机凭证（iLink 无服务端解绑接口），
+服务端仍认为该机器人绑定在本机，重新扫码时拒发新 token 并回 `binded_redirect`；vendor 的 CLI 把这一支
+读成幂等成功，但那只在**本机仍持有 token** 时成立。旧 token 已实测失效
+（`getconfig` → `{"errcode":-14,"errmsg":"session timeout"}`），所以本机没有任何恢复路径。
+
+**修复**
+
+| 位置 | 改动 |
+| --- | --- |
+| `src/client.js:491-495` | 新增 `sessionKeyRef`（`:494`）：轮询读 ref，不再闭包捕获 render 期 state |
+| `src/client.js:532-593` | `setInterval` → 自调度 `tick`（`:538`；`:590` 一次长轮询返回后才排下一次；`:593` 启动） |
+| `src/client.js:559-565` | `failed` 分支补 `refreshStatus()` |
+| `src/client.js:566-574` | 新增 `alreadyBound` 分支 → `phase:"blocked"` + `refreshStatus()` |
+| `src/client.js:577-586` | `catch` 区分 `err?.code === "no_login"`（`:580` 终态 + 提示重新扫码）与真正的瞬时错误（继续轮询），不再静默吞错 |
+| `src/client.js:702, 784-788, 790` | 按钮区（`:702`）与 notice（`:784-788`）支持 `blocked` 相位；caption 排除该相位（`:790`） |
+| `src/login-remote.js:167-184` | `binded_redirect` → 新状态 `alreadyBound`（`:179`）+ 可操作文案（手机端解绑），不再谎称普通失败 |
+| `src/login-remote.js:118-120, 130-137, 175-177, 197-200` | 登录生命周期日志（`logger.info/debug` + `redactToken` 脱敏）；此前登录流程零日志，故障完全不可观测 |
+| `README.md:95-108` | 新增「退出登录与重新绑定」：说明「未登录」是如实显示、以及手机端解绑才是恢复路径 |
+
+**验证**
+
+- 新增 `test/login-remote.test.js`（7 tests，stub `globalThis.fetch` 驱动真控制器，无网络）与
+  `test/client-login-poll.test.js`（5 tests，自带最小 hook 运行时真渲染卡片并驱动定时器）；
+- **辨别力实测**：`git stash push -- src/client.js src/login-remote.js` 后两个文件分别
+  **5/5 fail** 与 **1 fail（其余 6 pass）**，恢复后全通过 —— 证明新测试钉住的是真缺陷；
+- 全量 `node --test "test/**/*.test.js"` → **tests 178 / pass 178 / fail 0**（原 166）；
+- 真端点探针（隔离 state/log 目录，经修复后的 `WeixinLoginController`）：`startLogin` 323ms 拿到真实
+  二维码；两次 `poll` 各 30056/30073ms 返回 `wait`；日志落下三行
+  `weixin login: QR issued … / polled status=wait …`，token 已脱敏。
+
+**当日结论（尚未收拢）**：用户当前账号必须先在手机微信里解除该机器人的绑定，才能重新扫码绑定。
+本机侧无可用的免解绑路径（旧 token 失效、`force` 只管本地二维码缓存、服务端拒发新凭证，三条都已排除）。
