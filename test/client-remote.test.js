@@ -218,7 +218,9 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/submitVerifyCode',
         'weixinAsr/downloadModel',
         'weixinAsr/downloadStatus',
+        'weixinAsr/getDownloadSettings',
         'weixinAsr/listModels',
+        'weixinAsr/setDownloadSettings',
         'weixinAsr/setModelDir',
       ],
     )
@@ -544,4 +546,44 @@ test('qrDataUrl leaves no temporary files behind', async () => {
   const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('dsh-weixin-qr-')).length
   assert.equal(after, before, 'the temp PNG must be removed even on success')
   void path
+})
+
+test('clearing the proxy sends the empty value, not the stale one', () => {
+  // `saveProxy` closes over the `proxyInput` of the render that created it and
+  // no re-render happens in between, so `setProxyInput(""); saveProxy()` wrote
+  // the OLD proxy back — clicking "直连" silently kept the proxy it was meant
+  // to remove. Nothing errored, nothing was logged, and the proxy stayed.
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+
+  const save = client.match(/const saveProxy = async \(value\) => \{[\s\S]*?\n\t\t\t\};/)
+  const choose = client.match(/const chooseProxyMode = \(id\) => \{[\s\S]*?\n\t\t\t\};/)
+  assert.ok(save, 'saveProxy must stay a findable handler')
+  assert.ok(choose, 'chooseProxyMode must stay a findable handler')
+
+  assert.match(save[0], /async \(value\)/, 'saveProxy must take the value to save')
+  assert.match(
+    save[0],
+    /setDownloadSettings\(undefined, next\)/,
+    'it must send that value, not read the render-time state',
+  )
+  assert.match(
+    save[0],
+    /String\(value \?\? proxyInput\)/,
+    'an omitted value may still fall back to the input, so the Save button works',
+  )
+  assert.match(choose[0], /saveProxy\(""\)/, 'choosing "direct" must pass the empty value explicitly')
+  assert.doesNotMatch(
+    choose[0],
+    /saveProxy\(\)/,
+    'a bare saveProxy() is the stale-state bug: the staged "" is never read',
+  )
+
+  // And the Save button must not hand the click event to `saveProxy` as the
+  // value: an event stringifies to "[object Object]" and would be rejected as
+  // an unusable proxy.
+  assert.match(
+    client,
+    /onClick: \(\) => saveProxy\(proxyInput\)/,
+    'the Save button must wrap the handler so it receives the input, not the event',
+  )
 })

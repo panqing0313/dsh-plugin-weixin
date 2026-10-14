@@ -182,7 +182,11 @@ test('the endpoint is passed to the HTTP downloader, not to an environment varia
   // Validation is deliberately lifted above super(), so it assigns a local
   // first; assert the contract rather than the exact statement.
   assert.match(HOST, /const hfEndpoint = normalizeEndpoint\(/, 'the controller must normalize its endpoint')
-  assert.match(HOST, /this\.hfEndpoint = hfEndpoint;/, 'and keep the normalized value')
+  assert.match(
+    HOST,
+    /this\.hfEndpoint = hfEndpoint \?\? DEFAULT_ENDPOINT;/,
+    'and keep the normalized value, resolving the default once instead of leaving it undefined',
+  )
   assert.match(
     HOST,
     /await listRepoFiles\(this\.hfEndpoint, repoId, \{ proxy: this\.hfProxy, signal \}\)/,
@@ -338,7 +342,10 @@ test('a bad proxy is rejected at construction, before the service registers', as
   // And a valid one registers normally on a real context.
   const controller = new AsrController(new Context(), { hfProxy: 'http://127.0.0.1:7897' })
   assert.equal(controller.hfProxy, 'http://127.0.0.1:7897')
-  assert.equal(controller.hfEndpoint, undefined)
+  // Not undefined: the endpoint is resolved at construction so the card can
+  // name the route it is reporting. An undefined endpoint classified as
+  // "custom" and the radio group would claim a route nobody chose.
+  assert.equal(controller.hfEndpoint, 'https://hf-mirror.com')
 })
 
 test('an unparseable proxy never reaches the spawn environment', async () => {
@@ -348,4 +355,171 @@ test('an unparseable proxy never reaches the spawn environment', async () => {
   for (const bad of ['nope', 'not a url', 'socks5://127.0.0.1:1080', 'ftp://x.com']) {
     assert.throws(() => normalizeProxy(bad), (err) => err.code === 'bad_proxy', `${bad} must not be accepted`)
   }
+})
+
+test('the download route survives a restart, and an explicit config still wins', async () => {
+  // Losing this choice on every restart is invisible: the download keeps
+  // working, just from the wrong place, and on a blocked network "wrong place"
+  // means it never starts.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController, sourceForEndpoint } = await import('../src/asr-remote.js')
+
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-route-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    const first = new AsrController(new Context(), {})
+    // No config value: the built-in default, which is the mirror.
+    assert.equal(first.hfEndpoint, 'https://hf-mirror.com')
+    assert.equal(first.hfProxy, undefined)
+
+    const after = await first.setDownloadSettings('https://huggingface.co', 'http://127.0.0.1:7897')
+    assert.equal(after.endpoint, 'https://huggingface.co')
+    assert.equal(after.proxy, 'http://127.0.0.1:7897')
+    assert.equal(after.source, 'official')
+    assert.equal(first.hfEndpoint, 'https://huggingface.co', 'the running instance must apply it too')
+
+    // A fresh instance -- i.e. after a restart -- reads the saved route.
+    const restarted = new AsrController(new Context(), {})
+    assert.equal(restarted.hfEndpoint, 'https://huggingface.co')
+    assert.equal(restarted.hfProxy, 'http://127.0.0.1:7897')
+    assert.equal((await restarted.getDownloadSettings()).source, 'official')
+
+    // But an explicit composition value still wins: the profile YAML is the
+    // live decision, and a stale saved file must not overrule it.
+    const composed = new AsrController(new Context(), { hfEndpoint: 'https://hf-mirror.com' })
+    assert.equal(composed.hfEndpoint, 'https://hf-mirror.com')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('clearing the proxy really clears it, and saving one setting keeps the other', async () => {
+  // Two ways to lose a setting by accident: a save that writes only the field
+  // it was given (dropping the proxy when the source changes), and a "direct"
+  // choice that leaves the old proxy in force.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-route-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    const controller = new AsrController(new Context(), {})
+    await controller.setDownloadSettings('https://huggingface.co', 'http://127.0.0.1:7897')
+
+    // The source change sends an empty proxy on purpose (see chooseSource): an
+    // empty string must mean "clear", not "leave whatever was there".
+    const cleared = await controller.setDownloadSettings('https://hf-mirror.com', '')
+    assert.equal(cleared.proxy, '', 'an empty proxy must clear the saved one')
+    assert.equal(cleared.source, 'mirror')
+    assert.equal(new AsrController(new Context(), {}).hfProxy, undefined, 'and stay cleared after a restart')
+
+    // Now set a proxy and change only the endpoint: the proxy must survive,
+    // and vice versa.
+    await controller.setDownloadSettings('https://huggingface.co', 'http://127.0.0.1:7897')
+    const changed = await controller.setDownloadSettings('https://hf-mirror.com')
+    assert.equal(changed.proxy, 'http://127.0.0.1:7897', 'the untouched field must survive')
+
+    const reverted = await controller.getDownloadSettings()
+    assert.equal(reverted.endpoint, 'https://hf-mirror.com')
+    assert.equal(reverted.proxy, 'http://127.0.0.1:7897')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the endpoint the card labels "mirror" is the one the host actually defaults to', async () => {
+  // The card hardcodes the two endpoint URLs to label the radio group. If the
+  // host default ever moves, the card would claim "mirror" while downloading
+  // from somewhere else -- a choice that lies about what it selected.
+  const { sourceForEndpoint, MIRROR_ENDPOINT, OFFICIAL_ENDPOINT, defaultEndpoint } = await import(
+    '../src/asr-remote.js'
+  )
+  const client = fs.readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+
+  assert.equal(sourceForEndpoint(MIRROR_ENDPOINT), 'mirror')
+  assert.equal(sourceForEndpoint(OFFICIAL_ENDPOINT), 'official')
+  assert.equal(sourceForEndpoint('https://internal.example/hf'), 'custom')
+  // Trailing slashes must not change the answer: the host strips them.
+  assert.equal(sourceForEndpoint(`${MIRROR_ENDPOINT}/`), 'mirror')
+
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-route-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    assert.equal(new AsrController(new Context(), {}).hfEndpoint, MIRROR_ENDPOINT)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  void defaultEndpoint
+
+  // The URLs the card offers must match the constants the host classifies by.
+  for (const endpoint of [MIRROR_ENDPOINT, OFFICIAL_ENDPOINT]) {
+    assert.ok(
+      client.includes(`endpoint: "${endpoint}"`),
+      `the card must offer ${endpoint} so its label matches the host's own classification`,
+    )
+  }
+})
+
+test('the host method takes one argument per declared parameter, in order', async () => {
+  // The gateway builds the call as
+  //   args = descriptor.parameters.map((p) => resolveParameter(p, request.args, endpoint))
+  //   implementation(...args)
+  // so a descriptor declaring two parameters calls the method with two
+  // POSITIONAL arguments. A method written as `setDownloadSettings(input)`
+  // receives the endpoint string as `input`, every `input.x` reads undefined,
+  // and the call still "succeeds" -- writing nothing, reporting nothing.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-route-'))
+  process.env.DSH_WEIXIN_STATE_DIR = root
+  try {
+    const controller = new AsrController(new Context(), {})
+
+    // Called exactly the way the gateway calls it: positionally, per parameter.
+    const applied = await controller.setDownloadSettings('https://huggingface.co', 'http://127.0.0.1:7897')
+    assert.equal(controller.hfEndpoint, 'https://huggingface.co', 'the first positional argument is the endpoint')
+    assert.equal(controller.hfProxy, 'http://127.0.0.1:7897', 'the second is the proxy')
+    assert.equal(applied.source, 'official')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the declared parameter count matches the host method signature', async () => {
+  // The guard above proves the behaviour; this pins the ARITY, so a descriptor
+  // that grows a third parameter while the method keeps two fails here rather
+  // than at runtime with a silently-ignored argument.
+  const client = fs.readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+  const host = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
+
+  const declared = client.match(
+    /method: "setDownloadSettings",[\s\S]*?parameters: \[([\s\S]*?)\],\n\s*result:/,
+  )
+  assert.ok(declared, 'setDownloadSettings must keep its descriptor')
+  const wires = [...declared[1].matchAll(/wire: "(\w+)"/g)].map((m) => m[1])
+  assert.deepEqual(wires, ['endpoint', 'proxy'], 'the wire fields are the argument names')
+
+  const signature = host.match(/async setDownloadSettings\(([^)]*)\)/)
+  assert.ok(signature, 'setDownloadSettings must stay an async method')
+  const params = signature[1].split(',').map((s) => s.trim()).filter((s) => s && !s.includes('='))
+  assert.deepEqual(
+    params,
+    wires,
+    'the host signature must take exactly the declared parameters, positionally',
+  )
 })

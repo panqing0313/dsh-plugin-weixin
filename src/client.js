@@ -121,6 +121,30 @@ window.__ModuleLoader__.load({
 					parameters: [{ name: "repo", wire: "repo", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadStatus:p0`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/downloadStatus:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixinAsr/getDownloadSettings`,
+					service: "asrController",
+					namespace: "weixinAsr",
+					method: "getDownloadSettings",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/getDownloadSettings:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixinAsr/setDownloadSettings`,
+					service: "asrController",
+					namespace: "weixinAsr",
+					method: "setDownloadSettings",
+					invocation: { kind: "direct" },
+					// `wire` MUST equal the parameter name. Two parameters may not
+					// share a wire field, so a second `wire: "input"` would throw
+					// at mount time and take the whole plugin down with it.
+					parameters: [
+						{ name: "endpoint", wire: "endpoint", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setDownloadSettings:p0`, create: _str } },
+						{ name: "proxy", wire: "proxy", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setDownloadSettings:p1`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setDownloadSettings:result`, create: _statusResult },
+				},
 			],
 		};
 
@@ -129,6 +153,58 @@ window.__ModuleLoader__.load({
 		/** Outcome of a chooser attempt, so the caller can say what happened. */
 		const PICK_CANCELLED = "cancelled";
 		const PICK_UNAVAILABLE = "unavailable";
+
+		/**
+		 * Where models may be downloaded from.
+		 *
+		 * The mirror first because the official site is unreachable on a
+		 * degraded international route while the mirror works — measured on this
+		 * machine: huggingface.co completes a TCP handshake and then transfers
+		 * nothing, and its weight CDN does not answer at all.
+		 *
+		 * `custom` carries no endpoint: it exists so the radio group can show
+		 * that an endpoint set elsewhere is in effect, and choosing it is a
+		 * no-op rather than a silent reset to a default.
+		 */
+		const SOURCE_CHOICES = [
+			{
+				id: "mirror",
+				endpoint: "https://hf-mirror.com",
+				labelZh: "国内镜像（推荐）",
+				labelEn: "Mirror (recommended)",
+			},
+			{
+				id: "official",
+				endpoint: "https://huggingface.co",
+				labelZh: "官方站 huggingface.co",
+				labelEn: "Official huggingface.co",
+			},
+			{ id: "custom", endpoint: "", labelZh: "自定义地址", labelEn: "Custom" },
+		];
+
+		/**
+		 * Whether the download goes through a proxy.
+		 *
+		 * `direct` is the default because it is what works on an unproxied
+		 * network; naming a proxy when there is none breaks a download that
+		 * would otherwise have succeeded.
+		 */
+		const PROXY_CHOICES = [
+			{
+				id: "direct",
+				labelZh: "直连",
+				labelEn: "Direct",
+				hintZh: "不使用代理",
+				hintEn: "No proxy",
+			},
+			{
+				id: "custom",
+				labelZh: "使用代理",
+				labelEn: "Use a proxy",
+				hintZh: "例如 http://127.0.0.1:7897",
+				hintEn: "e.g. http://127.0.0.1:7897",
+			},
+		];
 
 		/**
 		 * Open the host's native directory chooser.
@@ -613,6 +689,14 @@ window.__ModuleLoader__.load({
 			const [pickingDir, setPickingDir] = react.useState(false);
 			const [browseMsg, setBrowseMsg] = react.useState("");
 			const [dirMsg, setDirMsg] = react.useState("");
+			const [dlSettings, setDlSettings] = react.useState({});
+			const [source, setSource] = react.useState("mirror");
+			const [proxyMode, setProxyMode] = react.useState("direct");
+			const [proxyInput, setProxyInput] = react.useState("");
+			const [savingSource, setSavingSource] = react.useState(false);
+			const [savingProxy, setSavingProxy] = react.useState(false);
+			const [sourceMsg, setSourceMsg] = react.useState("");
+			const [proxyMsg, setProxyMsg] = react.useState("");
 
 			const refresh = react.useCallback(async () => {
 				try {
@@ -622,6 +706,19 @@ window.__ModuleLoader__.load({
 					setDirInput(r?.modelDir ?? "");
 				} catch {
 					// remote not mounted yet
+				}
+				try {
+					// The host derives `source` from the endpoint it is actually
+					// using, so the radio group reflects the running route rather
+					// than a guess made from the last click.
+					const s = await callRemote(() => ctx.remote.weixinAsr.getDownloadSettings());
+					setDlSettings(s ?? {});
+					setSource(s?.source ?? "mirror");
+					const saved = s?.proxy ?? "";
+					setProxyInput(saved);
+					setProxyMode(saved ? "custom" : "direct");
+				} catch {
+					// download settings are optional; the card still works
 				}
 			}, [ctx]);
 
@@ -667,6 +764,71 @@ window.__ModuleLoader__.load({
 					setDirMsg(String(err?.message ?? err));
 				} finally {
 					setSavingDir(false);
+				}
+			};
+
+			const chooseSource = async (id) => {
+				if (id === source || savingSource) return;
+				const choice = SOURCE_CHOICES.find((c) => c.id === id);
+				if (!choice?.endpoint) return; // "custom" is not settable from here
+				setSavingSource(true);
+				setSourceMsg("");
+				try {
+					// `undefined` = "leave the proxy as it is". Sending "" here
+					// would clear it every time the source changed.
+					const r = await callRemote(() => ctx.remote.weixinAsr.setDownloadSettings(choice.endpoint, undefined));
+					setDlSettings(r ?? {});
+					setSource(r?.source ?? id);
+					setSourceMsg(t("Saved — applies to the next download", "已保存，对下一次下载生效"));
+				} catch (err) {
+					// A failed write must not leave the radio showing a route the
+					// host is not using, so re-read it instead of trusting the click.
+					setSourceMsg(String(err?.message ?? err));
+					try {
+						const s = await callRemote(() => ctx.remote.weixinAsr.getDownloadSettings());
+						setDlSettings(s ?? {});
+						setSource(s?.source ?? source);
+					} catch {
+						// leave the previous value
+					}
+				} finally {
+					setSavingSource(false);
+				}
+			};
+
+			// The value to save is passed IN, never read from `proxyInput`.
+			//
+			// `saveProxy` closes over the `proxyInput` of the render it was
+			// created in, and no re-render happens before `saveProxy()` is
+			// called right below — so `setProxyInput("")` followed by
+			// `saveProxy()` saves the OLD proxy back, and clicking "直连"
+			// silently kept the proxy it was supposed to remove. The parameter
+			// is what makes clearing actually clear.
+			const saveProxy = async (value) => {
+				const next = String(value ?? proxyInput).trim();
+				setSavingProxy(true);
+				setProxyMsg("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixinAsr.setDownloadSettings(undefined, next));
+					setDlSettings(r ?? {});
+					setProxyInput(r?.proxy ?? "");
+					setProxyMsg(t("Saved — applies to the next download", "已保存，对下一次下载生效"));
+				} catch (err) {
+					setProxyMsg(String(err?.message ?? err));
+				} finally {
+					setSavingProxy(false);
+				}
+			};
+
+			const chooseProxyMode = (id) => {
+				setProxyMode(id);
+				setProxyMsg("");
+				// Picking "direct" is the whole setting: clear it now rather
+				// than making the operator also press Save to undo a proxy.
+				// Pass the empty value explicitly — see saveProxy.
+				if (id === "direct" && dlSettings.proxy) {
+					setProxyInput("");
+					saveProxy("");
 				}
 			};
 
@@ -765,6 +927,112 @@ window.__ModuleLoader__.load({
 											`${(m.sizeBytes / 1048576).toFixed(0)} MB`))))
 						: createElement("p", { style: captionStyle }, t("No models installed yet", "尚未安装模型"))),
 				//#endregion installed models
+
+				//#region download source
+				createElement("div", { style: panelStyle },
+					createElement("span", { style: panelTitleStyle }, t("Download source", "下载源")),
+					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 7 } },
+						...SOURCE_CHOICES.map((choice) =>
+							createElement("label", {
+									key: choice.id,
+									style: {
+										display: "flex",
+										alignItems: "flex-start",
+										gap: 9,
+										padding: "7px 10px",
+										borderRadius: RADIUS.control,
+										border: `1px solid ${source === choice.id ? C.stateOk : C.border}`,
+										background: source === choice.id ? C.bgLayer2 : "transparent",
+										cursor: savingSource ? "default" : "pointer",
+									},
+								},
+								createElement("input", {
+									type: "radio",
+									name: "weixin-download-source",
+									checked: source === choice.id,
+									disabled: savingSource,
+									onChange: () => chooseSource(choice.id),
+									style: { marginTop: 3, flex: "0 0 auto" },
+								}),
+								createElement("span", { style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 } },
+									createElement("span", { style: { color: C.labelPrimary, fontSize: 13, lineHeight: "20px" } },
+										t(choice.labelEn, choice.labelZh)),
+									createElement("span", { style: { color: C.labelTertiary, fontSize: 12, lineHeight: "18px", overflowWrap: "anywhere" } },
+										choice.endpoint))))),
+					// A custom endpoint is any URL the operator typed elsewhere;
+					// showing it read-only keeps the radio group honest without
+					// turning the card into a URL editor.
+					source === "custom"
+						? createElement("p", { style: captionStyle },
+								t(`Current: ${dlSettings.endpoint || "—"}`, `当前：${dlSettings.endpoint || "—"}`))
+						: null,
+					sourceMsg ? createElement("p", { style: captionStyle }, sourceMsg) : null,
+					createElement("p", { style: captionStyle },
+						t(
+							"The official site is unreachable on some networks. The mirror serves the same files.",
+							"官方站点在部分网络下无法访问，镜像提供的是同样的文件。",
+						))),
+				//#endregion download source
+
+				//#region proxy
+				createElement("div", { style: panelStyle },
+					createElement("span", { style: panelTitleStyle }, t("Proxy", "代理")),
+					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 7 } },
+						...PROXY_CHOICES.map((choice) =>
+							createElement("label", {
+									key: choice.id,
+									style: {
+										display: "flex",
+										alignItems: "flex-start",
+										gap: 9,
+										padding: "7px 10px",
+										borderRadius: RADIUS.control,
+										border: `1px solid ${proxyMode === choice.id ? C.stateOk : C.border}`,
+										background: proxyMode === choice.id ? C.bgLayer2 : "transparent",
+										cursor: "pointer",
+									},
+								},
+								createElement("input", {
+									type: "radio",
+									name: "weixin-download-proxy",
+									checked: proxyMode === choice.id,
+									onChange: () => chooseProxyMode(choice.id),
+									style: { marginTop: 3, flex: "0 0 auto" },
+								}),
+								createElement("span", { style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 } },
+									createElement("span", { style: { color: C.labelPrimary, fontSize: 13, lineHeight: "20px" } },
+										t(choice.labelEn, choice.labelZh)),
+									createElement("span", { style: { color: C.labelTertiary, fontSize: 12, lineHeight: "18px" } },
+										t(choice.hintEn, choice.hintZh)))))),
+					proxyMode === "custom"
+						? createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+								createElement("input", {
+									value: proxyInput,
+									onChange: (e) => setProxyInput(e.target.value),
+									placeholder: "http://127.0.0.1:7897",
+									style: { ...inputStyle, flex: "1 1 220px" },
+								}),
+								createElement("button", {
+										// Wrapped, not passed directly: React hands the
+										// click event to the handler, and `saveProxy`
+										// would stringify it into "[object Object]".
+										onClick: () => saveProxy(proxyInput),
+										disabled: savingProxy,
+										style: buttonStyleFor(savingProxy),
+									},
+									savingProxy ? t("Saving…", "保存中…") : t("Save", "保存")))
+						: null,
+					proxyMsg ? createElement("p", { style: captionStyle }, proxyMsg) : null,
+					// macOS keeps its proxy in the system network settings, which
+					// only the system stack reads: a browser can be proxied while
+					// every command-line download is not. That gap is the whole
+					// reason this is a question and not a detection.
+					createElement("p", { style: captionStyle },
+						t(
+							"The system proxy is not visible to downloads; name it here if you use one.",
+							"系统代理对下载不可见：若你在用代理，需要在这里填写。",
+						))),
+				//#endregion proxy
 
 				//#region download
 				createElement("div", { style: panelStyle },

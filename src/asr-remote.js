@@ -254,6 +254,48 @@ function readPersistedModelDir() {
     return undefined;
 }
 
+/**
+ * Remember the download route, so a choice made in the card survives a restart.
+ *
+ * This is deliberately the SAME file `setModelDir` writes: it is one small
+ * settings document, and two writers to two files would let one clobber the
+ * other's keys. Read-modify-write is safe here because the only writer is the
+ * settings card, one call at a time.
+ */
+async function persistDownloadSettings({ endpoint, proxy }) {
+    try {
+        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        let current = {};
+        try {
+            current = JSON.parse(fs.readFileSync(file, "utf8")) ?? {};
+        } catch {
+            current = {};
+        }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(
+            file,
+            JSON.stringify({ ...current, hfEndpoint: endpoint, hfProxy: proxy ?? "" }, null, 2),
+            { mode: 0o600 },
+        );
+    } catch {
+        // persistence is a convenience; the in-memory value still applies
+    }
+}
+
+/** Read a previously persisted download route, if any. */
+function readPersistedDownloadSettings() {
+    try {
+        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+        return {
+            endpoint: typeof raw?.hfEndpoint === "string" && raw.hfEndpoint.trim() ? raw.hfEndpoint.trim() : undefined,
+            proxy: typeof raw?.hfProxy === "string" ? raw.hfProxy.trim() : undefined,
+        };
+    } catch {
+        return {};
+    }
+}
+
 function listModels(dir) {
     const out = [];
     let entries = [];
@@ -297,12 +339,23 @@ export class AsrController extends TypertRemoteService {
         // reported by the caller as "ASR service unavailable" with the real
         // reason buried in a string, or masked entirely by a later error. The
         // operator then sees a missing feature, not a typo in their config.
-        const hfEndpoint = normalizeEndpoint(options.hfEndpoint ?? process.env.DSH_WEIXIN_HF_ENDPOINT);
-        const hfProxy = normalizeProxy(options.hfProxy ?? process.env.DSH_WEIXIN_HF_PROXY);
+        // The saved route fills in only what the caller left unset: an explicit
+        // config value is the live decision, and a stale saved file must not
+        // quietly override the operator's YAML.
+        const saved = readPersistedDownloadSettings();
+        const hfEndpoint = normalizeEndpoint(
+            options.hfEndpoint ?? process.env.DSH_WEIXIN_HF_ENDPOINT ?? saved.endpoint,
+        );
+        const hfProxy = normalizeProxy(options.hfProxy ?? process.env.DSH_WEIXIN_HF_PROXY ?? saved.proxy);
         super(ctx, "asrController", { namespace: "weixinAsr" });
         this.modelDir =
             options.modelDir ?? process.env.DSH_WEIXIN_ASR_MODEL_DIR ?? readPersistedModelDir() ?? DEFAULT_MODEL_DIR;
-        this.hfEndpoint = hfEndpoint;
+        // Resolve the default HERE rather than leaving undefined for each call
+        // site to interpret. `getDownloadSettings` has to name the endpoint it
+        // is reporting, and the card labels the radio group by comparing that
+        // value -- an undefined endpoint would be classified "custom" and the
+        // card would claim a route the host never chose.
+        this.hfEndpoint = hfEndpoint ?? DEFAULT_ENDPOINT;
         this.hfProxy = hfProxy;
         this.downloads = new Map(); // modelId -> {status, message}
         this.#abort = new Map(); // modelId -> AbortController, so a download can stop
@@ -429,6 +482,75 @@ export class AsrController extends TypertRemoteService {
         if (!rec) return { status: "idle" };
         return rec;
     }
+
+    /**
+     * Report where this instance downloads from, so the card can show the
+     * current choice rather than an empty box the operator has to guess at.
+     *
+     * `source` is the UI's own vocabulary ("mirror" | "official" | "custom"),
+     * derived rather than stored: the endpoint is the single source of truth,
+     * and a second field could disagree with it. `canBrowse` says whether the
+     * network needs a proxy at all, which is what lets the card default to
+     * "direct" instead of asking a question most operators cannot answer.
+     */
+    async getDownloadSettings() {
+        return {
+            endpoint: this.hfEndpoint ?? DEFAULT_ENDPOINT,
+            proxy: this.hfProxy ?? "",
+            source: sourceForEndpoint(this.hfEndpoint ?? DEFAULT_ENDPOINT),
+        };
+    }
+
+    /**
+     * Change the download endpoint and/or the proxy.
+     *
+     * Both are validated here rather than in the card: a bad endpoint must fail
+     * before it is written, and the same normalisation that guards the
+     * constructor guards the runtime change, so a value that loads is a value
+     * that can be set.
+     *
+     * A download already running is NOT restarted. It keeps the route it
+     * started with, and the new setting applies to the next one -- silently
+     * re-pointing a transfer mid-flight would leave the operator unable to say
+     * which route produced which file.
+     */
+    async setDownloadSettings(endpoint, proxy) {
+        // Positional, one argument per declared descriptor parameter: the
+        // gateway resolves each parameter by its `wire` field and appends it in
+        // order -- `descriptor.parameters.map(...)` then
+        // `implementation(...args)`. Taking a single object here would make
+        // `endpoint` the whole object and `proxy` silently undefined.
+        //
+        // "absent" and "empty" are different requests and must not be
+        // collapsed: `undefined` means "leave it", while an empty string means
+        // "clear it". Treating absent as empty wiped the proxy whenever the
+        // source changed, and a wiped proxy on a blocked network is a download
+        // that never starts.
+        if (endpoint !== undefined && endpoint !== null) {
+            this.hfEndpoint = normalizeEndpoint(endpoint) ?? DEFAULT_ENDPOINT;
+        }
+        if (proxy !== undefined && proxy !== null) {
+            this.hfProxy = normalizeProxy(proxy) ?? "";
+        }
+        await persistDownloadSettings({ endpoint: this.hfEndpoint, proxy: this.hfProxy });
+        return this.getDownloadSettings();
+    }
+}
+
+/** The known endpoints, so the card can label the current one honestly. */
+export const MIRROR_ENDPOINT = DEFAULT_ENDPOINT;
+export const OFFICIAL_ENDPOINT = "https://huggingface.co";
+
+/**
+ * Classify an endpoint for the UI.
+ * @param {string} endpoint
+ * @returns {"mirror" | "official" | "custom"}
+ */
+export function sourceForEndpoint(endpoint) {
+    const value = String(endpoint ?? "").replace(/\/+$/, "");
+    if (value === MIRROR_ENDPOINT) return "mirror";
+    if (value === OFFICIAL_ENDPOINT) return "official";
+    return "custom";
 }
 
 export function defaultModelDir() {
@@ -438,4 +560,11 @@ export function defaultModelDir() {
 // referenced so bundlers do not treat stateDir as side-effect-only import
 void stateDir;
 
-remoteMethods(AsrController, ["listModels", "setModelDir", "downloadModel", "downloadStatus"]);
+remoteMethods(AsrController, [
+    "listModels",
+    "setModelDir",
+    "downloadModel",
+    "downloadStatus",
+    "getDownloadSettings",
+    "setDownloadSettings",
+]);
