@@ -233,12 +233,48 @@ function findMountBlock(text) {
   return { start, end }
 }
 
-/** Read the operator-owned config values out of the currently mounted row. */
+/**
+ * Read the operator-owned config values out of the currently mounted row.
+ *
+ * A value is captured as a whole YAML node, not a single line: `allowedSenders`
+ * is naturally written as a block sequence
+ *
+ *   allowedSenders:
+ *     - wxid_abc
+ *
+ * and a line-anchored `(.+)$` match finds nothing after the colon, which would
+ * silently drop the allowlist on every upgrade — the one value the operator had
+ * to fill in by hand, and whose loss turns the bot into a silent no-op.
+ *
+ * Continuation lines are the following lines indented deeper than the key, plus
+ * blank lines between them. The capture stops at the next key, so the caller can
+ * splice it in verbatim.
+ *
+ * @param {string} block one mounted row, as YAML text
+ * @returns {Record<string, string>} key → raw YAML node text (may be multiline)
+ */
 function readKeptValues(block) {
+  const lines = block.split('\n')
   const keep = {}
   for (const key of KEPT_KEYS) {
-    const found = block.match(new RegExp(`^[ \\t]*${key}:[ \\t]*(.+)$`, 'm'))
-    if (found) keep[key] = found[1].trim()
+    const startAt = lines.findIndex((line) => new RegExp(`^[ \\t]*${key}:[ \\t]*(.*)$`).test(line))
+    if (startAt === -1) continue
+    const indent = lines[startAt].match(/^[ \t]*/)[0].length
+    const collected = [lines[startAt].trim()]
+    for (let at = startAt + 1; at < lines.length; at += 1) {
+      const line = lines[at]
+      if (line.trim() === '') {
+        // A blank line continues the node only if a deeper line follows it.
+        const nextReal = lines.slice(at + 1).find((candidate) => candidate.trim() !== '')
+        if (nextReal === undefined) break
+        if (nextReal.match(/^[ \t]*/)[0].length <= indent) break
+        collected.push('')
+        continue
+      }
+      if (line.match(/^[ \t]*/)[0].length <= indent) break
+      collected.push(line.trim())
+    }
+    keep[key] = collected.join('\n')
   }
   return keep
 }
@@ -252,7 +288,16 @@ if (block === undefined) {
   const keep = readKeptValues(lines.slice(block.start, block.end).join('\n'))
   let row = freshRow
   for (const [key, value] of Object.entries(keep)) {
-    row = row.replace(new RegExp(`^([ \\t]*)${key}:[^\\n]*$`, 'm'), `$1${key}: ${value}`)
+    // The fresh row writes each kept key on one line; re-indent the captured
+    // node's continuation lines by the same amount so a block sequence stays a
+    // valid child of its key.
+    const pattern = new RegExp(`^([ \\t]*)${key}:[^\\n]*$`, 'm')
+    const indent = row.match(pattern)?.[1] ?? ''
+    const replacement = value
+      .split('\n')
+      .map((line, index) => (index === 0 ? `${indent}${line}` : line === '' ? '' : `${indent}  ${line}`))
+      .join('\n')
+    row = row.replace(pattern, replacement)
   }
   const next = [...lines.slice(0, block.start), ...row.split('\n'), ...lines.slice(block.end)].join('\n')
   fs.writeFileSync(patchPath, next)
