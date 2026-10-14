@@ -16,15 +16,22 @@ import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { WeixinLoginController } from '../src/login-remote.js'
 import { configureWeixinStateDir } from '../src/state.js'
+import { resolveStateDir as vendorStateDir } from '../vendor/openclaw-weixin/storage/state-dir.js'
 
 /**
  * Run `body` with the weixin state root pointed at a throwaway directory,
  * pre-seeded with one saved account.
  *
  * The vendor account store reads OPENCLAW_STATE_DIR, not this module's own
- * override, so the bridge has to be set up exactly as apply() does it — a test
- * that only sets DSH_WEIXIN_STATE_DIR sees an empty account list and reports a
- * logout bug that does not exist.
+ * override, so the bridge has to be set up exactly as apply() does it.
+ *
+ * This helper deletes credentials, which makes the isolation load-bearing
+ * rather than tidy. An earlier version set only DSH_WEIXIN_STATE_DIR and still
+ * read the inherited OPENCLAW_STATE_DIR — which, when the suite runs from a
+ * shell that a live DSH started, points at the operator's real state root. The
+ * tests then deleted the real account, and the only symptom was an assertion
+ * failure that read like a broken test. `guardStateRoot` below is the fix for
+ * that class of mistake.
  * @param {(root: string) => Promise<void> | void} body
  */
 async function withBoundAccount(body) {
@@ -32,6 +39,10 @@ async function withBoundAccount(body) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-logout-'))
   process.env.DSH_WEIXIN_STATE_DIR = root
   configureWeixinStateDir()
+  // Refuse to run the body at all if the vendor still resolves somewhere other
+  // than the throwaway directory. Without this the destructive tests below
+  // would operate on whatever the ambient environment names.
+  guardStateRoot(root)
   const accounts = path.join(root, 'openclaw-weixin', 'accounts')
   fs.mkdirSync(accounts, { recursive: true })
   fs.writeFileSync(
@@ -51,8 +62,43 @@ async function withBoundAccount(body) {
   } finally {
     if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
     else process.env.DSH_WEIXIN_STATE_DIR = previous
+    // Put the vendor's variable back too. Leaving it pointed at the deleted
+    // temp directory makes every later test in this process resolve there.
+    configureWeixinStateDir()
     fs.rmSync(root, { recursive: true, force: true })
   }
+}
+
+/**
+ * Fail loudly unless the vendored account store resolves inside `expected`.
+ *
+ * These tests delete credentials, so the cost of getting the root wrong is the
+ * operator's real account — which is exactly what happened once. Checking the
+ * resolved path (rather than trusting that the two environment variables were
+ * set) is what makes the mistake impossible instead of merely unlikely.
+ *
+ * The check must ask the VENDOR, not this module. Comparing `accountsDir()`
+ * against the root compares two reads of the same variable: it cannot see that
+ * the store reads a different one, which is precisely the bug. The vendor's own
+ * `resolveStateDir()` is the authority, so it is the one consulted.
+ * @param {string} expected
+ */
+function guardStateRoot(expected) {
+  const resolved = vendorStateDir()
+  assert.equal(
+    resolved,
+    expected,
+    'refusing to run a destructive test: the vendored account store resolves to ' +
+      `${resolved}, not the throwaway root ${expected}. The vendor reads ` +
+      `OPENCLAW_STATE_DIR, which is still ${JSON.stringify(process.env.OPENCLAW_STATE_DIR)}.`,
+  )
+  // Independent second check, so a bug in the wiring above cannot silently
+  // re-enable the original failure: the real state root must never be in play.
+  const real = path.join(os.homedir(), '.dsh', 'weixin')
+  assert.ok(
+    resolved !== real && !resolved.startsWith(`${real}${path.sep}`),
+    `refusing to run a destructive test against the operator's real state: ${resolved}`,
+  )
 }
 
 const controller = () => new WeixinLoginController(new Context(), {})
