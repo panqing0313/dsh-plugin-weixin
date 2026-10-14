@@ -17,6 +17,46 @@ const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models"
 
 const ASR_CONFIG_FILE = "asr-config.json";
 
+/**
+ * Validate an optional Hugging Face endpoint.
+ *
+ * The value is handed to a child process as HF_ENDPOINT, so it must be an
+ * absolute http(s) URL — anything else would either be ignored by the CLI or
+ * misread as a local path, and a silent typo here looks exactly like the slow
+ * download the operator was trying to fix.
+ */
+/** Whether a proxy URL is usable by the CLI's HTTP stack. */
+export function normalizeProxy(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return undefined;
+    let url;
+    try {
+        url = new URL(raw);
+    } catch {
+        throw new RemoteError("bad_proxy", `代理地址必须是完整 URL，例如 http://127.0.0.1:7897`, {});
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new RemoteError("bad_proxy", `代理只支持 http/https，收到 ${url.protocol}`, {});
+    }
+    return raw;
+}
+
+/** Normalise a Hugging Face endpoint the CLI can talk to. */
+export function normalizeEndpoint(value) {
+    const raw = String(value ?? "").trim().replace(/\/+$/, "");
+    if (!raw) return undefined;
+    let url;
+    try {
+        url = new URL(raw);
+    } catch {
+        throw new RemoteError("bad_endpoint", `镜像地址必须是完整 URL，例如 https://hf-mirror.com`, {});
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new RemoteError("bad_endpoint", `镜像地址必须是 http/https，收到 ${url.protocol}`, {});
+    }
+    return raw;
+}
+
 // Hugging Face renamed its CLI: `huggingface-cli` is deprecated and, on
 // huggingface_hub >= 1.0, is a stub that exits 1 with nothing but a "no longer
 // works, use hf instead" banner. Prefer `hf` and fall back, because plenty of
@@ -214,6 +254,8 @@ export class AsrController extends TypertRemoteService {
         super(ctx, "asrController", { namespace: "weixinAsr" });
         this.modelDir =
             options.modelDir ?? process.env.DSH_WEIXIN_ASR_MODEL_DIR ?? readPersistedModelDir() ?? DEFAULT_MODEL_DIR;
+        this.hfEndpoint = normalizeEndpoint(options.hfEndpoint ?? process.env.DSH_WEIXIN_HF_ENDPOINT);
+        this.hfProxy = normalizeProxy(options.hfProxy ?? process.env.DSH_WEIXIN_HF_PROXY);
         this.downloads = new Map(); // modelId -> {status, message}
     }
 
@@ -266,7 +308,21 @@ export class AsrController extends TypertRemoteService {
         if (cli.shell) args.unshift(cli.command);
         const child = spawn(cli.command, args, {
             stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, HF_HUB_DISABLE_TELEMETRY: "1" },
+            env: {
+                ...process.env,
+                HF_HUB_DISABLE_TELEMETRY: "1",
+                // Only set when configured, so an operator's own HF_ENDPOINT
+                // survives: this must not clobber a working environment.
+                ...(this.hfEndpoint ? { HF_ENDPOINT: this.hfEndpoint } : {}),
+                // Command-line tools ignore the macOS system proxy settings --
+                // only the system network stack (browsers) reads those -- so a
+                // proxy that visibly works in a browser is invisible here until
+                // it is named. Both cases are set because httpx, requests and
+                // curl each prefer a different one.
+                ...(this.hfProxy
+                    ? { HTTPS_PROXY: this.hfProxy, HTTP_PROXY: this.hfProxy, ALL_PROXY: this.hfProxy }
+                    : {}),
+            },
             // A .cmd/.bat shim is a shell script; Node refuses to run one
             // without a shell, which is EINVAL on an install that works fine
             // from a prompt. POSIX never takes this path.

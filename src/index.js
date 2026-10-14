@@ -106,6 +106,18 @@ export const Config = z.object({
         .description(
           'Directory where downloadable voice models are stored and looked up. Empty defaults to ~/.dsh/weixin/asr-models.',
         ),
+      hfProxy: z
+        .string()
+        .default('')
+        .description(
+          'Proxy URL for the model downloader, passed to the CLI as HTTPS_PROXY (e.g. http://127.0.0.1:7897). Empty inherits the current environment. Command-line tools do not read the macOS system proxy settings, so a proxy that works in the browser is invisible here until it is named. The download is a plain HTTP transfer: it is exactly as fast as this route, and no faster.',
+        ),
+      hfEndpoint: z
+        .string()
+        .default('')
+        .description(
+          'Hugging Face endpoint for the model downloader, passed to the CLI as HF_ENDPOINT (e.g. https://hf-mirror.com). Empty uses the official site. Note: huggingface_hub 1.17.0 still requests huggingface.co for repo metadata even when this is set, so a mirror alone does not rescue a blocked network — hfProxy does.',
+        ),
     })
     .default({})
     .description('Voice transcription through an external bridge process. Absent or empty command means voice notes are delivered as files.'),
@@ -147,7 +159,11 @@ export function apply(ctx, config) {
   // the one the process started with.
   let asrController
   try {
-    asrController = new AsrController(ctx, { modelDir: config.asr?.modelDir?.trim() || undefined })
+    asrController = new AsrController(ctx, {
+      modelDir: config.asr?.modelDir?.trim() || undefined,
+      hfEndpoint: config.asr?.hfEndpoint?.trim() || undefined,
+      hfProxy: config.asr?.hfProxy?.trim() || undefined,
+    })
     ctx.plugin(asrController)
   } catch (error) {
     warn(`settings ASR service unavailable: ${String(error)}`)

@@ -14,6 +14,15 @@ const require$path = () => nodePath
 
 const HOST = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
 
+// Import the real module for behavioural checks. Regex-lifting functions out of
+// the source produced false passes and syntax errors repeatedly, so anything
+// that can be executed is executed instead of pattern-matched.
+const hostModule = await import('../src/asr-remote.js')
+function requireHost() {
+  return hostModule
+}
+
+
 // The detection block, lifted so it can run against a fake spawn/platform.
 const BODY = HOST.match(/const HF_CLI_CANDIDATES = \[[\s\S]*?\n}\n\n\/\*\* Whether running[\s\S]*?\n}\n/)[0]
 
@@ -246,4 +255,78 @@ test('the download reports a percentage so the card has something to show', () =
   assert.match(HOST, /percent: 0, startedAt: Date\.now\(\)/, 'a running download must start at a known percentage')
   assert.match(HOST, /rec\.percent = reading\.percent/, 'readings must be folded into the record')
   assert.match(HOST, /percent: 100,/, 'a completed download must report completion')
+})
+
+// ---- endpoint configuration -------------------------------------------------
+// A wrong mirror setting must fail loudly: a typo here looks exactly like the
+// slow download the operator was trying to fix, so silently ignoring it would
+// send them chasing the network again.
+import { normalizeEndpoint } from '../src/asr-remote.js'
+
+test('an empty endpoint means "use the official site", not an empty string', () => {
+  for (const value of [undefined, null, '', '   ']) {
+    assert.equal(normalizeEndpoint(value), undefined, `${JSON.stringify(value)} must mean unset`)
+  }
+})
+
+test('a configured endpoint is normalized and kept', () => {
+  assert.equal(normalizeEndpoint('https://hf-mirror.com'), 'https://hf-mirror.com')
+  // A trailing slash would produce a doubled path when the CLI appends to it.
+  assert.equal(normalizeEndpoint('https://hf-mirror.com/'), 'https://hf-mirror.com')
+  assert.equal(normalizeEndpoint('  https://hf-mirror.com///  '), 'https://hf-mirror.com')
+  assert.equal(normalizeEndpoint('http://127.0.0.1:8080'), 'http://127.0.0.1:8080')
+})
+
+test('a malformed endpoint is rejected rather than passed to the CLI', () => {
+  assert.throws(() => normalizeEndpoint('hf-mirror.com'), /完整 URL/, 'a missing scheme must be rejected')
+  assert.throws(() => normalizeEndpoint('ftp://x.com'), /http\/https/, 'a non-http scheme must be rejected')
+})
+
+test('the endpoint is exported to the CLI as HF_ENDPOINT, and only when set', () => {
+  assert.match(HOST, /this\.hfEndpoint = normalizeEndpoint\(/, 'the controller must normalize its endpoint')
+  assert.match(
+    HOST,
+    /\.\.\.\(this\.hfEndpoint \? \{ HF_ENDPOINT: this\.hfEndpoint \} : \{\}\)/,
+    'HF_ENDPOINT must be set only when configured, so an operator environment is not clobbered',
+  )
+})
+
+test('the config schema exposes hfEndpoint and the plugin passes it through', () => {
+  const index = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
+  assert.match(index, /hfEndpoint: z\s*\.string\(\)\s*\.default\(''\)/, 'the config schema must declare hfEndpoint')
+  assert.match(index, /hfEndpoint: config\.asr\?\.hfEndpoint\?\.trim\(\) \|\| undefined/, 'the controller must receive it')
+})
+
+test('a proxy is accepted only when the CLI could actually use it', () => {
+  // A proxy that silently does not apply is worse than none: the operator sees
+  // a configured field, concludes the network is fine, and waits. Reject at the
+  // boundary instead of handing the CLI something it ignores.
+  const { normalizeProxy } = requireHost()
+  assert.equal(normalizeProxy('http://127.0.0.1:7897'), 'http://127.0.0.1:7897')
+  assert.equal(normalizeProxy('  https://proxy.local:8080  '), 'https://proxy.local:8080')
+  assert.equal(normalizeProxy(''), undefined, 'an empty proxy means "inherit the environment"')
+  assert.equal(normalizeProxy('   '), undefined)
+  assert.equal(normalizeProxy(null), undefined)
+  for (const bad of ['not a url', 'socks5://127.0.0.1:1080', 'ftp://x.com']) {
+    assert.throws(() => normalizeProxy(bad), (err) => err.code === 'bad_proxy', `${bad} must be rejected`)
+  }
+})
+
+test('the spawn environment actually carries the proxy, and only when set', () => {
+  // Defining normalizeProxy is not the fix: the download is what has to see it.
+  // Command-line tools ignore the macOS system proxy settings, so a value that
+  // never reaches this environment object is exactly the bug being fixed.
+  const env = HOST.match(/env: \{[\s\S]*?\n {12}\},/)[0]
+  assert.match(env, /this\.hfProxy/, 'the spawn env must read hfProxy')
+  assert.match(env, /HTTPS_PROXY: this\.hfProxy/, 'HTTPS_PROXY is required')
+  assert.match(env, /HTTP_PROXY: this\.hfProxy/, 'HTTP_PROXY covers clients that read only that')
+  assert.match(env, /ALL_PROXY: this\.hfProxy/, 'ALL_PROXY covers clients that read only that')
+  // And it must be conditional, or an unset proxy would blank a working one.
+  assert.match(env, /this\.hfProxy\s*\n?\s*\?/, 'the proxy must be spread conditionally')
+})
+
+test('the proxy reaches AsrController from the plugin config', () => {
+  const index = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
+  assert.match(index, /hfProxy: config\.asr\?\.hfProxy/, 'config.asr.hfProxy must be passed through')
+  assert.match(index, /hfProxy: z\s*\n\s*\.string\(\)/, 'the schema must declare hfProxy')
 })
