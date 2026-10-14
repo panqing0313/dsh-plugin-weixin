@@ -33,6 +33,9 @@ function loadClientModule() {
   let registration
   const sandbox = {
     window: { __ModuleLoader__: { load: (r) => { registration = r } } },
+    // The browser always has this; the test sandbox must too, or the chooser's
+    // Remote path would be exercised as "environment missing".
+    AbortController,
     console,
   }
   sandbox.globalThis = sandbox
@@ -258,6 +261,74 @@ test('every Remote call that reads a host field goes through the envelope', () =
   // Both the success and failure branches of the envelope have to be handled.
   assert.match(source, /if \(!result\.ok\) throw/, 'unwrap() must surface the failure branch')
   assert.match(source, /return result\.value/, 'unwrap() must return the success value')
+})
+
+test('the directory chooser unwraps its Remote result and survives its absence', async () => {
+  // The shell mounts `directoryPicker` (namespace of the workspace controller)
+  // and it resolves to the same {ok, value} envelope as everything else — the
+  // chosen path, or null when the operator cancels. It also belongs to another
+  // bundle, so a minimal profile may not have it at all.
+  const registration = loadClientModule()
+  const mod = registration.factory(fakeRequire)
+
+  // 1. The ordinary path: a string path inside the envelope.
+  const picked = []
+  let restored = null
+  const ctxWithPicker = {
+    remote: {
+      directoryPicker: {
+        pick: async (signal) => {
+          picked.push(signal !== undefined)
+          return { ok: true, value: '/Users/someone/models' }
+        },
+      },
+    },
+  }
+  restored = await mod.pickDirectory(ctxWithPicker)
+  assert.equal(restored, '/Users/someone/models')
+  assert.deepEqual(picked, [true], 'pick() must receive a cancellation signal')
+
+  // 2. Cancelling is a normal outcome, not an error: envelope ok, value null.
+  const cancelled = await mod.pickDirectory({
+    remote: { directoryPicker: { pick: async () => ({ ok: true, value: null }) } },
+  })
+  assert.equal(cancelled, null)
+
+  // 3. A rejected Remote must not throw at the caller: the bridge fallback or
+  //    an honest null is what the button can act on.
+  const rejected = await mod.pickDirectory({
+    remote: { directoryPicker: { pick: async () => ({ ok: false, error: new Error('not mounted') }) } },
+  })
+  assert.equal(rejected, null)
+
+  // 4. A profile whose shell mounts no chooser at all.
+  assert.equal(await mod.pickDirectory({ remote: {} }), null)
+  // 5. An empty string is "nothing chosen", never a directory.
+  assert.equal(
+    await mod.pickDirectory({ remote: { directoryPicker: { pick: async () => ({ ok: true, value: '' }) } } }),
+    null,
+  )
+})
+
+test('the model directory field offers the host chooser and says so when absent', () => {
+  // A wrong model directory only surfaces much later as "no model available",
+  // and typing an absolute path by hand is the likeliest way to get one. The
+  // card must therefore expose the host's own chooser, and must explain itself
+  // when the profile provides none.
+  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /onClick: browseDir/, 'the directory field needs a browse button')
+  assert.match(source, /await pickDirectory\(ctx\)/, 'browseDir must use the host chooser')
+  assert.match(
+    source,
+    /No directory chooser is available here; type the path instead\./,
+    'a missing chooser must be explained, not silently ignored',
+  )
+  // The chooser belongs to another bundle, so both fallbacks must exist.
+  assert.match(source, /ctx\.remote\?\.directoryPicker/, 'the mounted Remote is the primary path')
+  assert.match(source, /__DSH_DIRECTORY_PICKER__/, 'the Electron bridge is the fallback')
+  // Selecting a directory fills the field; only "Set directory" writes it, so a
+  // cancelled dialog can never persist an empty value.
+  assert.match(source, /setDirInput\(picked\)/, 'the chosen path must reach the input')
 })
 
 test('a descriptor table that repeats a wire field is rejected, as the runtime does', () => {

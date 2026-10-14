@@ -127,6 +127,54 @@ window.__ModuleLoader__.load({
 		//#region UI components
 
 		/**
+		 * Open the host's native directory chooser.
+		 *
+		 * The shell already mounts the workspace controller's `directoryPicker`
+		 * Remote (namespace `directoryPicker`, method `pick`), so no new
+		 * dependency is needed — but it belongs to another bundle, which may be
+		 * absent from a minimal profile. Two fallbacks keep the button useful
+		 * rather than merely present:
+		 *
+		 *  1. `ctx.remote.directoryPicker.pick()` — the ordinary path.
+		 *  2. `globalThis.__DSH_DIRECTORY_PICKER__.pick()` — the same Electron
+		 *     IPC bridge the shell itself falls back to, used when the Remote is
+		 *     not mounted.
+		 *
+		 * Returns the chosen absolute path, or null when the operator cancels or
+		 * no chooser exists. Cancelling is not an error, so it must not surface
+		 * as one.
+		 */
+		async function pickDirectory(ctx) {
+			const picker = ctx.remote?.directoryPicker;
+			if (picker?.pick !== undefined) {
+				// Built outside the try: a missing AbortController is an
+				// environment fault, not a declined dialog, and letting it be
+				// swallowed would silently downgrade to "no chooser available".
+				const signal =
+					typeof AbortController === "function" ? new AbortController().signal : undefined;
+				try {
+					const result = await picker.pick(signal);
+					const path = unwrap(result);
+					return typeof path === "string" && path !== "" ? path : null;
+				} catch {
+					// A missing capability or a dismissed dialog: fall through to
+					// the bridge rather than reporting a failure the operator
+					// cannot act on.
+				}
+			}
+			const bridge = globalThis.__DSH_DIRECTORY_PICKER__;
+			if (bridge?.pick !== undefined) {
+				try {
+					const path = await bridge.pick();
+					return typeof path === "string" && path !== "" ? path : null;
+				} catch {
+					return null;
+				}
+			}
+			return null;
+		}
+
+		/**
 		 * Unwrap a Remote invocation result.
 		 *
 		 * Every client Remote call resolves to an envelope — `{ok: true, value}`
@@ -325,6 +373,8 @@ window.__ModuleLoader__.load({
 			const [dlStatus, setDlStatus] = react.useState({});
 			const [busy, setBusy] = react.useState(false);
 			const [savingDir, setSavingDir] = react.useState(false);
+			const [pickingDir, setPickingDir] = react.useState(false);
+			const [browseMsg, setBrowseMsg] = react.useState("");
 			const [dirMsg, setDirMsg] = react.useState("");
 
 			const refresh = react.useCallback(async () => {
@@ -341,6 +391,25 @@ window.__ModuleLoader__.load({
 			react.useEffect(() => {
 				refresh();
 			}, [refresh]);
+
+			const browseDir = async () => {
+				setPickingDir(true);
+				setBrowseMsg("");
+				try {
+					const picked = await pickDirectory(ctx);
+					if (picked === null) {
+						// Cancelling, or a profile whose shell mounts no chooser.
+						setBrowseMsg(t(
+							"No directory chooser is available here; type the path instead.",
+							"当前环境没有目录选择器，请手动输入路径。",
+						));
+						return;
+					}
+					setDirInput(picked);
+				} finally {
+					setPickingDir(false);
+				}
+			};
 
 			const saveDir = async () => {
 				const target = dirInput.trim();
@@ -397,9 +466,14 @@ window.__ModuleLoader__.load({
 						placeholder: modelDir || "/path/to/models",
 						style: { flex: 1 },
 					}),
+					// Choosing a directory by hand is the likeliest source of
+					// typos here, and a wrong model directory fails much later
+					// as "no model available", so offer the host's own chooser.
+					createElement("button", { onClick: browseDir, disabled: pickingDir },
+						pickingDir ? t("Opening…", "打开中…") : t("Browse…", "浏览…")),
 					createElement("button", { onClick: saveDir, disabled: savingDir },
 						savingDir ? t("Saving…", "保存中…") : t("Set directory", "设置目录"))),
-				dirMsg ? createElement("div", { style: { opacity: 0.75 } }, dirMsg) : null,
+				browseMsg ? createElement("div", { style: { opacity: 0.75 } }, browseMsg) : null,
 				models.length > 0
 					? createElement("div", null,
 							createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, t("Installed models", "已安装模型")),
@@ -483,6 +557,10 @@ window.__ModuleLoader__.load({
 
 		exports.apply = apply;
 		exports.inject = inject;
+		// Exported for the test suite: the chooser's cancel/absent-profile paths
+		// are the ones that regress silently, and they are not reachable from the
+		// component tree without a DOM.
+		exports.pickDirectory = pickDirectory;
 		return module.exports;
 	}
 });
