@@ -198,6 +198,9 @@ export class ILinkTransport {
    * @param {string} options.accountId
    * @param {string} options.baseUrl
    * @param {string} options.token
+   * @param {string} [options.userId]  The bound operator's `ilink_user_id`, as
+   *   saved at login. Required by getConfig; without it no typing ticket can be
+   *   obtained.
    * @param {string} [options.cdnBaseUrl]  Weixin CDN root for outbound media; the
    *   upstream default when unset.
    * @param {number} [options.longPollTimeoutMs]
@@ -211,6 +214,7 @@ export class ILinkTransport {
     this.accountId = options.accountId
     this.baseUrl = options.baseUrl
     this.token = options.token
+    this.userId = options.userId?.trim() || undefined
     this.cdnBaseUrl = options.cdnBaseUrl ?? DEFAULT_CDN_BASE_URL
     this.longPollTimeoutMs = options.longPollTimeoutMs ?? 35_000
     this.log = options.log ?? (() => {})
@@ -424,13 +428,34 @@ export class ILinkTransport {
     return this.typingTicket
   }
 
-  /** Refresh the typing ticket used as a fallback context token. */
+  /**
+   * Refresh the typing ticket used as a fallback context token.
+   *
+   * The request needs the bound operator's `ilink_user_id`. It used to be sent
+   * empty, and the API answers that with `{ret:-2, errmsg:"ilink_user_id
+   * required"}` — which nothing noticed, because `getConfig` does not raise on a
+   * non-zero `ret` and the caller only looked for a missing `typing_ticket`. The
+   * result was a permanent no-op: no typing indicator, and every reply that
+   * arrived without a context token lost its fallback and could be rejected.
+   */
   async refreshConfig() {
+    if (!this.userId) {
+      // Nothing to send. Say so once instead of issuing a request that is
+      // guaranteed to be refused.
+      this.log('getConfig skipped: this account has no saved ilink_user_id (typing ticket unavailable)')
+      return
+    }
     try {
-      const resp = await getConfig({ baseUrl: this.baseUrl, token: this.token, ilinkUserId: '' })
+      const resp = await getConfig({ baseUrl: this.baseUrl, token: this.token, ilinkUserId: this.userId })
       if (typeof resp?.typing_ticket === 'string' && resp.typing_ticket) {
         this.typingTicket = resp.typing_ticket
+        return
       }
+      // A refused request still looks like a healthy one from here, so name the
+      // reason rather than leaving the operator to guess why typing never shows.
+      this.log(
+        `getConfig returned no typing ticket (ret=${resp?.ret ?? '(none)'} errmsg=${resp?.errmsg ?? '(none)'})`,
+      )
     } catch (error) {
       this.log(`getConfig failed (typing ticket unavailable): ${String(error)}`)
     }

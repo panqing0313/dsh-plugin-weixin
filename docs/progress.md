@@ -190,3 +190,74 @@ verifier 独立复核确认：新增的空白串回归测试**两条方向断言
 **先在手机微信里解除该机器人的绑定**；本机侧已排除的免解绑路径：旧 token 失效、`force` 只管本地二维码
 缓存、服务端不下发新凭证。修复后这一支会写下
 `weixin login: server refused a new credential (binded_redirect) …`，届时以日志为准。
+
+## 2026-10-15 — 登录成功之后，微信仍显示「无法连接 openclaw」（已修复）
+
+用户在设置页扫码成功（卡片显示「已绑定」）后，手机微信仍然提示「暂时无法连接 openclaw」。
+这不是登录失败，而是**收消息的那条循环从未启动**。
+
+**根因（两条，独立）**
+
+| # | 缺陷 | 说明 |
+| --- | --- | --- |
+| 1 | 账号解析只发生一次 | `resolveAccount()` 只在插件加载时调用。全新安装时那一刻**本机还没有凭证**（用户是之后才扫码的），于是 effect 直接 return，入站 `getUpdates` 长轮询永不启动。凭证后来才落盘，但没有任何机制会重跑解析 → 手机显示「已绑定」、卡片显示「已绑定」、本机却没有任何轮询。 |
+| 2 | `getConfig` 永远拿不到 typing ticket | transport 发 `ilink_user_id: ''`，服务端答 `{ret:-2,"ilink_user_id required"}`。`getConfig` 不对非零 `ret` 抛错、调用方只找缺失的 `typing_ticket`，于是整个失败是**静默**的：没有 typing indicator，且不带 context_token 的回复失去了回退 token。 |
+
+**实测证据（缺陷 1）**
+
+- 宿主 pid 24737 启动于 `2026-10-15 07:24:13`，凭证 `accounts/82ddcdd8c61c@im.bot.json`（mtime `07:24:52`）
+  晚 39 秒落盘 → 启动那一刻本机账号目录是空的；
+- 该进程此后仍活着、从未重读凭证；按 `ilinkai.weixin.qq.com` 的 4 个解析 IP 过滤 `lsof`，
+  每 5 秒采样一次、共 40 秒，**始终 0 条连接**（长轮询每次约 30 秒，在跑就必然可见）；
+- 走插件启动路径的探针显示：现在解析**能**拿到账号（`RESULT: account resolves with a token — a reload WILL start the inbound loop`）；
+- 按 `src/transport/ilink.js` 的调法打真实 `getupdates`：`#1 ms=627` 返回**一条真实未投递消息**
+  （`from_user_id` 正是白名单里的 `o9cq804qN9Kjha_YsRWQwG8hWo3I@im.wechat`，`to_user_id` = 新 bot id）。
+  → 凭证完全可用，只是没人去取。
+
+**实测证据（缺陷 2）**
+
+| 请求 | 响应 |
+| --- | --- |
+| `ilinkUserId: ''`（transport 原先发的值） | `{"ret":-2,"errmsg":"ilink_user_id required"}` |
+| `ilinkUserId: <真实 userId>` | `{"ret":0,"typing_ticket":"AARTBK8FAAABAAAAAAC752zki…"}` |
+| 伪造 token（对照组） | `{"errcode":-14,"errmsg":"session timeout"}` |
+
+→ `ret:-2` = token 被接受（该请求只是缺参数）；`errcode:-14` = token 被拒。新凭证有效。
+
+**修复**
+
+| 位置 | 改动 |
+| --- | --- |
+| `src/index.js:201-222` | 抽出 `setup`：cwd / `AgentBridge` / `AsrBridge` 与账号无关，建一次、重绑时复用 |
+| `src/index.js:230-321` | 抽出 `bringUpLoop()`：解析账号 → 建 transport → 换掉旧 transport → `start()`；不再只跑一次 |
+| `src/index.js:281-284` | 去重守卫：账号与 token 都没变时只记一行 `is already being listened to`，不抖动连接 |
+| `src/index.js:308-317` | **先停后启**：同一凭证两条长轮询会把入站队列**分摊**（服务端给先到的那个），必须在 `start` 之前 `stop` |
+| `src/index.js:327-334` | `startLoop()` 用 `handoff` 串行化交接，避免两次登录并发交接留下两条循环或零条 |
+| `src/index.js:340-343` | `onAccountBound` 挂到登录控制器上，登录成功后自动起循环 |
+| `src/index.js:245` | transport 新增 `userId: account.userId`（缺陷 2 的接线） |
+| `src/index.js:348-353` | disposer 里清掉 `onAccountBound`（仅当仍指向本闭包），避免指向死掉的循环 |
+| `src/transport/ilink.js:217` | `this.userId = options.userId?.trim() \|\| undefined` |
+| `src/transport/ilink.js:441-461` | `refreshConfig()`：无 userId 时**不再发注定被拒的请求**，改为记一行；非零 `ret` 时把 `ret/errmsg` 写进日志，失败不再静默 |
+| `src/login-remote.js:100` | 新增普通属性 `onAccountBound`（注释说明为何不能用 `#private`：宿主经 Proxy 调用 Remote 方法） |
+| `src/login-remote.js:217-226` | `confirmed` 分支写入凭证后触发 `onAccountBound()`，失败只记日志不影响登录结果 |
+| `README.md:114-129` | 「退出登录与重新绑定」补一条：扫码成功后**不再需要重载 DSH** |
+
+**验证**
+
+- 新增 `test/inbound-loop-start.test.js`（4 tests，假 iLink 服务器 + 一次性 state root，无网络、不碰真实凭证）：
+  1. 加载时无凭证 → 0 次轮询且日志写明原因；`onAccountBound()` 后循环起来并打印 `listening as account`；
+  2. 重绑到新凭证 → 新循环起来、旧 transport 停掉（断言旧服务器的 `getUpdates` 不再增长）；
+  3. 同一凭证重复触发 → 只记 `is already being listened to`，不重建连接；
+  4. transport 带 operator id → `getconfig` 收到真实 `ilink_user_id`，`sendtyping` 拿到 `TT`；
+     无 id 时**根本不发**该请求。
+- **辨别力实测**：`git stash push -- src/index.js src/transport/ilink.js src/login-remote.js`
+  后跑该文件 → **4/4 fail**；恢复后 4/4 pass。
+- 全量 `node --test "test/**/*.test.js"` → **tests 182 / pass 182 / fail 0**（原 178）。
+- **真端点探针**：以「加载时无凭证」的真实状态启动插件（真实凭证复制到隔离 state root），
+  `onAccountBound()` 后 **413ms / 807ms** 两次都打印
+  `dsh-weixin: listening as account 82ddcdd8c61c@im.bot`，且全程未重载 → 修复在真实服务端上成立。
+- 端到端 canary（登录 → 退出登录 → 重扫码 → 连接可用）走完，服务端观测到**新 token** 的轮询，
+  重复触发不抖动连接。
+
+**当日结论**：本机侧的两条缺陷都已修复并验证。用户侧现在的状态是：**重启 DSH 一次**让新代码生效，
+此后扫码即可自动开始收消息，不再需要「扫码 → 重载 → 才通」。

@@ -184,18 +184,65 @@ export function apply(ctx, config) {
     let bridge
     /** @type {AsrBridge | undefined} */
     let asrBridge
+    /** @type {string} */
+    let cwd
+    // Serializes loop hand-offs. A login can complete while the previous
+    // transport is still tearing down, and two live loops deliver every inbound
+    // message twice — the server hands it to whichever poll arrives first.
+    let handoff = Promise.resolve()
 
-    // Startup is async (account lookup, typing ticket, loop start), but the
-    // effect disposer is synchronous-safe: it awaits the startup promise, then
-    // tears down whatever got as far as existing.
-    const started = (async () => {
+    // Working directory, agent bridge and voice bridge do not depend on which
+    // account is bound, so they are built once and reused when a re-login swaps
+    // the transport underneath them.
+    //
+    // Startup is async (working directory, account lookup, typing ticket, loop
+    // start), but the effect disposer is synchronous-safe: it awaits the startup
+    // promise, then tears down whatever got as far as existing.
+    const setup = (async () => {
+      cwd = await resolveCwd(ctx, config, warn)
+      bridge = new AgentBridge({
+        ctx,
+        cwd,
+        progressAfterMs: config.progressAfterMs,
+        maxWaitMs: config.maxTurnWaitMs,
+        log,
+        errLog: warn,
+      })
+
+      // Voice transcription is opt-in and out of tree: with no bridge configured
+      // this stays undefined and voice notes are delivered as files, exactly as
+      // they were before ASR existed. The process is started lazily by the first
+      // voice message (model load costs seconds), so an unused install pays
+      // nothing for it.
+      const asrSettings = resolveAsrSettings(config, asrController?.modelDir)
+      asrBridge =
+        asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
+      if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)
+    })()
+
+    // Bring the loop up for the account that is on disk right now, replacing a
+    // transport that is already running. Called once when the plugin loads, and
+    // again every time the settings card completes a login: a fresh install has
+    // no credential at load time (the operator scans afterwards), and a re-bind
+    // replaces the previous token. Without the second call the loop stays down
+    // until the next reload — the "the phone says bound, but WeChat says it
+    // cannot reach openclaw" symptom.
+    const bringUpLoop = async () => {
+      await setup
+      if (cancelled) return
+
       const account = await resolveAccount(config, warn)
       if (account === undefined || cancelled) return
 
-      transport = new ILinkTransport({
+      const next = new ILinkTransport({
         accountId: account.accountId,
         baseUrl: account.baseUrl,
         token: account.token,
+        // getConfig answers {ret:-2,"ilink_user_id required"} when the id is
+        // empty, and the typing ticket it returns doubles as the fallback
+        // context token for replies that arrive without one — so the bound
+        // operator's id has to travel with the transport.
+        userId: account.userId,
         // Explicit configuration wins over the account record, which in turn
         // wins over the upstream default. The schema default is the empty
         // string precisely so "unset" stays distinguishable here: a real
@@ -228,29 +275,17 @@ export function apply(ctx, config) {
           )
         },
       })
-      const cwd = await resolveCwd(ctx, config, warn)
-      bridge = new AgentBridge({
-        ctx,
-        cwd,
-        progressAfterMs: config.progressAfterMs,
-        maxWaitMs: config.maxTurnWaitMs,
-        log,
-        errLog: warn,
-      })
-
-      // Voice transcription is opt-in and out of tree: with no bridge configured
-      // this stays undefined and voice notes are delivered as files, exactly as
-      // they were before ASR existed. The process is started lazily by the first
-      // voice message (model load costs seconds), so an unused install pays
-      // nothing for it.
-      const asrSettings = resolveAsrSettings(config, asrController?.modelDir)
-      asrBridge =
-        asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
-      if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)
+      // Nothing to do when the running loop already holds this credential: a
+      // repeat call must not blink the connection, and the first call after a
+      // login is the only one that has work to do.
+      if (transport !== undefined && transport.accountId === account.accountId && transport.token === account.token) {
+        log(`account ${account.accountId} is already being listened to; keeping the running loop`)
+        return
+      }
 
       // The typing ticket doubles as the fallback context token for replies
-      // that arrive without one; refreshing it once at startup is enough.
-      await transport.refreshConfig()
+      // that arrive without one; refreshing it once per loop start is enough.
+      await next.refreshConfig()
       if (cancelled) return
 
       // iLink can redeliver a message after a reconnect; the cache is bounded
@@ -258,7 +293,7 @@ export function apply(ctx, config) {
       const seen = new MessageDeduper()
       const handler = createInboundHandler({
         config,
-        transport,
+        transport: next,
         bridge,
         asrBridge,
         seen,
@@ -269,15 +304,55 @@ export function apply(ctx, config) {
         // the message, and re-resolving per reply would re-stat every directory.
         mediaDirs: allowedMediaDirs({ cwd, stateDir: stateRoot }),
       })
+
+      const previous = transport
+      transport = next
+      if (previous !== undefined) {
+        // Stop before start, never the other way round. The server hands each
+        // message to whichever poll asks first, so two live long-polls on one
+        // credential split the inbound queue between them instead of
+        // duplicating it — half the messages would land on a loop whose reply
+        // path is already being torn down.
+        await previous.stop().catch((error) => warn(`transport stop failed: ${String(error)}`))
+      }
       // The transport already isolates per-message failures, so no extra catch
       // here: an error must not be reported twice or swallowed twice.
-      await transport.start(handler)
+      await next.start(handler)
       log(`listening as account ${account.accountId} (state: ${stateRoot})`)
-    })()
+    }
+
+    // One hand-off at a time. A login can complete while the previous hand-off
+    // is still tearing its transport down, and interleaving them would leave two
+    // loops running or none.
+    const startLoop = () => {
+      const run = handoff.then(bringUpLoop, bringUpLoop)
+      handoff = run.then(
+        () => {},
+        () => {},
+      )
+      return run
+    }
+
+    // A completed login writes a credential this loop has not read yet. Coming
+    // up now is the whole difference between "scan, then reload DSH" and
+    // "scan" — the operator has already been told the phone shows bound, and
+    // WeChat is still saying it cannot reach openclaw.
+    const onAccountBound = () => {
+      startLoop().catch((error) => warn(`restart after login failed: ${String(error)}`))
+    }
+    if (loginController !== undefined) loginController.onAccountBound = onAccountBound
+
+    const started = startLoop()
 
     return async () => {
       cancelled = true
+      if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
+        // The controller outlives this effect when the card is left mounted, so
+        // the hook is cleared rather than left pointing at a dead loop.
+        loginController.onAccountBound = undefined
+      }
       await started.catch((error) => warn(`startup failed: ${String(error)}`))
+      await handoff.catch(() => {})
       await transport?.stop().catch((error) => warn(`transport stop failed: ${String(error)}`))
       // Before the agent bridge: a transcription in flight is failed through the
       // ASR disposer, so the inbound handler stops waiting on it promptly.

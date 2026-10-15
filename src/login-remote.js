@@ -87,6 +87,17 @@ export class WeixinLoginController extends TypertRemoteService {
     constructor(ctx, options = {}) {
         super(ctx, "weixinLoginController", { namespace: "weixin" });
         this.botType = options.botType ?? DEFAULT_BOT_TYPE;
+        /**
+         * Called after a login writes a new credential, so the host can start
+         * (or restart) the inbound loop without waiting for a reload. Assigned
+         * by the plugin's listen effect; undefined in the CLI and in tests.
+         *
+         * A PLAIN property, deliberately not a `#private` field: the gateway
+         * calls a Remote method on the traced Proxy it reads back from the
+         * Cordis context, and a Proxy does not forward private-field identity.
+         * @type {(() => void) | undefined}
+         */
+        this.onAccountBound = undefined;
     }
 
     /** Start (or resume) a QR login; returns {qrcodeUrl, qrDataUrl, sessionKey, status}. */
@@ -201,6 +212,17 @@ export class WeixinLoginController extends TypertRemoteService {
                 // A completed login writes a usable credential, so any expiry
                 // recorded from an earlier session no longer applies.
                 this.clearSessionExpired();
+                // The loop that is running belongs to the credential that was
+                // on disk when it started — which is the one this login just
+                // replaced, or nothing at all on a fresh install. Tell the host
+                // to bring it up for the credential that now exists: without
+                // this the operator binds successfully and WeChat still says it
+                // cannot reach openclaw until the next reload.
+                try {
+                    this.onAccountBound?.();
+                } catch (error) {
+                    logger.warn(`weixin login: onAccountBound failed: ${String(error)}`);
+                }
                 return {
                     status: "confirmed",
                     accountId: status.ilink_bot_id,
