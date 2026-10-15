@@ -152,10 +152,24 @@ export function apply(ctx, config) {
   // Kept in a variable because the poll loop reports a refused session back to
   // it (markSessionExpired), which is what lets the card say "log in again"
   // instead of showing a healthy-looking bound account that receives nothing.
+  //
+  // Constructing a Cordis `Service` IS the registration: the base class calls
+  // `ctx.reflect.provide(name, self, ...)` in its own constructor, so the
+  // instance is reachable on the context immediately and is disposed with the
+  // plugin's fiber. Do NOT also hand it to `ctx.plugin()` — a plugin must be a
+  // function or an object with `apply`, and a service instance is neither, so
+  // that call throws "invalid plugin, expect function or object with an "apply"
+  // method, received object".
+  //
+  // That throw used to sit inside these try blocks, where it was recorded as
+  // "settings login service unavailable" and the controller was set to
+  // `undefined`. Nothing looked broken — the poll loop started, the card
+  // rendered, a scan wrote a credential — but there was no controller left to
+  // hear "the login finished", so the inbound loop never moved to the new
+  // credential and WeChat kept reporting that it could not reach openclaw.
   let loginController
   try {
     loginController = new WeixinLoginController(ctx, {})
-    ctx.plugin(loginController)
   } catch (error) {
     warn(`settings login service unavailable: ${String(error)}`)
     loginController = undefined
@@ -165,12 +179,14 @@ export function apply(ctx, config) {
   // the one the process started with.
   let asrController
   try {
+    // Same as the login controller above: the Service constructor registers
+    // itself, and passing the instance to `ctx.plugin()` throws. That throw used
+    // to be swallowed here too, which silently disabled the whole ASR service.
     asrController = new AsrController(ctx, {
       modelDir: config.asr?.modelDir?.trim() || undefined,
       hfEndpoint: config.asr?.hfEndpoint?.trim() || undefined,
       hfProxy: config.asr?.hfProxy?.trim() || undefined,
     })
-    ctx.plugin(asrController)
   } catch (error) {
     warn(`settings ASR service unavailable: ${String(error)}`)
     asrController = undefined

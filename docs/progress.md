@@ -261,3 +261,76 @@ verifier 独立复核确认：新增的空白串回归测试**两条方向断言
 
 **当日结论**：本机侧的两条缺陷都已修复并验证。用户侧现在的状态是：**重启 DSH 一次**让新代码生效，
 此后扫码即可自动开始收消息，不再需要「扫码 → 重载 → 才通」。
+
+## 2026-10-15（续）— 扫码成功、循环也修好了，微信依旧说连不上（已修复）
+
+上一条修复上线并重启后，用户复现（其原话）：重启后扫码显示已登录，手机微信仍提示无法连接 openclaw
+（m01711）。
+
+**根因（第三条，与上一条相邻但独立）**：`ctx.plugin()` 被喂了一个 **Cordis Service 实例**。
+
+`src/index.js` 原先是这么接线的：
+
+```js
+loginController = new WeixinLoginController(ctx, {})
+ctx.plugin(loginController)   // ← 必然抛错
+```
+
+`Service` 的**构造函数本身**就完成了注册（基类在构造里调 `ctx.reflect.provide(name, self, ...)`），
+实例立刻能从 context 上取到。再把它交给 `ctx.plugin()` 则是错的：插件必须是函数、或带 `apply` 的对象，
+而 Service 实例两者都不是，于是真 Cordis 抛
+
+```
+invalid plugin, expect function or object with an "apply" method, received object
+```
+
+**为什么它一直没被发现**：这行抛错**恰好被紧随其后的 `try/catch` 吞掉**，只记一行
+`settings login service unavailable: ...`，然后把 `loginController` 置为 `undefined`。于是——
+
+- 循环起来了（上一条的修复有效）、卡片正常渲染、扫码也真的写出了凭证；
+- 但**没有任何控制器在听「登录已完成」这个事件**，`onAccountBound` 从未被回调，
+  入站循环不会切到新凭证 → 手机侧看到的仍然是「无法连接 openclaw」。
+
+`asrController` 是同一模式的第二个受害者（`:179` 附近的同一段 try），表现为**整个 ASR 服务静默失效**。
+
+**修复**
+
+| 位置 | 改动 |
+| --- | --- |
+| `src/index.js:168` | 删掉 `ctx.plugin(loginController)`；把「构造即注册、绝不可再传给 `ctx.plugin()`」写成长注释 |
+| `src/index.js:184` | 删掉 `ctx.plugin(asrController)`，同因 |
+| `test/host-wiring.test.js` | 新增 3 条接线测试（下详） |
+| `test/inbound-loop-start.test.js` | 补强：假 iLink 服务器现在**校验** `ilink_user_id`，缺了就答 `{ret:-2}`，让缺陷 2 可被断言 |
+| `README.md:120-137` | 「扫码成功后不需要重载 DSH」补一条排查顺序，把「卡片已绑定但微信说连不上」指向这一根因 |
+
+**实测证据**
+
+- **真 Cordis 探针**（临时 `probe-real-cordis.mjs`，`new Context()` + 假 iLink http server）：
+  修复前只打出一行 `settings login service unavailable`，`onAccountBound` 后**无任何** `listening as`
+  日志；删掉那行后，同一条探针在 `onAccountBound()` 后打印 `listening as account ...`。
+- **缺陷来源考古**：`git log --oneline -S "ctx.plugin(loginController)" -- src/index.js` 只命中
+  `68d047c fix(transport): treat a non-zero errcode as a failure`（2026-10-14 20:38）——即该行是
+  在那次「把接线塞进 try」的重构里被引入的，与登录/循环两条修复无关。
+
+**为什么旧测试没抓住（教训，已写进测试注释）**
+
+原 `makeCtx()` 把 `plugin(x)` 实现成「记录下来」而不是真跑。这是**假宿主**：真 Cordis 会在这里抛错，
+而假宿主照单全收，于是「抛错被 catch 吞掉」这条路径在测试里根本不存在。凡是包在 `try/catch` 里的接线，
+其测试替身都必须复现**真实宿主会抛错的那一面**。`test/host-wiring.test.js` 因此改为让 `plugin()`
+抛真 Cordis 的那条错误，并断言：
+
+1. `plugin(<Service 实例>)` 抛 `invalid plugin, expect function or object with an "apply" method`；
+2. 该错误**不得**出现在 `settings login service unavailable` 里（即控制器没被击落）；
+3. 登录完成后 `onAccountBound()` 仍被触发。
+
+**辨别力实测**：把两行 `ctx.plugin(...)` 加回去（`git stash` 恢复旧 `src/index.js`）→ `host-wiring` **3/3 fail**；
+删掉后 3/3 pass。
+
+**验证**
+
+- `node --check src/index.js` 通过；全量 `node --test "test/**/*.test.js"` →
+  **tests 185 / pass 185 / fail 0 / duration 9493ms**（原 182，新增 host-wiring 3 条）。
+- 退出登录 → 重扫码 → 连接可用的端到端 canary 已走完（承接上一条的 canary，本机侧全链路可用）。
+
+**遗留**：`README.md` 的 ASR 一节仍按「服务在设置页可用」描述；本次修复顺带把它修好了，
+但**未做**针对 ASR 的独立验证（只断言了控制器不被击落）。

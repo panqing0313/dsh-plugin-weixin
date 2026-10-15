@@ -147,54 +147,68 @@ function seedAccount(root, { accountId = ACCOUNT_ID, token = 'tok-1', baseUrl })
 /**
  * The fake host the plugin is applied to.
  *
- * `plugin()` is recorded rather than run: this harness is not a Cordis tree, and
- * the only thing the wiring under test needs is that mounting the login service
- * succeeds and the instance can be reached — losing it to the surrounding
- * try/catch is exactly what would leave the hook unwired.
+ * Two details are load-bearing, because both are places where the real host
+ * silently disabled the wiring this file exists to protect:
+ *
+ *  - `reflect.provide` is how a Cordis `Service` registers itself in its own
+ *    constructor. That is the whole registration, so this harness records the
+ *    instances there and never treats `plugin()` as the mount point.
+ *  - `plugin()` must reject what the real one rejects. Cordis accepts only a
+ *    function or an object with `apply`, so handing it a service instance throws
+ *    "invalid plugin ... received object". This harness used to just record the
+ *    instance, which is exactly why the shipped bug survived the suite: the
+ *    plugin wrapped that call in a try/catch, swallowed the throw, and dropped
+ *    the login controller on the floor.
  */
 function makeCtx() {
   const disposers = []
   const lines = []
   const plugins = []
+  const provided = []
   const ctx = {
     logger: { info: (line) => lines.push(line), warn: (line) => lines.push(line) },
     effect(fn) {
       disposers.push(fn())
       return { dispose() {} }
     },
-    // The Cordis `Service` base registers itself through `ctx.reflect.provide`,
-    // so a host stub without it makes the login controller throw — and the
-    // surrounding try/catch would then hide exactly the wiring under test.
-    reflect: { provide: () => () => {} },
+    reflect: {
+      provide(name, self) {
+        provided.push({ name, self })
+        return () => {}
+      },
+    },
     plugin(instance) {
+      if (typeof instance !== 'function' && typeof instance?.apply !== 'function') {
+        throw new Error(`invalid plugin, expect function or object with an "apply" method, received ${typeof instance}`)
+      }
       plugins.push(instance)
       return instance
     },
     get: (name) => (name === 'agents' ? { get: () => undefined, resume: async () => ({ agent: {}, dispose: async () => {} }) } : undefined),
   }
-  return { ctx, disposers, lines, plugins }
+  return { ctx, disposers, lines, plugins, provided }
 }
 
 /** The mounted login service; identified by what it does, not by its name. */
-function loginService(plugins) {
-  return plugins.find((instance) => typeof instance.startLogin === 'function')
+function loginService(provided) {
+  return provided.find((entry) => typeof entry.self?.startLogin === 'function')?.self
 }
 
 /**
  * Apply the plugin against a fake host and a throwaway state root, run `body`,
  * then dispose the plugin exactly as the host would.
- * @param {(helpers: {root: string, lines: string[], plugins: object[], server: object}) => Promise<void>} body
+ * @param {(helpers: {root: string, lines: string[], provided: object[], server: object}) => Promise<void>} body
  */
 async function withPlugin(body) {
   const root = withStateRoot()
   const previousStateDir = process.env.DSH_WEIXIN_STATE_DIR
   process.env.DSH_WEIXIN_STATE_DIR = root
   const { server, baseUrl, seen } = await startFakeILink()
-  const { ctx, disposers, lines, plugins } = makeCtx()
+  const { ctx, disposers, lines, plugins, provided } = makeCtx()
   const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
   try {
     plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED] }))
-    await body({ root, lines, plugins, seen, baseUrl })
+    await body({ root, lines, plugins, provided, seen, baseUrl })
   } finally {
     for (const disposer of disposers) await (await disposer)?.()
     await closeServer(server)
@@ -204,7 +218,7 @@ async function withPlugin(body) {
 }
 
 test('a credential saved after load starts the inbound loop without a reload', async () => {
-  await withPlugin(async ({ root, lines, plugins, seen, baseUrl }) => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl }) => {
     // The fresh-install state: the plugin loads before the operator scans.
     await settle()
     assert.equal(seen.getupdates, 0, 'with no credential on disk nothing may poll — there is no token to poll with')
@@ -212,8 +226,12 @@ test('a credential saved after load starts the inbound loop without a reload', a
       lines.some((line) => /no Weixin account is saved/.test(line)),
       'the reason must be in the log, not just implied by silence',
     )
+    assert.ok(
+      !lines.some((line) => /settings login service unavailable/.test(line)),
+      'mounting the login service must not fail — that warning means the instance was dropped and its hook never wired',
+    )
 
-    const controller = loginService(plugins)
+    const controller = loginService(provided)
     assert.ok(controller, 'the login service must be mounted, or a finished scan has nothing to report to')
 
     // The operator scans; the credential lands on disk.
@@ -228,7 +246,7 @@ test('a credential saved after load starts the inbound loop without a reload', a
 })
 
 test('a re-bind moves the running loop to the new credential', async () => {
-  await withPlugin(async ({ root, lines, plugins, seen, baseUrl }) => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl }) => {
     seedAccount(root, { baseUrl })
     await waitFor(() => seen.getupdates > 0, 'the loop to start for the credential present at load')
 
@@ -237,7 +255,7 @@ test('a re-bind moves the running loop to the new credential', async () => {
     const second = await startFakeILink()
     try {
       seedAccount(root, { baseUrl: second.baseUrl, token: 'tok-2' })
-      loginService(plugins).onAccountBound()
+      loginService(provided).onAccountBound()
       await waitFor(() => second.seen.getupdates > 0, 'the loop to come up on the new credential')
 
       const settled = seen.getupdates
@@ -259,14 +277,14 @@ test('a re-bind moves the running loop to the new credential', async () => {
 })
 
 test('the same credential twice does not blink the connection', async () => {
-  await withPlugin(async ({ root, lines, plugins, seen, baseUrl }) => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl }) => {
     seedAccount(root, { baseUrl })
     await waitFor(() => seen.getupdates > 0, 'the loop to start')
     const before = seen.getupdates
 
     // A re-scan that lands on the same credential is the common case when the
     // server hands back what it already gave out.
-    loginService(plugins).onAccountBound()
+    loginService(provided).onAccountBound()
     await settle()
 
     assert.ok(

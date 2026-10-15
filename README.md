@@ -117,11 +117,14 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 是**无法启动**的。设置页扫码成功后，登录会通知宿主立刻为**刚写入的凭证**把这条循环拉起来，
 所以「扫码 → 重载 DSH → 才通」这个多余步骤已经没有了。
 
-如果手机微信仍提示「暂时无法连接 openclaw」，按顺序看三处：
+如果手机微信仍提示「暂时无法连接 openclaw」，按顺序看四处：
 
 1. 插件日志里有没有 `listening as account <id>`——没有就是循环没起来；
-2. 有没有 `no Weixin account is saved`（凭证不在）或 `is already being listened to`（重复触发，正常）；
-3. 凭证是否被服务端拒绝：`getUpdates errcode=-14` 表示登录已过期，需要重新扫码。
+2. 有没有 `settings login service unavailable`——有就说明登录服务没装上，扫码**能**成功、
+   凭证**会**写盘，但没有任何人在听「登录已完成」，循环不会切到新凭证（历史上这一行曾把
+   `ctx.plugin()` 的误用吞掉，症状与「循环没起来」完全相同）；
+3. 有没有 `no Weixin account is saved`（凭证不在）或 `is already being listened to`（重复触发，正常）；
+4. 凭证是否被服务端拒绝：`getUpdates errcode=-14` 表示登录已过期，需要重新扫码。
 
 换绑到新机器人（token 变了）时，插件会**先停掉旧的长轮询再启动新的**：同一凭证上跑两条长轮询会让
 服务端把入站消息**分摊**给两条循环，而不是各收一份。
