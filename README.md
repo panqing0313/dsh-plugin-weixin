@@ -51,6 +51,8 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
+当前已发布版本：[`dsh-plugin-weixin@0.1.0`](https://www.npmjs.com/package/dsh-plugin-weixin)（2026-10-15 首发，含扫码轮询、登录后自动起循环、allowlist 合并、归档会话自动恢复等全部修复）。
+
 ### 方式二：从源码安装
 
 ```bash
