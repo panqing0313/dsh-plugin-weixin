@@ -24,6 +24,11 @@ login-qr.png
 *.tgz
 scratch/
 
-# local ASR service (Python venv + model cache + server script) lives outside
-# this repo on purpose: the model is ~670MB and platform-specific.
+# A hand-written ASR service still lives outside this repo: people were expected
+# to bring their own before `bin/asr-bridge.py` shipped. The name stays ignored
+# so an existing personal service cannot be committed by accident.
 asr-server.py
+
+# Python bytecode from bin/asr-bridge.py (never shipped)
+__pycache__/
+*.pyc

@@ -59,6 +59,7 @@ M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账�
 - **对话体验**：忙时消息排队/插话（`busyMessageMode`、`/steer`）；超时不再丢答案（先告知、后补发，context_token 一次性约束下用 `refreshConfig()` 取新 ticket）。
 - **Agent 语境**：可选 `sourceContext` 在 prompt 前附 `<weixin_source …/>` 来源块。
 - **设置 UI**：真 tablist + 下载设置原子保存（暂存→保存/还原条）；同一设置卡同时挂在插件页与宿主 Settings 导航（`settings.section`，order 22）。
+- **语音识别开箱可用**：仓库自带 `bin/asr-bridge.py`（双引擎：Apple Silicon 走 mlx-whisper GPU，其它平台走 faster-whisper CPU），用户下载插件后只需 `pip install` 一个引擎、在设置页点一次下载，不再需要自己写服务端。实测热调用 0.29s（mlx/GPU）对 5.3s（Rosetta CPU），中文默认出简体，非语音返回空而不是编造。
 - **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 的依赖钉在 tarball 上，发版须同步更新 package.json/package-lock.json/pnpm-lock.yaml 三处。
 
 ### 候选后续

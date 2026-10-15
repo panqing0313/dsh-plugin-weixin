@@ -797,7 +797,11 @@ window.__ModuleLoader__.load({
 			const [models, setModels] = react.useState([]);
 			const [modelDir, setModelDir] = react.useState("");
 			const [dirInput, setDirInput] = react.useState("");
-			const [repo, setRepo] = react.useState("mlx-community/whisper-small-mlx");
+			// The download format must match the engine that will load it: mlx
+			// weights only run on Apple silicon, CTranslate2 weights run anywhere.
+			// Guessing wrong costs the user a 460MB download, so the default
+			// follows the machine the GUI is running on.
+			const [repo, setRepo] = react.useState(defaultAsrRepo());
 			const [dlStatus, setDlStatus] = react.useState({});
 			const [busy, setBusy] = react.useState(false);
 			const [savingDir, setSavingDir] = react.useState(false);
@@ -1273,11 +1277,24 @@ window.__ModuleLoader__.load({
 						: null,
 					createElement("p", { style: captionStyle },
 						t(
-							"Select the downloaded model in the plugin settings under Voice → model.",
-							"下载完成后，在插件设置的「语音 → model」里选择该模型。",
+							"Downloaded models are picked up automatically by bin/asr-bridge.py — no further selection needed.",
+							"下载后 bin/asr-bridge.py 会自动找到它，不需要再手动选择。",
 						))),
 				//#endregion download
 			);
+		}
+
+		/**
+		 * The model repo to preselect in the download box.
+		 *
+		 * `navigator.userAgent` reports the platform this GUI is running on, which
+		 * is the machine that will also run the bridge.
+		 */
+		function defaultAsrRepo() {
+			const ua = typeof navigator === "object" && navigator !== null ? String(navigator.userAgent ?? "") : "";
+			// An Apple silicon browser is the only case where mlx weights are
+			// loadable; everywhere else the CTranslate2 build is the right default.
+			return /Mac/.test(ua) ? "mlx-community/whisper-small-mlx" : "Systran/faster-whisper-small";
 		}
 
 		// react.createElement binding (JSX-free)

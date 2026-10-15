@@ -78,9 +78,13 @@ export class AsrError extends Error {
  * @param {string} [modelDir]  Runtime model directory (settings UI), which
  *   overrides the configured one. Lets the bridge resolve a model downloaded
  *   into a custom directory without editing the config file.
- * @returns {{ command: string, args: string[], env: Record<string, string>, timeoutMs: number } | undefined}
+ * @param {string} [packageDir]  Directory the plugin itself was loaded from.
+ *   Used as the child's cwd when no explicit `asr.cwd` is configured, so a
+ *   bridge path written relative to the package (e.g. `bin/asr-bridge.py`)
+ *   resolves no matter where the DSH host was started.
+ * @returns {{ command: string, args: string[], env: Record<string, string>, cwd?: string, timeoutMs: number } | undefined}
  */
-export function resolveAsrSettings(config, modelDir) {
+export function resolveAsrSettings(config, modelDir, packageDir) {
   const settings = config?.asr
   if (settings === undefined || settings === null || settings.enabled === false) return undefined
   const command = typeof settings.command === 'string' ? settings.command.trim() : ''
@@ -113,7 +117,9 @@ export function resolveAsrSettings(config, modelDir) {
     if (env.HF_HOME === undefined) env.HF_HOME = chosenDir
     if (env[ENV_MODEL] === undefined) env[ENV_MODEL] = chosenDir
   }
-  return { command, args, env, timeoutMs }
+  const configuredCwd = typeof settings.cwd === 'string' ? settings.cwd.trim() : ''
+  const cwd = configuredCwd !== '' ? configuredCwd : (typeof packageDir === 'string' && packageDir.trim() !== '' ? packageDir.trim() : undefined)
+  return { command, args, env, timeoutMs, ...(cwd === undefined ? {} : { cwd }) }
 }
 
 /**
@@ -206,12 +212,17 @@ export class AsrBridge {
    */
   #ensureChild() {
     if (this.child !== undefined && this.child.exitCode === null && !this.child.killed) return this.child
-    const { command, args, env } = this.settings
+    const { command, args, env, cwd } = this.settings
     const child = this.spawnImpl(command, args, {
       // The bridge's own logs are diagnostics, not protocol: stdout carries the
       // JSON responses and must never be polluted by a stray print.
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
+      // Set when the command is one of the bridges shipped inside this plugin:
+      // those are often *paths* resolved relative to the package root, and a
+      // bare relative path is meaningless from whatever directory DSH happens
+      // to have been started in.
+      ...(cwd === undefined ? {} : { cwd }),
     })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')

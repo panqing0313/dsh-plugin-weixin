@@ -18,6 +18,8 @@
  * @module dsh-weixin
  */
 import z from '@deepseek-ai/schemastery'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -44,6 +46,16 @@ import {
 } from './media/inbound.js'
 
 export const name = 'dsh-weixin'
+
+/**
+ * Directory this file was loaded from — the plugin package root (one level
+ * above `src/`), in the repository, in a profile install, and in an npm install
+ * alike. The shipped ASR bridge lives at `<root>/bin/asr-bridge.py`, and the
+ * operator is invited to point `asr.args` at that path; using this as the
+ * child's cwd makes a *relative* bridge path work too, regardless of the
+ * directory the DSH host happened to be started in.
+ */
+const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * `agents` is required: without it there is no session to drive, so the plugin
@@ -241,7 +253,7 @@ export function apply(ctx, config) {
       // they were before ASR existed. The process is started lazily by the first
       // voice message (model load costs seconds), so an unused install pays
       // nothing for it.
-      const asrSettings = resolveAsrSettings(config, asrController?.modelDir)
+      const asrSettings = resolveAsrSettings(config, asrController?.modelDir, PLUGIN_ROOT)
       asrBridge =
         asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
       if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)

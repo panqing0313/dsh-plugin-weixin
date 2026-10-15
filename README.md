@@ -195,13 +195,55 @@ stdin 每行一个 `{"wav":"/绝对路径.wav"}`，stdout 每行一个 `{"ok":tr
 ```yaml
 asr:
   enabled: true
-  command: /path/to/your/venv/bin/python3      # 你自己的 Python 环境
-  args: [/path/to/your/asr-server.py]          # 一个按行收发 JSON 的转写服务
+  command: python3
+  args: [bin/asr-bridge.py]                    # 仓库自带的桥（相对路径按插件目录解析）
   timeoutMs: 60000
   modelDir: /path/to/models                    # 模型目录（设置页里也能改，见下）
   env:
-    HF_HOME: /path/to/your/model-cache         # 模型缓存放哪（可能很大）
+    DSH_WEIXIN_ASR_LANGUAGE: zh                # 固定语言；不填则自动检测
 ```
+
+### 仓库自带一个桥：`bin/asr-bridge.py`
+
+不想自己写桥的话，直接用仓库里这个。它实现了上面那份行协议，并自动在两个引擎里挑一个：
+
+| 引擎 | 何时生效 | 安装 | 热调用实测 |
+| --- | --- | --- | --- |
+| **mlx-whisper** | 能 import 时优先（Apple Silicon） | `pip install mlx-whisper` | **0.29s**（3.7s 音频，M4 GPU） |
+| **faster-whisper** | 其它平台 / 没有 mlx 时 | `pip install faster-whisper` | 5.3s（同一段音频，Rosetta CPU） |
+
+两者都支持，是因为它们在真实机器上的差距很大：同一台 M4 上，mlx 走 GPU 比 x86_64 Python 走 CPU
+快 **18 倍**。桥自己挑，用户不需要关心。
+
+模型下载走设置页的「语音模型」区块（它按你选的镜像源下载）。**下载完就能直接用**：桥发现
+`<模型目录>/mlx-community__whisper-small-mlx`（或 `Systran__faster-whisper-small`）存在时就从磁盘
+加载，不发任何网络请求。这一点是刻意的——`huggingface_hub` 的元数据探测（一次到 CDN 重定向的
+HEAD 请求）在某些镜像上会以 SSL EOF 失败，而普通 GET 正常；从磁盘加载完全绕开这一步。
+
+安装（按你的机器选一个）：
+
+```bash
+pip install mlx-whisper        # Apple Silicon，走 GPU
+pip install faster-whisper     # 其它平台，走 CPU
+```
+
+然后照上面的 YAML 配 `command` + `args` 即可。环境变量（都可选）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `DSH_WEIXIN_ASR_MODEL` | 尺寸：`tiny`/`base`/`small`/`medium`/`large-v3`（默认 `small`） |
+| `DSH_WEIXIN_ASR_LANGUAGE` | 固定语言（如 `zh`）；不填则自动检测 |
+| `DSH_WEIXIN_ASR_MODEL_DIR` | 模型目录（默认 `~/.dsh/weixin/asr-models`） |
+| `DSH_WEIXIN_ASR_MODEL_PATH` | 直接指定模型目录或 repo，优先级最高 |
+| `DSH_WEIXIN_ASR_PROMPT` | 初始提示词，默认一句普通话样本（见下） |
+| `HF_ENDPOINT` | 直连不通时设为 `https://hf-mirror.com` |
+
+**为什么要给初始提示词**：whisper 对中文会输出**繁体**。默认提示词是一句普通的普通话样本，
+把输出钉在简体上——这是实测出来的（`今天天氣不錯` → `今天天气不错`），不是猜的。
+
+**为什么非语音会返回空**：纯音调/静音会让 whisper 编出内容（测试中出现过 `字幕by索兰娅` 这种
+字幕署名）。桥会识别「整段都没有语音」，返回空字符串——空是诚实的答案，插件会转成「没听清」，
+而不是把编出来的词当成用户说的话。
 
 ### 模型目录可以自定义
 
@@ -216,13 +258,12 @@ asr:
   手写过的值不会被界面覆盖。
 
 
-**本仓库不含 ASR 服务端。** 插件只带客户端：它按上表调用你的 `command`，把 WAV 路径写进 stdin，
-从 stdout 逐行读 JSON 响应。服务端要自己提供（约 30 行 Python），任何能完成
-「读一行 `{"audio_path": "..."}` → 写一行 `{"ok": true, "text": "..."}`」的进程都可以，
-模型可以用 `mlx-whisper` / `faster-whisper` / 云端 API——插件不关心。
+**桥是可选的，也可以自己写。** 插件只依赖上面那份行协议：它调用你的 `command`，把 WAV 路径写进
+stdin，从 stdout 逐行读 JSON。任何满足「读一行 `{"wav": "..."}` → 写一行
+`{"ok": true, "text": "..."}`」的进程都行，模型可以是 `whisper.cpp`、云端 API、或任何别的——
+插件不关心。仓库自带的 `bin/asr-bridge.py` 只是把最常见的那条路铺好。
 
-之所以不内置：模型约 670MB，且 Apple Silicon 上的最优方案（MLX）不跨平台。把它塞进仓库会让
-绝大多数用户下载几百 MB 却用不上。默认 `asr.enabled: false`，不配就完全没有这条链路。
+默认 `asr.enabled: false`，不配就完全没有这条链路。
 
 `command` 为空即关闭识别，语音只作为文件交付。三条降级互不影响，Agent 收到的说明能区分
 「没装转码模块」「转码了但桥失败」「识别出来但是空的」：

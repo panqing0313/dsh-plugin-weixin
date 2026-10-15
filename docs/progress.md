@@ -552,3 +552,52 @@ SHA-256 check, independent commit:
   conflict-free but awaits a maintainer merge; the dsh-market search reads
   the generated `dsh-plugin-catalog` package, which only refreshes after
   merge. A polite ping comment was left on the PR.
+
+## 2026-10-16 — 自带 ASR 桥：语音识别不再要求用户自己写服务端
+
+**背景**：此前 README 明确写「本仓库不含 ASR 服务端」，用户必须自己写一个行协议子进程才能把语音
+变成文字。用户要求把这部分做进插件里，方便别人下载后直接用（m05803）。
+
+**新增 `bin/asr-bridge.py`**（随 npm `files` 与安装器 `COPY_ENTRIES` 一起分发）：
+
+- 实现既有的行协议（stdin `{"wav":"…"}` → stdout `{"ok":true,"text":"…"}`）；
+- **双引擎**：优先 `mlx-whisper`（Apple Silicon GPU），否则 `faster-whisper`（CPU，跨平台）。
+  引擎各自的模型格式不同（`weights.npz` vs `model.bin`），所以候选目录按引擎分别列举——
+  实测把 CTranslate2 目录喂给 mlx 会在转写时抛 `expected str, bytes or os.PathLike object,
+  not NoneType`；
+- **从磁盘离线加载**：设置页下载的模型直接可用，不发网络请求。这一条是刻意的——
+  `huggingface_hub` 的元数据探测（到 CDN 重定向的 HEAD）在 hf-mirror 上以
+  `SSLEOFError: UNEXPECTED_EOF_WHILE_READING` 失败，而同一个 URL 的普通 GET 正常
+  （curl 实测 483MB/17s）。绕开元数据探测比修镜像可靠；
+- **简体输出**：whisper 对中文默认输出繁体。默认初始提示词是一句普通话样本，
+  实测把 `今天天氣不錯` 变成 `今天天气不错`；
+- **非语音返回空**：纯音调会让 whisper 编内容（实测出现 `字幕by索兰娅` 这种字幕署名）。
+  mlx 路径用 `no_speech_threshold` + 逐段 `no_speech_prob` 判定，faster 路径用 `vad_filter`。
+  空是诚实答案，插件会转成「没听清」；
+- **stdout 纯净**：CTranslate2 加载时从 native 层往 fd 1 打 MKL 弃用横幅，Python 层拦不住，
+  所以在那段窗口把 fd 1 指向 fd 2；mlx 的 tqdm 进度条用 no-op 的上下文管理器替掉
+  （直接返回 `None` 会崩在 `with tqdm.tqdm(...)`）；
+- **错误截断**：ffmpeg 解码失败会把整段构建信息塞进异常（数百行），截到首行 300 字符。
+
+**插件侧**：`resolveAsrSettings` 增加 `cwd`（默认插件包目录）——`args: [bin/asr-bridge.py]`
+是相对路径，不设 cwd 就会按宿主启动目录解析。`#ensureChild` 把它传给 `spawn`。
+
+**实测数据**（M4，3.7s 音频，whisper-small）：
+
+| 路径 | 热调用 | 说明 |
+| --- | --- | --- |
+| mlx-whisper（arm64 env，GPU） | **0.29s** | 快 18 倍 |
+| faster-whisper（x86_64 conda，Rosetta CPU） | 5.3s | 慢，但任何平台都能跑 |
+
+Rosetta 那一档是本机环境造成的（conda 是 x86_64 构建），不是代码问题；桥本身只是两个引擎都支持。
+
+**踩到的环境坑**（都不是本仓库的 bug，但会让用户以为桥坏了）：
+
+- `mlx` 0.32.1 的 wheel 缺少 `mlx.metallib`，任何矩阵运算都抛
+  `Failed to load the default metallib`；`--force-reinstall` 到 0.32.4 解决；
+- `DSH_WEIXIN_ASR_MODEL` 被 `resolveAsrSettings` 写成**模型根目录**（设置页逻辑），
+  而手写配置时它是**尺寸名**（`small`）。桥现在两者都认：值是已存在目录就当根目录。
+
+**测试**：`test/asr.test.js` 24 条（+5）。新增覆盖 `cwd` 解析与实际 spawn 目录、
+自带桥真的存在且可执行、协议三种非法输入、stdout 每行都是 JSON、以及平台默认 repo
+不能硬编码 mlx。全量 **203 pass**。

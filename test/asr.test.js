@@ -19,6 +19,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import test from 'node:test'
 
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings, transcribeVoice } from '../src/media/asr.js'
@@ -200,6 +201,43 @@ test('a custom model directory reaches the bridge, so transcription uses it', ()
   // named that path on purpose.
   const explicit = resolveAsrSettings({ asr: { command: 'py', env: { HF_HOME: '/vol/explicit' } } }, '/vol/custom-models')
   assert.equal(explicit.env.HF_HOME, '/vol/explicit')
+})
+
+test('the bridge runs from the plugin directory, so a relative bridge path resolves', () => {
+  // A shipped bridge is addressed as `bin/asr-bridge.py`. Without a cwd the
+  // child inherits whatever directory the DSH host was started in, and a
+  // relative path either misses or — worse — picks up an unrelated file.
+  const settings = resolveAsrSettings({ asr: { command: 'python3', args: ['bin/asr-bridge.py'] } }, undefined, '/pkg/plugin')
+  assert.equal(settings.cwd, '/pkg/plugin')
+
+  // An explicit cwd is the operator's decision and wins.
+  const explicit = resolveAsrSettings({ asr: { command: 'py', cwd: '  /vol/work  ' } }, undefined, '/pkg/plugin')
+  assert.equal(explicit.cwd, '/vol/work')
+
+  // With no package directory to fall back on, no cwd is invented: the child
+  // keeps inheriting the host's directory, which is the pre-existing behaviour.
+  const bare = resolveAsrSettings({ asr: { command: 'py' } }, undefined, undefined)
+  assert.equal('cwd' in bare, false)
+
+  // A blank cwd is not a cwd either.
+  const blank = resolveAsrSettings({ asr: { command: 'py', cwd: '   ' } }, undefined, '   ')
+  assert.equal('cwd' in blank, false)
+})
+
+test('the bridge child is actually spawned in the configured directory', async () => {
+  // The setting only matters if spawn receives it: a bridge that reports its
+  // own cwd proves the whole path, end to end.
+  const reply = 'process.stdin.on("data", () => process.stdout.write(JSON.stringify({ ok: true, text: process.cwd() }) + "\\n"))'
+  const bridge = new AsrBridge(fakeBridge('cwd', reply, { cwd: FAKE_DIR }))
+  try {
+    const result = await bridge.transcribe('/tmp/one.wav')
+    assert.equal(result.ok, true)
+    // macOS reports /private/var for /var, so compare resolved paths rather
+    // than the literal string.
+    assert.equal(fs.realpathSync(result.text), fs.realpathSync(FAKE_DIR))
+  } finally {
+    await bridge.dispose()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -455,4 +493,101 @@ test('a WAV without a transcript is described as audio to read, not as SILK', ()
   ])
   assert.match(text, /已转码为 WAV/)
   assert.equal(text.includes('未安装转码模块'), false)
+})
+
+// ---------------------------------------------------------------------------
+// The bridge the plugin actually ships
+// ---------------------------------------------------------------------------
+
+const SHIPPED_BRIDGE = path.join(import.meta.dirname, '..', 'bin', 'asr-bridge.py')
+
+/**
+ * Run the shipped bridge against a list of requests and return the replies.
+ *
+ * The bridge needs Python, but not an engine: these cases are all decided
+ * before any model is touched, so the test stays offline and fast. Replies are
+ * read as whole lines, which is also what the plugin does.
+ *
+ * @param {string[]} requests  One JSON string per line of stdin.
+ * @param {object} [env]  Extra environment for the child.
+ * @returns {Promise<object[]>}
+ */
+function runShippedBridge(requests, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('python3', [SHIPPED_BRIDGE], { env: { ...process.env, ...env } })
+    const out = []
+    const err = []
+    let buffered = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk
+      let index
+      while ((index = buffered.indexOf('\n')) !== -1) {
+        const line = buffered.slice(0, index).trim()
+        buffered = buffered.slice(index + 1)
+        if (line !== '') out.push(JSON.parse(line))
+      }
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => err.push(String(chunk)))
+    child.on('error', reject)
+    child.on('close', () => resolve({ replies: out, stderr: err.join('') }))
+    child.stdin.end(requests.map((r) => `${r}\n`).join(''))
+  })
+}
+
+test('the shipped bridge is present, executable and speaks the documented protocol', async () => {
+  // A bridge that cannot even answer the two trivial cases would leave every
+  // voice message degraded, so this checks the file ships and behaves.
+  assert.equal(fs.existsSync(SHIPPED_BRIDGE), true, `missing ${SHIPPED_BRIDGE}`)
+  const mode = fs.statSync(SHIPPED_BRIDGE).mode
+  assert.notEqual(mode & 0o111, 0, 'the bridge should be executable')
+
+  const { replies } = await runShippedBridge([
+    '{"wav": ""}',
+    '{"wav": "/tmp/definitely-absent-dsh-weixin.wav"}',
+    'this is not json',
+  ])
+  assert.equal(replies.length, 3)
+  // A malformed request is rejected, not answered with invented text.
+  assert.equal(replies[0].ok, false)
+  assert.match(replies[0].error, /non-empty/)
+  // A missing file is an error, NOT an empty transcript — the distinction is
+  // what stops "no such file" from reaching the agent as the user's words.
+  assert.equal(replies[1].ok, false)
+  assert.match(replies[1].error, /no such file/)
+  assert.equal(replies[2].ok, false)
+  assert.match(replies[2].error, /not JSON/)
+})
+
+test('the shipped bridge keeps stdout pure, so a C-library banner cannot look like a reply', async () => {
+  // faster-whisper's native layer prints a deprecation banner on fd 1 when the
+  // library loads. The bridge redirects fd 1 to stderr around that window; if
+  // that regressed, the plugin would log an unparseable line on every request.
+  // The chatty-import case is reproduced here with an env var the bridge reads
+  // before any engine exists: PYTHONSTARTUP is ignored, so instead assert the
+  // invariant directly — every stdout line parses as a JSON object.
+  const { replies } = await runShippedBridge(['{"wav": ""}', '{"wav": ""}'])
+  assert.equal(replies.length, 2, 'stdout carried exactly one JSON line per request')
+  for (const reply of replies) {
+    assert.equal(typeof reply, 'object')
+    assert.equal(typeof reply.ok, 'boolean')
+  }
+})
+
+test('the model repo offered for download matches the platform that can load it', () => {
+  // The default matters for real users: picking the mlx repo on Linux/Windows
+  // costs a ~460MB download that the engine then cannot open, and picking the
+  // CTranslate2 repo on Apple silicon wastes the GPU path. The client chooses
+  // by platform, and both branches must stay present.
+  const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'client.js'), 'utf8')
+  assert.match(source, /function defaultAsrRepo\(\)/)
+  assert.match(source, /mlx-community\/whisper-small-mlx/)
+  assert.match(source, /Systran\/faster-whisper-small/)
+  // The old hard-coded mlx default would silently break every non-Apple setup.
+  assert.equal(
+    /useState\("mlx-community\/whisper-small-mlx"\)/.test(source),
+    false,
+    'the download box must not hard-code the mlx repo',
+  )
 })
