@@ -29,6 +29,11 @@ import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES } from 
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
+// The vendored logger is the only channel guaranteed to land on disk at INFO:
+// ctx.logger can drop levels depending on the host's exporter config, and a
+// refusal that leaves no trace turns an allowlist mismatch into "the bot just
+// ignores me" with nothing to grep afterwards.
+import { logger as vendorLogger } from '../vendor/openclaw-weixin/util/logger.js'
 import {
   DEFAULT_CDN_BASE_URL,
   DEFAULT_MAX_INBOUND_MEDIA_BYTES,
@@ -133,6 +138,7 @@ export function apply(ctx, config) {
   const stateRoot = configureWeixinStateDir()
   const log = (line) => ctx.logger?.info?.(`dsh-weixin: ${line}`)
   const warn = (line) => ctx.logger?.warn?.(`dsh-weixin: ${line}`)
+  const fileLog = vendorLogger.withAccount('dsh-weixin')
 
   // Settings the operator saved through the UI live beside the credentials, so
   // they survive a reinstall of the package. They fill in what the composition
@@ -315,6 +321,7 @@ export function apply(ctx, config) {
         seen,
         log,
         warn,
+        fileLog,
         stateRoot,
         // Resolved once: the allowlist is a property of the deployment, not of
         // the message, and re-resolving per reply would re-stat every directory.
@@ -489,7 +496,7 @@ async function resolveAccount(config, warn) {
  * @param {string} params.stateRoot  Weixin state root, for the media allowlist.
  * @param {string[]} params.mediaDirs  Directories a reply may reference.
  */
-function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, stateRoot, mediaDirs }) {
+function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs }) {
   return async (message) => {
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
@@ -509,6 +516,15 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
     //    able to make this host issue requests to Tencent's CDN, so nothing
     //    below this point may run for a denied message.
     if (!isAllowedSender(config, message.senderId, message.conversationId)) {
+      // Log the refusal to the file logger too, with the full allowlist: the
+      // rebind flow generates a fresh sender id per bot, so the most common
+      // refusal is a stale allowedSenders entry, and this line is both the
+      // diagnosis and the exact value the operator needs to paste into config.
+      fileLog.info(
+        `refused message from ${message.senderId} (conversation ${message.conversationId}): ` +
+          `${denialReason(config, message.senderId, message.conversationId)}; ` +
+          `allowedSenders=${JSON.stringify(config.allowedSenders ?? [])}`,
+      )
       warn(`refused message from ${message.senderId}: ${denialReason(config, message.senderId, message.conversationId)}`)
       return
     }
@@ -516,6 +532,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
     // 3. Dedupe: iLink can redeliver a message after a reconnect.
     if (!seen.accept(message.id)) {
       log(`skipping duplicate message ${message.id}`)
+      fileLog.info(`skipping duplicate message ${message.id} from ${message.senderId}`)
       return
     }
 
@@ -584,6 +601,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
         },
       })
       log(`turn settled in ${Date.now() - startedAt}ms for ${message.conversationId}`)
+      fileLog.info(`accepted message ${message.id} from ${message.senderId} (conversation ${message.conversationId}); agent turn settled in ${Date.now() - startedAt}ms`)
       // Media first, text second: the send already degrades to text when an
       // upload fails, and everything the user is about to see is decided here.
       const outbound = await resolveOutboundReply({

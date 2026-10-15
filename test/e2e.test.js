@@ -613,6 +613,19 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     server.close()
 
     assert.ok(warnings.some((w) => w.includes('wxid_stranger')), `expected a refusal, got: ${warnings.join(' | ')}`)
+    // The refusal must ALSO reach the vendor file log: ctx.logger can drop
+    // levels, and a refusal that leaves no trace turns an allowlist mismatch
+    // into "the bot just ignores me" with nothing to grep afterwards.
+    const logDir = process.env.DSH_WEIXIN_LOG_DIR
+    assert.ok(logDir, 'expected the vendor log dir to be redirected for this test run')
+    const day = new Date().toISOString().slice(0, 10)
+    const logFile = path.join(logDir, `openclaw-${day}.log`)
+    assert.ok(fs.existsSync(logFile), `expected a vendor log file at ${logFile}`)
+    const logText = fs.readFileSync(logFile, 'utf8')
+    assert.ok(
+      logText.includes('refused message from wxid_stranger') && logText.includes('allowedSenders'),
+      `expected the refusal line with the allowlist in the file log, got:\n${logText.slice(-2000)}`,
+    )
     // This is the assertion that matters: the refusal happens before any fetch,
     // so an unauthorized sender cannot make this host talk to Tencent's CDN.
     assert.equal(cdnHits, 0)
