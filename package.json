@@ -57,6 +57,7 @@
     "src",
     "bin",
     "vendor",
+    "assets",
     "cordis.patch.yml",
     "README.md",
     "THIRD-PARTY-NOTICES.md",

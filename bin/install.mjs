@@ -72,7 +72,9 @@ const profilePkgPath = path.join(profileDir, 'package.json')
 const patchPath = path.join(profileDir, 'cordis.patch.yml')
 
 /** Everything the plugin needs at runtime; dev-only files are left behind. */
-const COPY_ENTRIES = ['src', 'bin', 'vendor', 'package.json', 'cordis.patch.yml', 'README.md', 'THIRD-PARTY-NOTICES.md']
+// assets carries the icon the manifest's `icon` field points at; leaving it
+// out made the host's metadata reader fail with ENOENT on the deployed copy.
+const COPY_ENTRIES = ['src', 'bin', 'vendor', 'assets', 'package.json', 'cordis.patch.yml', 'README.md', 'THIRD-PARTY-NOTICES.md']
 const IGNORE = new Set(['node_modules', '.git', 'test', 'docs', '.npmcache'])
 
 function copyTree(from, to) {
