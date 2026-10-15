@@ -262,6 +262,26 @@ export class AgentBridge {
       // Not fatal: the worst case is one stale message in the first turn.
     }
 
+    // An archived session cannot run a single step: the host's
+    // ArchivedSessionGate rejects every pre-step, so a turn ends `blocked`
+    // 25ms after it starts — the message was received, typing was shown, and
+    // no reply ever came (observed 2026-10-15). The archive set is GUI state
+    // (workspace.json), not anything this plugin writes, so an archive made
+    // from the GUI would otherwise silently kill the WeChat bot forever.
+    // Lifting it here keeps the conversation reachable; a user who truly wants
+    // it gone can log the bot out instead.
+    try {
+      const registry = this.ctx.get('workspaceRegistry')
+      const archived = registry?.archivedSessionIds
+      if (Array.isArray(archived) && archived.includes(sessionId) && typeof registry.unarchiveSession === 'function') {
+        await registry.unarchiveSession(sessionId)
+        this.log?.(`session ${sessionId} was archived; unarchived it so the conversation can reply again`)
+      }
+    } catch {
+      // Best effort only: if unarchiving is refused the turn will end blocked
+      // and the refusal is visible in the host log, not lost silently here.
+    }
+
     const record = { agent: handle.agent, dispose: handle.dispose, busy: false }
     this.sessions.set(sessionId, record)
     // Resume can resurrect a session this plugin never filed (created by an
