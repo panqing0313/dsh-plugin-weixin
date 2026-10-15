@@ -353,8 +353,27 @@ test('saved settings fill in what the composition did not set', () => {
   })
 })
 
-test('the asr section merges one level deep so editing one field keeps the rest', () => {
-  withStateRoot(() => {
+test('an empty composition allowlist does not erase a saved one', () => {
+  withStateRoot((root) => {
+    fs.writeFileSync(configFile(), JSON.stringify({ allowedSenders: ['wxid_saved'] }))
+    // The schemastery schema instantiates every field, so a composition that
+    // never mentions allowedSenders still arrives as []. Letting that default
+    // win refused every sender while config.json looked perfectly configured.
+    const merged = withSavedConfig({ allowedSenders: [] })
+    assert.deepEqual(
+      merged.allowedSenders,
+      ['wxid_saved'],
+      'the schemastery default [] must not override a non-empty saved allowlist',
+    )
+    // An explicitly configured non-empty list still wins.
+    assert.deepEqual(withSavedConfig({ allowedSenders: ['wxid_composed'] }).allowedSenders, ['wxid_composed'])
+    // And an empty saved file means deny-all even against a composition default.
+    fs.writeFileSync(configFile(), JSON.stringify({}))
+    assert.deepEqual(withSavedConfig({ allowedSenders: [] }).allowedSenders, [])
+  })
+})
+
+test('the asr section merges one level deep so editing one field keeps the rest', () => {  withStateRoot(() => {
     fs.writeFileSync(
       configFile(),
       JSON.stringify({ asr: { hfEndpoint: 'https://mirror.example', hfProxy: 'http://127.0.0.1:7897' } }),

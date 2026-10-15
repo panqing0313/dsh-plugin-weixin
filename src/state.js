@@ -159,6 +159,23 @@ export function readSavedConfig() {
 export function withSavedConfig(config) {
   const saved = readSavedConfig()
   const merged = { ...saved, ...config }
+  // `allowedSenders` needs its own rule. The schemastery schema instantiates
+  // every field, so a composition that never mentions the array still arrives
+  // as `allowedSenders: []` — and spread-merge would let that default win over
+  // the operator's saved allowlist, refusing every sender while the file on
+  // disk looks perfectly configured (observed 2026-10-15: the refusal log said
+  // `allowedSenders=[]` while config.json listed exactly one id). An empty
+  // array from the composition cannot be distinguished from an explicit
+  // deny-all, but the deny-all is already the behavior of an EMPTY SAVED FILE,
+  // so a non-empty saved list always wins over an empty composition value.
+  if (
+    Array.isArray(merged.allowedSenders) &&
+    merged.allowedSenders.length === 0 &&
+    Array.isArray(saved.allowedSenders) &&
+    saved.allowedSenders.length > 0
+  ) {
+    merged.allowedSenders = saved.allowedSenders
+  }
   const savedAsr = saved.asr
   if (
     savedAsr !== null &&
