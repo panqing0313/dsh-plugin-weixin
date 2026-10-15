@@ -49,3 +49,22 @@ Weixin/iLink -> dsh-weixin transport -> DSH Channel API
 ## 验收顺序
 
 先通过单元测试验证配置、白名单、去重、会话映射，再接真实 Hermes transport；最后使用测试账号完成微信 -> DSH -> 微信闭环。当前阶段不承诺真实账号可用，因为 iLink 能力可能受账号、地区、限流和服务端策略影响。
+
+## 当前状态与后续方向（2026-10-16 更新）
+
+M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账号上稳定运行；安全默认（白名单默认全拒、幂等、脱敏）落地；原生 UI 含扫码卡片、状态卡与设置卡。已发布 npm 0.2.0 并提交插件市场（等维护者合并 awesome-dsh-plugin#7426）。
+
+里程碑之外已经完成的方向（源自对 dsh-im 的学习移植）：
+
+- **对话体验**：忙时消息排队/插话（`busyMessageMode`、`/steer`）；超时不再丢答案（先告知、后补发，context_token 一次性约束下用 `refreshConfig()` 取新 ticket）。
+- **Agent 语境**：可选 `sourceContext` 在 prompt 前附 `<weixin_source …/>` 来源块。
+- **设置 UI**：真 tablist + 下载设置原子保存（暂存→保存/还原条）；同一设置卡同时挂在插件页与宿主 Settings 导航（`settings.section`，order 22）。
+- **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 的依赖钉在 tarball 上，发版须同步更新 package.json/package-lock.json/pnpm-lock.yaml 三处。
+
+### 候选后续
+
+1. **依赖源切换**：desktop profile 从 `file:…tgz` 改为 npm registry 版本号，消除「发版要同步三处清单 + /tmp tarball 备份」的负担。
+2. **语音回复**：出站 TTS（SILK 编码已验证可行；注意服务端对 BOT voice_item 接受但不投递，需先验证投递路径）。
+3. **发送频控自护**：约 20 条/几分钟触发账号级封锁 ≥30min——出站分片在接近阈值时主动合并/延迟。
+4. **状态实时性**：GUI 状态卡在多端登录/服务端会话失效时的主动刷新（现在依赖卡片挂载与登录事件）。
+5. **市场收录跟进**：PR #7426 合并后核对 dsh-market 搜索结果与条目渲染。
