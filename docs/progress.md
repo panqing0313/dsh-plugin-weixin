@@ -429,3 +429,29 @@ socket——响应几毫秒后才落地，那时已经没有东西去回收它�
 另外：那次「挂住不返回」的直接原因是**我自己的编辑错误** —— re-bind 用例的回调忘了从参数里
 解构 `registerServer`（`ReferenceError`），而它发生在第二个服务器创建**之后**，于是那个监听句柄
 再也没人关，事件循环永远不空。**报错发生在资源获取之后，就等于资源泄漏。**
+
+## 2026-10-15 — the archived-session gate ate the replies (fixed)
+
+The last of the four stacked defects behind "scan, login, typing bubble, but
+never a reply": the DSH host's `ArchivedSessionGate` rejects every pre-step of
+an archived session, so a turn ends `blocked` 25ms after it starts — the
+message was received, typing was shown, and nothing else ever happened. The
+WeChat conversation id had landed in `~/.dsh/storages/workspace.json`
+`global.archivedSessionIds` (GUI state, not written by this plugin).
+
+Fixes shipped:
+
+- `001f2bf` — `attach()` now lifts the session out of the archive set
+  (best-effort, via `workspaceRegistry.unarchiveSession`) so a GUI-side
+  archive can never silently kill the bot; the manual removal of the id is
+  preserved as `workspace.json.bak-unarchive` on the operator's machine.
+- `4e9fa8a` — the schemastery schema instantiates every field, so a
+  composition that never mentions `allowedSenders` still arrived as `[]` and
+  spread-merge let that default erase the operator's saved allowlist; the
+  refusal (surfaced only after `89a2145` added the file-log line with the
+  sender and the full allowlist) showed `allowedSenders=[]` while config.json
+  listed exactly one id. Merge rule: a non-empty saved allowlist always wins
+  over an empty composition value.
+- `89a2145` — allowlist refusals, duplicate skips and settled turns are now
+  also written to the vendor file log, so "the bot ignores me" is always
+  greppable.
