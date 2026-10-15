@@ -882,33 +882,15 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const chooseSource = async (id) => {
-				if (id === source || savingSource) return;
+			const chooseSource = (id) => {
+				if (id === source) return;
 				const choice = SOURCE_CHOICES.find((c) => c.id === id);
 				if (!choice?.endpoint) return; // "custom" is not settable from here
-				setSavingSource(true);
-				setSourceMsg("");
-				try {
-					// `undefined` = "leave the proxy as it is". Sending "" here
-					// would clear it every time the source changed.
-					const r = await callRemote(() => ctx.remote.weixinAsr.setDownloadSettings(choice.endpoint, undefined));
-					setDlSettings(r ?? {});
-					setSource(r?.source ?? id);
-					setSourceMsg(t("Saved — applies to the next download", "已保存，对下一次下载生效"));
-				} catch (err) {
-					// A failed write must not leave the radio showing a route the
-					// host is not using, so re-read it instead of trusting the click.
-					setSourceMsg(String(err?.message ?? err));
-					try {
-						const s = await callRemote(() => ctx.remote.weixinAsr.getDownloadSettings());
-						setDlSettings(s ?? {});
-						setSource(s?.source ?? source);
-					} catch {
-						// leave the previous value
-					}
-				} finally {
-					setSavingSource(false);
-				}
+				// Staged, not written: clicking around the radios must not churn
+				// the host's download route. The change lands when the operator
+				// presses Save in the pending bar.
+				setSource(id);
+				setSourceMsg(t("Changed — press Save to apply", "已修改——按「保存」生效"));
 			};
 
 			// The value to save is passed IN, never read from `proxyInput`.
@@ -935,16 +917,53 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const chooseProxyMode = (id) => {
-				setProxyMode(id);
-				setProxyMsg("");
-				// Picking "direct" is the whole setting: clear it now rather
-				// than making the operator also press Save to undo a proxy.
-				// Pass the empty value explicitly — see saveProxy.
-				if (id === "direct" && dlSettings.proxy) {
-					setProxyInput("");
-					saveProxy("");
+			// One write for everything staged in the download-settings panels.
+			// `undefined` keeps the value the host already has: the endpoint
+			// from the chosen source, the proxy from the radio state.
+			const saveDownloadSettings = async () => {
+				const choice = SOURCE_CHOICES.find((c) => c.id === source);
+				const endpoint = choice?.endpoint;
+				if (!endpoint) return; // "custom" cannot be written from here
+				const proxy = proxyMode === "direct" ? "" : String(proxyInput).trim();
+				setSavingSource(true);
+				setSourceMsg("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixinAsr.setDownloadSettings(endpoint, proxy));
+					setDlSettings(r ?? {});
+					setSource(r?.source ?? source);
+					setProxyInput(r?.proxy ?? "");
+					setProxyMode(r?.proxy ? "custom" : "direct");
+					setSourceMsg(t("Saved — applies to the next download", "已保存，对下一次下载生效"));
+				} catch (err) {
+					// A failed write must not leave the radio showing a route the
+					// host is not using, so re-read it instead of trusting the click.
+					setSourceMsg(String(err?.message ?? err));
+					try {
+						const s = await callRemote(() => ctx.remote.weixinAsr.getDownloadSettings());
+						setDlSettings(s ?? {});
+						setSource(s?.source ?? source);
+					} catch {
+						// leave the previous value
+					}
+				} finally {
+					setSavingSource(false);
 				}
+			};
+
+			const discardDownloadSettings = async () => {
+				// Re-read what the host is actually using; the staged edits die.
+				try {
+					const s = await callRemote(() => ctx.remote.weixinAsr.getDownloadSettings());
+					setDlSettings(s ?? {});
+					setSource(s?.source ?? "mirror");
+					const saved = s?.proxy ?? "";
+					setProxyInput(saved);
+					setProxyMode(saved ? "custom" : "direct");
+				} catch {
+					// leave the staged values rather than guessing
+				}
+				setSourceMsg("");
+				setProxyMsg("");
 			};
 
 			const download = async () => {
@@ -1079,7 +1098,11 @@ window.__ModuleLoader__.load({
 									name: "weixin-download-source",
 									checked: source === choice.id,
 									disabled: savingSource,
-									onChange: () => chooseSource(choice.id),
+									onChange: () => {
+										// Staged like the proxy radios; the pending bar
+										// writes (or discards) the whole set at once.
+										chooseSource(choice.id);
+									},
 									style: { marginTop: 3, flex: "0 0 auto" },
 								}),
 								createElement("span", { style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 } },
@@ -1101,6 +1124,38 @@ window.__ModuleLoader__.load({
 							"官方站点在部分网络下无法访问，镜像提供的是同样的文件。",
 						))),
 				//#endregion download source
+
+				//#region pending download-settings bar
+				// One bar for the staged source/proxy edits. Keeping it between
+				// the two panels means the save affordance is visible while
+				// either radio group is being changed.
+				createElement("div", {
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: 8,
+							flexWrap: "wrap",
+							padding: "7px 10px",
+							borderRadius: RADIUS.control,
+							border: `1px solid ${C.border}`,
+							background: C.surface,
+						},
+					},
+					createElement("span", { style: { color: C.labelTertiary, fontSize: 12, lineHeight: "18px", flex: "1 1 auto" } },
+						t("Download source and proxy are saved together.", "下载源与代理一起保存。")),
+					createElement("button", {
+							onClick: saveDownloadSettings,
+							disabled: savingSource,
+							style: primaryButtonStyle,
+						},
+						savingSource ? t("Saving…", "保存中…") : t("Save", "保存")),
+					createElement("button", {
+							onClick: discardDownloadSettings,
+							disabled: savingSource,
+							style: buttonStyleFor(false),
+						},
+						t("Reset", "还原"))),
+				//#endregion pending download-settings bar
 
 				//#region proxy
 				createElement("div", { style: panelStyle },
@@ -1124,7 +1179,12 @@ window.__ModuleLoader__.load({
 									type: "radio",
 									name: "weixin-download-proxy",
 									checked: proxyMode === choice.id,
-									onChange: () => chooseProxyMode(choice.id),
+									onChange: () => {
+										// Staged like the source radios; the pending bar
+										// writes (or discards) the whole set at once.
+										setProxyMode(choice.id);
+										setProxyMsg("");
+									},
 									style: { marginTop: 3, flex: "0 0 auto" },
 								}),
 								createElement("span", { style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 } },
@@ -1258,11 +1318,55 @@ window.__ModuleLoader__.load({
 									style: { margin: 0, fontSize: 14, lineHeight: "20px", fontWeight: 600, color: C.labelPrimary },
 								}, title),
 								body);
+						// Two tabs instead of one long scroll. State only exists at
+						// runtime; in the stub environment useState keeps the first
+						// tab, which matches what the tests assert.
+						const TABS = [
+							{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
+							{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
+						];
+						const [tab, setTab] = react.useState(0);
+						// Arrow keys move between tabs: the bar is a real tablist,
+						// not just two buttons that happen to look like one.
+						const onTabKey = (event) => {
+							if (event.key === "ArrowRight") {
+								event.preventDefault();
+								setTab((tab + 1) % TABS.length);
+							} else if (event.key === "ArrowLeft") {
+								event.preventDefault();
+								setTab((tab + TABS.length - 1) % TABS.length);
+							}
+						};
 						return createElement("div", {
 								style: { display: "flex", flexDirection: "column", gap: 20, color: C.labelPrimary },
 							},
-							section(t("WeChat account", "微信账号"), createElement(LoginSection, { ctx, t })),
-							section(t("Voice models", "语音模型"), createElement(AsrSection, { ctx, t })));
+							createElement("div", {
+									role: "tablist",
+									className: "weixin-settings-tabbar",
+									onKeyDown: onTabKey,
+									style: { display: "flex", gap: 2, borderBottom: `1px solid ${C.border}`, overflowX: "auto" },
+								},
+								...TABS.map((entry, index) =>
+									createElement("button", {
+											key: entry.id,
+											role: "tab",
+											"aria-selected": index === tab,
+											tabIndex: index === tab ? 0 : -1,
+											onClick: () => setTab(index),
+											style: {
+												appearance: "none",
+												background: "transparent",
+												border: "none",
+												borderBottom: `2px solid ${index === tab ? C.stateOk : "transparent"}`,
+												color: index === tab ? C.labelPrimary : C.labelTertiary,
+												fontSize: 13,
+												lineHeight: "20px",
+												fontWeight: index === tab ? 600 : 400,
+												padding: "8px 12px",
+												cursor: "pointer",
+											},
+										}, entry.label))),
+							section(TABS[tab]?.label ?? "", TABS[tab]?.body));
 					},
 				));
 		}

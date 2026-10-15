@@ -592,12 +592,15 @@ test('clearing the proxy sends the empty value, not the stale one', () => {
   // no re-render happens in between, so `setProxyInput(""); saveProxy()` wrote
   // the OLD proxy back — clicking "直连" silently kept the proxy it was meant
   // to remove. Nothing errored, nothing was logged, and the proxy stayed.
+  // T4 moved to a staged bar: the write is `saveDownloadSettings`, which must
+  // pass the empty string for "direct" explicitly (same stale-state class of
+  // bug, one level up).
   const client = fs.readFileSync(CLIENT_PATH, 'utf8')
 
   const save = client.match(/const saveProxy = async \(value\) => \{[\s\S]*?\n\t\t\t\};/)
-  const choose = client.match(/const chooseProxyMode = \(id\) => \{[\s\S]*?\n\t\t\t\};/)
+  const bulk = client.match(/const saveDownloadSettings = async \(\) => \{[\s\S]*?\n\t\t\t\};/)
   assert.ok(save, 'saveProxy must stay a findable handler')
-  assert.ok(choose, 'chooseProxyMode must stay a findable handler')
+  assert.ok(bulk, 'saveDownloadSettings must stay a findable handler')
 
   assert.match(save[0], /async \(value\)/, 'saveProxy must take the value to save')
   assert.match(
@@ -610,11 +613,22 @@ test('clearing the proxy sends the empty value, not the stale one', () => {
     /String\(value \?\? proxyInput\)/,
     'an omitted value may still fall back to the input, so the Save button works',
   )
-  assert.match(choose[0], /saveProxy\(""\)/, 'choosing "direct" must pass the empty value explicitly')
+  // "direct" means "clear the proxy": the empty value must be sent explicitly.
+  assert.match(bulk[0], /proxyMode === "direct" \? "" : String\(proxyInput\)\.trim\(\)/,
+    'the bulk save must clear the proxy with "" — never a bare variable read')
+  // The staged bar writes both halves in one call, not two racing writes.
+  assert.match(bulk[0], /setDownloadSettings\(endpoint, proxy\)/,
+    'the bulk save must send endpoint and proxy together')
+  // The radios must NOT write on click anymore: a click only stages.
   assert.doesNotMatch(
-    choose[0],
-    /saveProxy\(\)/,
-    'a bare saveProxy() is the stale-state bug: the staged "" is never read',
+    client,
+    /onChange: \(\) => (chooseSource|chooseProxyMode)\(choice\.id\)/,
+    'a radio click must not call a saving handler directly',
+  )
+  assert.doesNotMatch(
+    client,
+    /setProxyInput\(""\);\s*\n\s*saveProxy\(""\)/,
+    'the old instant-clear path must stay dead',
   )
 
   // And the Save button must not hand the click event to `saveProxy` as the
