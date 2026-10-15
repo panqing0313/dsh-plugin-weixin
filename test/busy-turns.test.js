@@ -95,14 +95,14 @@ function fakeAgent() {
  * An AgentBridge over a fake `agents` service whose `create` returns `fake`.
  * @param {object} fake  from {@link fakeAgent}
  */
-async function bridgeWith(fake) {
+async function bridgeWith(fake, overrides = {}) {
   const { AgentBridge } = await import('../src/agent-bridge.js')
   const agents = {
     get: () => undefined,
     async create() { return { agent: fake.agent, dispose: async () => {} } },
   }
   const ctx = { get: (n) => (n === 'agents' ? agents : undefined) }
-  const bridge = new AgentBridge({ ctx, cwd: '/tmp/busy-test', pollMs: 20, maxWaitMs: 3000 })
+  const bridge = new AgentBridge({ ctx, cwd: '/tmp/busy-test', pollMs: 20, maxWaitMs: 3000, ...overrides })
   return bridge
 }
 
@@ -211,4 +211,38 @@ test('a queued message resolves with its own reply; the receipt goes through onP
   // answer of the queued turn — the caller sends it through the normal path.
   assert.ok(notes.some((n) => String(n).includes('已排队')), 'the queue receipt must go through onProgress')
   assert.equal(secondResult.text, 'answer-2')
+})
+
+test('a turn that outlives the wait still delivers its answer through onLateReply', async () => {
+  const fake = fakeAgent()
+  // Shrink both waits so the timeout path and the late window run quickly.
+  const bridge = await bridgeWith(fake, { maxWaitMs: 150, lateReplyMaxWaitMs: 2000 })
+  const late = []
+
+  const delivery = bridge.deliver({
+    conversationId: 'room-1',
+    text: 'long-running question',
+    onLateReply: (event) => { late.push(event) },
+  })
+  // The turn settles long after the wait gave up; release before awaiting so
+  // the late listener is already running when the answer lands.
+  setTimeout(() => fake.release('the late answer'), 300)
+  const first = await delivery
+  // With a late-reply channel the answer travels out of band: the deliver
+  // promise resolves only after the late path finishes, flagged so the
+  // caller skips its normal send.
+  assert.equal(first.text, '')
+  assert.equal(first.late, true, 'the caller must know the answer went out of band')
+
+  await new Promise((resolve) => setTimeout(resolve, 800))
+
+  assert.deepEqual(late.map((e) => e.kind), ['timeout-notice', 'reply'], 'notice first, then the late answer')
+  assert.equal(late[1].text, 'the late answer')
+})
+
+test('without onLateReply the timeout path is unchanged', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake, { maxWaitMs: 120 })
+  const reply = await bridge.deliver({ conversationId: 'room-1', text: 'q' })
+  assert.equal(reply.text, '（处理超时，请稍后查看会话）')
 })

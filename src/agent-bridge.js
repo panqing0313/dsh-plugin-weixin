@@ -118,6 +118,9 @@ export class AgentBridge {
     this.progressAfterMs = options.progressAfterMs ?? 45_000
     this.maxWaitMs = options.maxWaitMs ?? 20 * 60_000
     this.pollMs = options.pollMs ?? 1_000
+    // How long the post-timeout listener keeps waiting for an answer to hand
+    // to onLateReply. Configurable so tests do not have to wait an hour.
+    this.lateReplyMaxWaitMs = options.lateReplyMaxWaitMs ?? 60 * 60_000
     /** @type {Map<string, { agent: any, dispose: () => Promise<void>, busy: boolean }>} */
     this.sessions = new Map()
     /**
@@ -386,7 +389,7 @@ export class AgentBridge {
    * @param {AbortSignal} [params.signal]
    * @returns {Promise<{ text: string, sessionId: string }>}
    */
-  async deliver({ conversationId, text, onProgress, signal, busyMessageMode }) {
+  async deliver({ conversationId, text, onProgress, signal, busyMessageMode, onLateReply }) {
     const record = await this.attach(conversationId)
     const mode = busyMessageMode === 'steer' ? 'steer' : 'queue'
 
@@ -407,7 +410,7 @@ export class AgentBridge {
         return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionIdFor(conversationId) }
       }
       // queue (default): FIFO tail drained when the running turn settles.
-      return await this.#enqueue({ record, conversationId, text, onProgress, signal })
+      return await this.#enqueue({ record, conversationId, text, onProgress, signal, onLateReply })
     }
     record.busy = true
     try {
@@ -418,7 +421,7 @@ export class AgentBridge {
       record.agent.followup(
         createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
       )
-      return await this.#awaitReply({ record, before, onProgress, signal })
+      return await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
     } finally {
       record.busy = false
       await this.#drainQueue({ record, conversationId, onProgress, signal })
@@ -434,9 +437,9 @@ export class AgentBridge {
    * own reply, so the caller delivers the real answer through its normal
    * reply path once the turn runs.
    */
-  async #enqueue({ record, conversationId, text, onProgress, signal }) {
+  async #enqueue({ record, conversationId, text, onProgress, signal, onLateReply }) {
     const sessionId = record.agent.session?.id ?? sessionIdFor(conversationId)
-    const entry = { text, onProgress, signal }
+    const entry = { text, onProgress, signal, onLateReply }
     entry.done = new Promise((resolve) => { entry.resolveDone = resolve })
     record.queue.push(entry)
     // The receipt must reach WeChat even when the caller ignores onProgress:
@@ -469,7 +472,7 @@ export class AgentBridge {
     record.agent.followup(
       createUserMessage({ content: [{ type: 'text', text: entry.text }], source: { kind: 'user' } }),
     )
-    return this.#awaitReply({ record, before, onProgress: entry.onProgress, signal: entry.signal })
+    return this.#awaitReply({ record, before, onProgress: entry.onProgress, signal: entry.signal, onLateReply: entry.onLateReply })
   }
 
   /**
@@ -502,11 +505,12 @@ export class AgentBridge {
     return seq
   }
 
-  async #awaitReply({ record, before, onProgress, signal }) {
+  async #awaitReply({ record, before, onProgress, signal, onLateReply }) {
     const sessionId = record.agent.session?.id ?? ''
     const startedAt = Date.now()
     const deadline = startedAt + this.maxWaitMs
     let progressSent = false
+    let lateAnnounced = false
 
     while (Date.now() < deadline) {
       if (signal?.aborted === true) return { text: '（已取消）', sessionId }
@@ -522,7 +526,42 @@ export class AgentBridge {
       }
       await new Promise((resolve) => setTimeout(resolve, this.pollMs))
     }
-    return { text: '（处理超时，请稍后查看会话）', sessionId }
+
+    // The user was told the wait gave up — but the turn is still running and
+    // its answer would be lost if we simply returned. Keep listening at a
+    // slow cadence until the turn settles, then hand the final text to the
+    // late-reply callback so the caller can deliver it out of band.
+    if (onLateReply === undefined) return { text: '（处理超时，请稍后查看会话）', sessionId }
+    if (!lateAnnounced) {
+      lateAnnounced = true
+      try {
+        await onLateReply({ kind: 'timeout-notice' })
+      } catch {
+        // The notice is best effort; the late answer still gets delivered.
+      }
+    }
+    // Keep the normal cadence: the loop is cheap (an in-memory event
+    // snapshot), and a slower tick risks missing a short late window.
+    const latePollMs = this.pollMs
+    const lateDeadline = Date.now() + (this.lateReplyMaxWaitMs ?? 60 * 60_000)
+    while (Date.now() < lateDeadline) {
+      if (signal?.aborted === true) return { text: '', sessionId, late: true }
+      const events = record.agent.session?.snapshotEvents?.() ?? []
+      const reply = readAssistantReply({ events, afterSeq: before })
+      if (reply.text !== '') {
+        try {
+          await onLateReply({ kind: 'reply', text: reply.text })
+        } catch (error) {
+          this.errLog(`late reply delivery failed: ${String(error)}`)
+        }
+        // The answer went out through the late-reply channel; the caller must
+        // not send the normal reply path again.
+        return { text: '', sessionId, late: true }
+      }
+      await new Promise((resolve) => setTimeout(resolve, latePollMs))
+    }
+    this.errLog(`late reply wait gave up for ${sessionId}`)
+    return { text: '', sessionId, late: true }
   }
 
   /** Tear down every session this bridge created. */

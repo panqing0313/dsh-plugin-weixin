@@ -604,9 +604,44 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
             contextToken: message.contextToken,
           })
         },
+        // A turn that outlives the wait still owes the user its answer: the
+        // notice goes out through the caller's context token, and the late
+        // reply is delivered later with a freshly fetched typing ticket (the
+        // original one is one-shot and long expired by then).
+        onLateReply: async (late) => {
+          if (late.kind === 'timeout-notice') {
+            await sendChunked(transport, config, {
+              conversationId: message.conversationId,
+              text: '（这条消息处理时间较长，先回复别的消息不影响它；结果出来后会直接发到这里）',
+              contextToken: message.contextToken,
+            })
+            return
+          }
+          await transport.refreshConfig()
+          const outbound = await resolveOutboundReply({
+            config,
+            transport,
+            mediaDirs,
+            stateRoot,
+            reply: late.text,
+            conversationId: message.conversationId,
+            contextToken: '',
+            warn,
+          })
+          await sendChunked(transport, config, {
+            conversationId: message.conversationId,
+            text: outbound,
+            contextToken: '',
+          })
+          log(`late reply delivered for ${message.conversationId}`)
+          fileLog.info(`late reply delivered to ${message.conversationId} after the wait gave up`)
+        },
       })
       log(`turn settled in ${Date.now() - startedAt}ms for ${message.conversationId}`)
       fileLog.info(`accepted message ${message.id} from ${message.senderId} (conversation ${message.conversationId}); agent turn settled in ${Date.now() - startedAt}ms`)
+      // A late reply already went out through onLateReply; sending the empty
+      // text here would be a stray message.
+      if (reply.late === true) return
       // Media first, text second: the send already degrades to text when an
       // upload fails, and everything the user is about to see is decided here.
       const outbound = await resolveOutboundReply({
