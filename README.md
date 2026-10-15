@@ -6,8 +6,6 @@
 [`@tencent-weixin/openclaw-weixin`](https://github.com/Tencent/openclaw-weixin)（MIT，2.4.10），
 本项目把它 vendor 进 `vendor/openclaw-weixin/`，剥掉 OpenClaw 的耦合后直接绑定到 DSH 的 `agents` 服务。
 
-不是 Hermes Agent runtime 的移植，也不是网页版微信模拟——只借通信层，控制权始终在 DSH。
-
 ![dsh-plugin-weixin：在微信里与 DSH Agent 对话](assets/hero.png)
 
 ![一条语音的旅程：SILK 转码、本地 ASR、逐级降级](assets/voice-pipeline.png)
