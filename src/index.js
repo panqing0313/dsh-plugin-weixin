@@ -69,6 +69,10 @@ export const Config = z.object({
     .union([z.const('strip'), z.const('off')])
     .default('strip')
     .description('How to render the agent Markdown reply for WeChat: "strip" filters unsupported syntax, "off" sends it verbatim.'),
+  busyMessageMode: z
+    .union([z.const('queue'), z.const('steer')])
+    .default('queue')
+    .description('What happens to a message that arrives while a reply is still being written: "queue" waits and delivers it as the next turn, "steer" injects it into the running turn. "/steer <instruction>" always injects.'),
   progressAfterMs: z.number().default(45_000).description('Send one progress note to the user after this many milliseconds.'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
@@ -592,6 +596,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
       const reply = await bridge.deliver({
         conversationId: message.conversationId,
         text: prompt,
+        busyMessageMode: config.busyMessageMode,
         onProgress: async (note) => {
           await sendChunked(transport, config, {
             conversationId: message.conversationId,

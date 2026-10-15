@@ -82,6 +82,20 @@ export function sessionIdFor(conversationId) {
 }
 
 /**
+ * Recognize `/steer <instruction>` and return the instruction, or undefined
+ * when the text is not a steer command.
+ *
+ * @param {string} text
+ * @returns {string | undefined}
+ */
+export function parseSteerCommand(text) {
+  const match = /^\s*\/steer(?:\s+([\s\S]+))?\s*$/.exec(String(text ?? ''))
+  if (match === null) return undefined
+  const instruction = (match[1] ?? '').trim()
+  return instruction === '' ? undefined : instruction
+}
+
+/**
  * @typedef {Object} AgentBridgeOptions
  * @property {any} ctx            Cordis context of the plugin.
  * @property {string} [cwd]       Working directory the agent operates in.
@@ -106,6 +120,12 @@ export class AgentBridge {
     this.pollMs = options.pollMs ?? 1_000
     /** @type {Map<string, { agent: any, dispose: () => Promise<void>, busy: boolean }>} */
     this.sessions = new Map()
+    /**
+     * In-flight attach() creations, so two messages for the same conversation
+     * never build two sessions.
+     * @type {Map<string, Promise<{ agent: any, dispose: () => Promise<void>, busy: boolean }>>}
+     */
+    this.attachPromises = new Map()
     /**
      * Memoized Workspace lookup, so the registry is consulted once per plugin
      * generation rather than on every message.
@@ -225,6 +245,24 @@ export class AgentBridge {
     const existing = this.sessions.get(sessionId)
     if (existing !== undefined) return existing
 
+    // Two messages for the same conversation can race here: the first
+    // deliver() is still inside the awaits below (its record is not in the
+    // map yet), so a second attach() would create a second session for the
+    // same id and both would run unserialized. Memoize the in-flight
+    // creation so concurrent attaches share one record.
+    const inflight = this.attachPromises.get(sessionId)
+    if (inflight !== undefined) return inflight
+
+    const creation = this.#attachNew(sessionId)
+    this.attachPromises.set(sessionId, creation)
+    try {
+      return await creation
+    } finally {
+      this.attachPromises.delete(sessionId)
+    }
+  }
+
+  async #attachNew(sessionId) {
     const agents = this.#agents()
     if (agents === undefined) throw new Error('the agents service is unavailable')
 
@@ -282,7 +320,7 @@ export class AgentBridge {
       // and the refusal is visible in the host log, not lost silently here.
     }
 
-    const record = { agent: handle.agent, dispose: handle.dispose, busy: false }
+    const record = { agent: handle.agent, dispose: handle.dispose, busy: false, queue: [] }
     this.sessions.set(sessionId, record)
     // Resume can resurrect a session this plugin never filed (created by an
     // earlier generation, before grouping existed), so those paths register
@@ -348,10 +386,28 @@ export class AgentBridge {
    * @param {AbortSignal} [params.signal]
    * @returns {Promise<{ text: string, sessionId: string }>}
    */
-  async deliver({ conversationId, text, onProgress, signal }) {
+  async deliver({ conversationId, text, onProgress, signal, busyMessageMode }) {
     const record = await this.attach(conversationId)
+    const mode = busyMessageMode === 'steer' ? 'steer' : 'queue'
+
     if (record.busy) {
-      return { text: '（上一条消息还在处理中，请稍后再发）', sessionId: sessionIdFor(conversationId) }
+      // `/steer <instruction>` is always an injection, whatever the mode: the
+      // command exists precisely to reach a turn that is already running.
+      const steerCommand = parseSteerCommand(text)
+      if (mode === 'steer' || steerCommand !== undefined) {
+        const payload = steerCommand !== undefined ? steerCommand : text
+        const createUserMessage = await loadCreateUserMessage()
+        record.agent.steer?.(
+          createUserMessage({ content: [{ type: 'text', text: payload }], source: { kind: 'user' } }),
+        )
+        // The steered turn keeps running; the caller's awaitReply is for a
+        // turn this delivery did not start, so return immediately with a
+        // receipt. The steered turn's eventual reply belongs to the turn's
+        // own delivery wait.
+        return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionIdFor(conversationId) }
+      }
+      // queue (default): FIFO tail drained when the running turn settles.
+      return await this.#enqueue({ record, conversationId, text, onProgress, signal })
     }
     record.busy = true
     try {
@@ -365,6 +421,75 @@ export class AgentBridge {
       return await this.#awaitReply({ record, before, onProgress, signal })
     } finally {
       record.busy = false
+      await this.#drainQueue({ record, conversationId, onProgress, signal })
+    }
+  }
+
+  /**
+   * Park one message on the conversation's FIFO tail and wait until it has
+   * been delivered as its own turn (possibly by an earlier drain).
+   *
+   * The receipt goes out through `onProgress` immediately — that is the only
+   * send channel this layer has — and the resolved value is the queued turn's
+   * own reply, so the caller delivers the real answer through its normal
+   * reply path once the turn runs.
+   */
+  async #enqueue({ record, conversationId, text, onProgress, signal }) {
+    const sessionId = record.agent.session?.id ?? sessionIdFor(conversationId)
+    const entry = { text, onProgress, signal }
+    entry.done = new Promise((resolve) => { entry.resolveDone = resolve })
+    record.queue.push(entry)
+    // The receipt must reach WeChat even when the caller ignores onProgress:
+    // a plain-notification wrapper is safe either way.
+    const notify = onProgress ?? (() => {})
+    void Promise.resolve(notify('已排队，等当前回复完成后自动发送')).catch(() => {})
+    // If the turn already settled between the busy check and this push, the
+    // drain ran without our entry; run it now.
+    if (!record.busy && record.queue[record.queue.length - 1] === entry) {
+      record.queue.pop()
+      record.busy = true
+      try {
+        const result = await this.#runQueuedTurn({ record, conversationId, entry })
+        entry.resolveDone(result)
+        return result
+      } finally {
+        record.busy = false
+      }
+    }
+    return entry.done
+  }
+  /**
+   * Run one queued text as a full turn, serially after whatever is running.
+   * Resolves with that turn's reply; the queue notification happens in
+   * {@link #drainQueue}.
+   */
+  async #runQueuedTurn({ record, conversationId, entry }) {
+    const createUserMessage = await loadCreateUserMessage()
+    const before = this.#lastSeq(record.agent)
+    record.agent.followup(
+      createUserMessage({ content: [{ type: 'text', text: entry.text }], source: { kind: 'user' } }),
+    )
+    return this.#awaitReply({ record, before, onProgress: entry.onProgress, signal: entry.signal })
+  }
+
+  /**
+   * Drain the FIFO tail after a turn settles, one entry at a time.
+   * Called from the deliver() finally block; owns record.busy while draining.
+   */
+  async #drainQueue({ record, conversationId, onProgress, signal }) {
+    while (record.queue.length > 0) {
+      const entry = record.queue.shift()
+      if (entry === undefined) return
+      record.busy = true
+      try {
+        const result = await this.#runQueuedTurn({ record, conversationId, entry })
+        entry.resolveDone(result)
+      } catch (error) {
+        this.errLog(`queued turn failed: ${String(error)}`)
+        entry.resolveDone({ text: '（排队消息处理失败，请重发）', sessionId: record.agent.session?.id ?? '' })
+      } finally {
+        record.busy = false
+      }
     }
   }
 

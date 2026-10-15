@@ -1,0 +1,214 @@
+/**
+ * Behavioural guards for busy-turn handling in the Weixin channel.
+ *
+ * Before this suite existed, a message that arrived while the agent was still
+ * running a turn was bounced with "上一条消息还在处理中" — the user had to
+ * guess when to retry. The channel now offers the two dispositions dsh-im
+ * proved out across nine IM platforms:
+ *
+ *  - **queue** (default): the message waits in a FIFO tail and is delivered
+ *    automatically when the current turn settles, with a receipt telling the
+ *    user it was queued.
+ *  - **steer**: the message is injected into the *running* turn at the next
+ *    step boundary through `agent.steer()`, which the DSH agent API exposes
+ *    natively (`Agent.steer(message)` in dsh-agent-preset-registry's Agent
+ *    interface; it sends with inbox target "next-step" and wakeup=true).
+ *
+ * `/steer <instruction>` is always a steer, regardless of the configured mode.
+ *
+ * The fake agent here mimics exactly the surface {@link AgentBridge} touches:
+ * `inbox.clear()`, `session.id`, `session.snapshotEvents()`, `followup()`,
+ * `steer()`. The reply comes from `readAssistantReply`, which scans events for
+ * an assistant message after `before`, so the fake emits one on demand.
+ * @module dsh-weixin/test/busy-turns
+ */
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
+
+// The vendored logger resolves its directory when it is first imported, so it
+// must be redirected before src/agent-bridge.js (via src/index.js) loads.
+const LOG_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-busy-logs-'))
+const previousLogDir = process.env.DSH_WEIXIN_LOG_DIR
+process.env.DSH_WEIXIN_LOG_DIR = LOG_ROOT
+
+test.after?.(() => {
+  if (previousLogDir === undefined) delete process.env.DSH_WEIXIN_LOG_DIR
+  else process.env.DSH_WEIXIN_LOG_DIR = previousLogDir
+  fs.rmSync(LOG_ROOT, { recursive: true, force: true })
+})
+
+/**
+ * A fake agent whose turn resolves when the test releases it.
+ *
+ * `followup` records the call and starts a turn that stays open until
+ * `release(text)` emits an assistant message into the event log. `steer`
+ * records its payload so a test can assert exactly what was injected.
+ */
+function fakeAgent() {
+  const calls = { followup: [], steer: [] }
+  let seq = 0
+  const events = []
+  const waiters = []
+  const agent = {
+    inbox: { clear() {} },
+    session: {
+      id: 'weixin-room-1',
+      snapshotEvents: () => events,
+    },
+    followup(message) {
+      calls.followup.push(message)
+      // The turn starts; it produces no assistant event until released.
+    },
+    steer(message) {
+      calls.steer.push(message)
+    },
+  }
+  return {
+    agent,
+    calls,
+    /** Emit an assistant message, settling whatever turn is pending. */
+    release(text = 'done') {
+      seq += 1
+      events.push({ seq, type: 'assistant/message', data: { step: seq, turn: seq, message: { content: [{ type: 'text', text }] } } })
+      for (const resolve of waiters.splice(0)) resolve()
+    },
+    /** Resolve when at least one more assistant event exists. */
+    wait(ms = 2000) {
+      const before = events.length
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), ms)
+        waiters.push(() => {
+          clearTimeout(timer)
+          resolve(events.length > before)
+        })
+      })
+    },
+  }
+}
+
+/**
+ * An AgentBridge over a fake `agents` service whose `create` returns `fake`.
+ * @param {object} fake  from {@link fakeAgent}
+ */
+async function bridgeWith(fake) {
+  const { AgentBridge } = await import('../src/agent-bridge.js')
+  const agents = {
+    get: () => undefined,
+    async create() { return { agent: fake.agent, dispose: async () => {} } },
+  }
+  const ctx = { get: (n) => (n === 'agents' ? agents : undefined) }
+  const bridge = new AgentBridge({ ctx, cwd: '/tmp/busy-test', pollMs: 20, maxWaitMs: 3000 })
+  return bridge
+}
+
+test('a message arriving during a turn is queued (default) and delivered after it settles', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake)
+
+  const first = bridge.deliver({ conversationId: 'room-1', text: 'first' })
+  // Settle the first turn on a timer; the reply event must reach the polling
+  // loop of the first delivery (release must not depend on its resolution).
+  setTimeout(() => fake.release('answer-1'), 300)
+
+  const second = bridge.deliver({ conversationId: 'room-1', text: 'second' })
+  // The queue must NOT call followup while the turn is busy: the queued
+  // message is delivered only after the first reply settles.
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(fake.calls.followup.length, 1, 'a queued message must not start a second turn while one is running')
+
+  // The queued turn runs after the first settles; its reply must arrive —
+  // release answer-2 as soon as the drain starts its followup. The interval
+  // is registered before any await: once deliver #1's finally begins the
+  // drain, `await first` does not resume until the drain finishes, so a
+  // late-registered release would always lose the race.
+  const releaseSecond = setInterval(() => {
+    if (fake.calls.followup.length >= 2) {
+      clearInterval(releaseSecond)
+      setTimeout(() => fake.release('answer-2'), 50)
+    }
+  }, 25)
+  const firstResult = await first
+  assert.equal(firstResult.text, 'answer-1')
+  const secondResult = await second
+  assert.equal(fake.calls.followup.length, 2, 'the queued message must be delivered after the first settles')
+  assert.equal(secondResult.text, 'answer-2')
+})
+
+test('steer mode injects into the running turn via agent.steer', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake)
+
+  const first = bridge.deliver({ conversationId: 'room-1', text: 'first' })
+  setTimeout(() => fake.release('steered-answer'), 300)
+
+  const second = bridge.deliver({ conversationId: 'room-1', text: 'correction', busyMessageMode: 'steer' })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(fake.calls.steer.length, 1, 'steer mode must call agent.steer while the turn runs')
+  assert.equal(fake.calls.followup.length, 1, 'steer mode must not start a second turn')
+
+  const firstResult = await first
+  const secondResult = await second
+  assert.equal(firstResult.text, 'steered-answer')
+})
+
+test('a steer arriving when the agent is idle degrades to a normal turn', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake)
+
+  const delivery = bridge.deliver({ conversationId: 'room-1', text: 'only', busyMessageMode: 'steer' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  fake.release('answer')
+  const result = await delivery
+
+  assert.equal(fake.calls.followup.length, 1)
+  assert.equal(fake.calls.steer.length, 0, 'an idle agent must be driven by followup, not steer')
+  assert.equal(result.text, 'answer')
+})
+
+test('/steer <instruction> steers the running turn regardless of the configured mode', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake)
+
+  const first = bridge.deliver({ conversationId: 'room-1', text: 'start work' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  const second = bridge.deliver({ conversationId: 'room-1', text: '/steer focus on the tests' })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(fake.calls.steer.length, 1, '/steer must reach agent.steer')
+  const steered = fake.calls.steer[0]
+  const text = steered?.content?.[0]?.text ?? ''
+  assert.match(text, /focus on the tests/, 'the steer payload must carry the instruction')
+
+  fake.release('done')
+  await Promise.all([first, second])
+})
+
+test('a queued message resolves with its own reply; the receipt goes through onProgress', async () => {
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake)
+  const notes = []
+
+  const first = bridge.deliver({ conversationId: 'room-1', text: 'first' })
+  setTimeout(() => fake.release('answer-1'), 300)
+  // When the drain starts the queued turn (followup #2), settle it too.
+  const releaseSecond = setInterval(() => {
+    if (fake.calls.followup.length >= 2) { clearInterval(releaseSecond); fake.release('answer-2') }
+  }, 25)
+
+  const second = bridge.deliver({
+    conversationId: 'room-1',
+    text: 'second',
+    onProgress: (note) => { notes.push(note) },
+  })
+  const secondResult = await second
+
+  // The receipt reached the send channel, and the resolved value is the real
+  // answer of the queued turn — the caller sends it through the normal path.
+  assert.ok(notes.some((n) => String(n).includes('已排队')), 'the queue receipt must go through onProgress')
+  assert.equal(secondResult.text, 'answer-2')
+})
