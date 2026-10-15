@@ -334,3 +334,31 @@ invalid plugin, expect function or object with an "apply" method, received objec
 
 **遗留**：`README.md` 的 ASR 一节仍按「服务在设置页可用」描述；本次修复顺带把它修好了，
 但**未做**针对 ASR 的独立验证（只断言了控制器不被击落）。
+
+**部署核查（重要，别再犯）**：修复在仓库里并不等于修复在这台机器上。本次修复完成时，
+`~/.dsh/profiles/desktop/node_modules/dsh-plugin-weixin/src/index.js` 仍带着
+`:158 ctx.plugin(loginController)` 与 `:173 ctx.plugin(asrController)` ——
+**用户当时运行的正是这个副本**，所以「源码已修 + 用户已重启」依然复现。
+`node bin/install.mjs --profile desktop` 之后两份 SHA-256 一致
+（`f868b5a4…`），据此才算部署完成。核对方式：
+
+```bash
+shasum -a 256 ~/.dsh/profiles/desktop/node_modules/dsh-plugin-weixin/src/index.js \
+              src/index.js          # 两行必须相同
+```
+
+**核对凭证是否有效的正确姿势（我在此处曾误判）**：手写一个 `getconfig` 请求体
+（只带 `ilink_user_id` + `bearer`）对**有效**凭证会答 `{"errcode":-14,"errmsg":"session timeout"}`，
+看上去像「登录已过期」。真正的原因是缺 `base_info`。同一个凭证走插件自己的
+`getConfig`（`vendor/openclaw-weixin/api/api.js`，带 `buildBaseInfo()`）答
+`{"ret":0,"typing_ticket":"AART…"}` = **有效**。所以判凭证必须用插件自带的 helper，
+不要手搓请求体——否则会给用户一个理直气壮的、错误的「请重新扫码」。
+（`getconfig` 不消费入站队列，只有 `getupdates` 会，因此这个检查不抢消息。）
+
+**真宿主复现脚本**（`/tmp/wxprobe8/real-host.mjs`，非仓库文件）：用**真** `@deepseek-ai/cordis`
+的 `Context` 加载**已部署**的副本，扫描落盘后调 `onAccountBound()`，断言日志出现
+`listening as account <id>` 且**没有** `settings login service unavailable`；对修复前的副本
+（`/tmp/deployed-weixin-backup-*`）则失败并打印出那句被吞掉的
+`invalid plugin, expect function or object with an "apply" method, received object`。
+注意 cordis 的 logger 默认 exporter `level: 1` **会丢掉 warn(2)/debug(3)**——
+正是本缺陷产生的日志级别，捕获时须显式 `levels: { default: 3 }`。
