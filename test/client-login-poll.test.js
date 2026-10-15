@@ -301,7 +301,9 @@ async function mountCard(remote) {
   }
   await (await registration.factory(require).apply(ctx))
 
-  assert.equal(seats.length, 1, 'the card must register exactly one settings seat')
+  // Two seats since the settings.section registration: the bundle page and
+  // the shell Settings nav share one component. The bundle page is seat 0.
+  assert.equal(seats.length, 2, 'the card must register the bundle page and the settings.section entry')
   hooks.setRoot(seats[0].component)
   hooks.flush()
 

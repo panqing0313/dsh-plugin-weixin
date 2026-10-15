@@ -669,7 +669,12 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     // into "the bot just ignores me" with nothing to grep afterwards.
     const logDir = process.env.DSH_WEIXIN_LOG_DIR
     assert.ok(logDir, 'expected the vendor log dir to be redirected for this test run')
-    const day = new Date().toISOString().slice(0, 10)
+    // The vendor logger names the file by the LOCAL date, not UTC — a run
+    // that crosses midnight (00:00–08:00 CST) would otherwise look for
+    // yesterday's file. Mirror the logger's own local date key.
+    const now = new Date()
+    const offsetMs = now.getTime() - now.getTimezoneOffset() * 60_000
+    const day = new Date(offsetMs).toISOString().slice(0, 10)
     const logFile = path.join(logDir, `openclaw-${day}.log`)
     assert.ok(fs.existsSync(logFile), `expected a vendor log file at ${logFile}`)
     const logText = fs.readFileSync(logFile, 'utf8')

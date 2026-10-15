@@ -8,7 +8,9 @@ const CLIENT_PATH = path.join(path.dirname(url.fileURLToPath(import.meta.url)), 
 
 test('the settings card is a real tablist with the two sections as tabs', () => {
   const client = fs.readFileSync(CLIENT_PATH, 'utf8')
-  const card = client.match(/function WeixinSettingsCard\(\) \{[\s\S]*?\n\t\t\t\t\t\},\n\t\t\t\t\)\);/)
+  // The card is hoisted to a named function (the settings.section slot reuses
+  // the same component), so anchor on the component's own last statement.
+  const card = client.match(/function WeixinSettingsCard\(\) \{[\s\S]*?\n\t\t\t\t\tsection\(TABS\[tab\]\?\.label \?\? "", TABS\[tab\]\?\.body\)\);/)
   assert.ok(card, 'WeixinSettingsCard must stay findable')
 
   // A tablist with role=tab buttons: the structure, not just the look.

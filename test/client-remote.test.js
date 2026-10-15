@@ -234,10 +234,14 @@ test('apply() registers the settings card and disposes cleanly', async () => {
   const mod = registration.factory(fakeRequire)
   const ctx = fakeCtx()
   const dispose = await mod.apply(ctx)
-  assert.equal(ctx.seats.length, 1)
+  // Two seats: the bundle page plus the shell Settings nav entry, both
+  // rendering the same card component.
+  assert.equal(ctx.seats.length, 2)
   assert.equal(ctx.seats[0].meta.name, 'plugins.bundle.config')
   // The seat key is the package name the settings owner dispatches on.
   assert.equal(ctx.seats[0].meta.key, 'dsh-plugin-weixin')
+  assert.equal(ctx.seats[1].meta.name, 'settings.section')
+  assert.equal(ctx.seats[1].meta.id, 'dsh-plugin-weixin-settings')
   await dispose()
 })
 

@@ -1300,6 +1300,71 @@ window.__ModuleLoader__.load({
 				noop: async () => {},
 			};
 
+			// The same card twice, in two homes: the plugin's own bundle page
+			// (plugins.bundle.config) and the shell Settings navigation
+			// (settings.section — the slot dsh-im uses for its「IM机器人」page).
+			// One component, two registrations, so the copy never forks.
+			function WeixinSettingsCard() {
+				// A section heading sits outside its panel so the panel edge
+				// reads as the group boundary; an icon-free heading at 14/600
+				// matches the host's own settings sections.
+				const section = (title, body) =>
+					createElement("section", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+						createElement("h3", {
+							style: { margin: 0, fontSize: 14, lineHeight: "20px", fontWeight: 600, color: C.labelPrimary },
+						}, title),
+						body);
+				// Two tabs instead of one long scroll. State only exists at
+				// runtime; in the stub environment useState keeps the first
+				// tab, which matches what the tests assert.
+				const TABS = [
+					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
+					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
+				];
+				const [tab, setTab] = react.useState(0);
+				// Arrow keys move between tabs: the bar is a real tablist,
+				// not just two buttons that happen to look like one.
+				const onTabKey = (event) => {
+					if (event.key === "ArrowRight") {
+						event.preventDefault();
+						setTab((tab + 1) % TABS.length);
+					} else if (event.key === "ArrowLeft") {
+						event.preventDefault();
+						setTab((tab + TABS.length - 1) % TABS.length);
+					}
+				};
+				return createElement("div", {
+						style: { display: "flex", flexDirection: "column", gap: 20, color: C.labelPrimary },
+					},
+					createElement("div", {
+							role: "tablist",
+							className: "weixin-settings-tabbar",
+							onKeyDown: onTabKey,
+							style: { display: "flex", gap: 2, borderBottom: `1px solid ${C.border}`, overflowX: "auto" },
+						},
+						...TABS.map((entry, index) =>
+							createElement("button", {
+									key: entry.id,
+									role: "tab",
+									"aria-selected": index === tab,
+									tabIndex: index === tab ? 0 : -1,
+									onClick: () => setTab(index),
+									style: {
+										appearance: "none",
+										background: "transparent",
+										border: "none",
+										borderBottom: `2px solid ${index === tab ? C.stateOk : "transparent"}`,
+										color: index === tab ? C.labelPrimary : C.labelTertiary,
+										fontSize: 13,
+										lineHeight: "20px",
+										fontWeight: index === tab ? 600 : 400,
+										padding: "8px 12px",
+										cursor: "pointer",
+									},
+							}, entry.label))),
+					section(TABS[tab]?.label ?? "", TABS[tab]?.body));
+			}
+
 			ctx.slots.inject("plugins.bundle.config", () =>
 				ctx.slots.register(
 					{
@@ -1308,67 +1373,23 @@ window.__ModuleLoader__.load({
 						locale: NS,
 						inject: () => actions,
 					},
-					function WeixinSettingsCard() {
-						// A section heading sits outside its panel so the panel edge
-						// reads as the group boundary; an icon-free heading at 14/600
-						// matches the host's own settings sections.
-						const section = (title, body) =>
-							createElement("section", { style: { display: "flex", flexDirection: "column", gap: 8 } },
-								createElement("h3", {
-									style: { margin: 0, fontSize: 14, lineHeight: "20px", fontWeight: 600, color: C.labelPrimary },
-								}, title),
-								body);
-						// Two tabs instead of one long scroll. State only exists at
-						// runtime; in the stub environment useState keeps the first
-						// tab, which matches what the tests assert.
-						const TABS = [
-							{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
-							{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
-						];
-						const [tab, setTab] = react.useState(0);
-						// Arrow keys move between tabs: the bar is a real tablist,
-						// not just two buttons that happen to look like one.
-						const onTabKey = (event) => {
-							if (event.key === "ArrowRight") {
-								event.preventDefault();
-								setTab((tab + 1) % TABS.length);
-							} else if (event.key === "ArrowLeft") {
-								event.preventDefault();
-								setTab((tab + TABS.length - 1) % TABS.length);
-							}
-						};
-						return createElement("div", {
-								style: { display: "flex", flexDirection: "column", gap: 20, color: C.labelPrimary },
-							},
-							createElement("div", {
-									role: "tablist",
-									className: "weixin-settings-tabbar",
-									onKeyDown: onTabKey,
-									style: { display: "flex", gap: 2, borderBottom: `1px solid ${C.border}`, overflowX: "auto" },
-								},
-								...TABS.map((entry, index) =>
-									createElement("button", {
-											key: entry.id,
-											role: "tab",
-											"aria-selected": index === tab,
-											tabIndex: index === tab ? 0 : -1,
-											onClick: () => setTab(index),
-											style: {
-												appearance: "none",
-												background: "transparent",
-												border: "none",
-												borderBottom: `2px solid ${index === tab ? C.stateOk : "transparent"}`,
-												color: index === tab ? C.labelPrimary : C.labelTertiary,
-												fontSize: 13,
-												lineHeight: "20px",
-												fontWeight: index === tab ? 600 : 400,
-												padding: "8px 12px",
-												cursor: "pointer",
-											},
-										}, entry.label))),
-							section(TABS[tab]?.label ?? "", TABS[tab]?.body));
+					WeixinSettingsCard));
+
+			// The shell Settings modal: one nav entry opening the same card.
+			// `label` is a locale thunk so switching the interface language
+			// renames the entry without a reload (the navigation re-renders on
+			// the section ledger bump). Order 22 sits just after dsh-im's 21.
+			ctx.slots.inject("settings.section", () =>
+				ctx.slots.register(
+					{
+						name: "settings.section",
+						id: `${PKG}-settings`,
+						order: 22,
+						label: () => t("WeChat", "微信"),
+						locale: NS,
+						inject: () => actions,
 					},
-				));
+					WeixinSettingsCard));
 		}
 
 		async function apply(ctx) {
