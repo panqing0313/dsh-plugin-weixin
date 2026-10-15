@@ -482,3 +482,73 @@ Publish path and its one human step:
   matches the local `npm pack`), fresh `npm install dsh-plugin-weixin` into a
   scratch directory (9 deps resolved, 0 vulnerabilities), tarball copy vs
   deployed copy hashes.
+
+## 2026-10-15 (late) — dsh-im study port: five features (0.2.0)
+
+Studied `/tmp/dsh-im` (github.com/xmanrui/dsh-im) and ported the features that
+fit a WeChat channel, one task at a time, each with discriminating tests
+(stash the fix → new tests must fail), full suite green, desktop redeploy +
+SHA-256 check, independent commit:
+
+- `477b336` **T1 busy queue/steer** — a message arriving mid-turn used to be
+  refused; now it is queued by default (caller gets a receipt, and the queued
+  entry resolves with its own real reply) or steers the running turn
+  (`busyMessageMode: "steer"`). `/steer <instruction>` always injects.
+  `src/agent-bridge.js` `deliver()` gained `busyMessageMode`; `record.queue[]`
+  holds entries. Test harness lesson: register the release timer BEFORE
+  awaiting the drain, or the interval wins the race after completion.
+- `43223c7` **T2 late delivery** — a turn that outlived the wait printed
+  "processing timed out" and DROPPED the eventual answer. Now the wait keeps
+  listening (normal cadence, capped by `lateReplyMaxWaitMs`, default 60min)
+  and hands the final text to `onLateReply`: an immediate notice, then the
+  real answer with a FRESH typing ticket (the original context_token is
+  one-shot — reusing it is rejected by the server). `deliver()` resolves
+  `{text:'', sessionId, late:true}` so the caller skips the normal send.
+- `4dca924` **T3 sourceContext** — optional (default off) config; when on,
+  every prompt is prefixed with a single-line self-closing
+  `<weixin_source channel="weixin" senderId=… conversationId=… kind=…
+  timestamp=… />` (`weixinSourceBlock(message)`, exported for tests).
+  Timestamp uses `toISOString` — in tests expect UTC, not local.
+- `81ee282` **T4 settings tabs + atomic saves** — the settings card is a real
+  tablist (role=tab/tablist, aria-selected, ArrowLeft/Right) instead of one
+  long scroll; the download-source and proxy radios no longer write on every
+  click — they stage, and one Save/Reset bar writes the pair in a single
+  `setDownloadSettings(endpoint, proxy)` call (Reset re-reads host truth).
+  The instant-clear path (`setProxyInput(""); saveProxy("")`) must stay dead —
+  it is the stale-closure bug class.
+- `a7fb8d0` **T5 icon** — WeChat-green rounded square + white speech bubble,
+  512/128 in `assets/`, wired as the package `icon` field.
+- `fce3f9a` **fix**: the icon field pointed at `assets/` which neither the npm
+  `files` list nor the installer's `COPY_ENTRIES` carried → the host's
+  metadata reader died with ENOENT (`lstat .../assets`) on the deployed copy.
+  Rule: anything the manifest points at must be in BOTH shipping lists.
+- `0f99885` **settings.section entry** — the card is hoisted to a named
+  function shared by two registrations: the plugin bundle page
+  (`plugins.bundle.config`) and the shell Settings nav
+  (`settings.section`, order 22, after dsh-im's 21, locale-thunk label
+  `t("WeChat","微信")`). Test contracts updated accordingly
+  (`client-login-poll` now expects 2 seats).
+- Flake fixed in passing: `test/e2e.test.js` built the log filename from the
+  UTC date while the vendor logger uses the LOCAL date — every run in the
+  00:00–08:00 CST window failed. Mirror the logger's local date key. Lesson:
+  a date-key assertion must use the same timezone source as the code under
+  test.
+
+## 2026-10-16 — release 0.2.0 and the profile-pin regression
+
+- `1473cdb` + tag `v0.2.0` + GitHub release. npm publish again needs the
+  operator's terminal for the OTP browser flow (same as 0.1.0; the tarball is
+  prepared and verified by the agent first).
+- **Why the desktop copy kept regressing on restart**: the profile's
+  `package.json` pinned `dsh-plugin-weixin:
+  file:../../../../../tmp/dsh-plugin-weixin-0.1.0.tgz` — a file dependency on
+  the day-one tarball. Every DSH start reinstalls from the manifest+lockfiles
+  and overwrote whatever `bin/install.mjs` had placed. Fix: point
+  `package.json`, `package-lock.json` AND `pnpm-lock.yaml` (all three!) at the
+  0.2.0 tarball; keep a `.keep` backup of the tarball because `/tmp` is
+  cleaned. Future releases must update all three references (or switch the
+  dependency to the npm registry version instead).
+- Marketplace entry (awesome-dsh-plugin PR #7426) is CI-green and
+  conflict-free but awaits a maintainer merge; the dsh-market search reads
+  the generated `dsh-plugin-catalog` package, which only refreshes after
+  merge. A polite ping comment was left on the PR.
