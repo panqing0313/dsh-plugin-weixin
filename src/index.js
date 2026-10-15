@@ -73,6 +73,7 @@ export const Config = z.object({
     .union([z.const('queue'), z.const('steer')])
     .default('queue')
     .description('What happens to a message that arrives while a reply is still being written: "queue" waits and delivers it as the next turn, "steer" injects it into the running turn. "/steer <instruction>" always injects.'),
+  sourceContext: z.boolean().default(false).description('Prepend a <weixin_source …> block to each prompt so the agent knows the message came from WeChat and who sent it.'),
   progressAfterMs: z.number().default(45_000).description('Send one progress note to the user after this many milliseconds.'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
@@ -500,6 +501,27 @@ async function resolveAccount(config, warn) {
  * @param {string} params.stateRoot  Weixin state root, for the media allowlist.
  * @param {string[]} params.mediaDirs  Directories a reply may reference.
  */
+/**
+ * Build the opt-in source block prepended to a turn's prompt when
+ * `sourceContext` is enabled. Kept on one self-closing tag line so it is
+ * cheap to strip by either the model or the operator.
+ *
+ * @param {{ senderId?: string, conversationId?: string, timestamp?: number, type?: string }} message
+ * @returns {string}
+ */
+export function weixinSourceBlock(message) {
+  const fields = [
+    'channel="weixin"',
+    `senderId="${String(message.senderId ?? '')}"`,
+    `conversationId="${String(message.conversationId ?? '')}"`,
+    `kind="${String(message.type ?? 'text')}"`,
+  ]
+  if (typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)) {
+    fields.push(`timestamp="${new Date(message.timestamp).toISOString()}"`)
+  }
+  return `<weixin_source ${fields.join(' ')} />`
+}
+
 function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs }) {
   return async (message) => {
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
@@ -587,6 +609,13 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
         return
       }
       prompt = parts.join('\n\n')
+    }
+
+    // Source context: the agent has no other way to know where a message came
+    // from. Opt-in, because the block spends tokens on every turn and a
+    // single-user deployment rarely needs it.
+    if (config.sourceContext === true) {
+      prompt = weixinSourceBlock(message) + (prompt === '' ? '' : `\n\n${prompt}`)
     }
 
     // 5. Drive the agent, then send the reply back in chunks.

@@ -219,6 +219,57 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
   }
 })
 
+test('sourceContext on: the agent prompt carries a weixin_source block; off: it does not', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  for (const sourceContext of [true, false]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-'))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 3001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct9', create_time_ms: 9, item_list: [{ type: 1, text_item: { text: 'who are you' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, sourceContext })
+
+      const disposers = []
+      const warnings = []
+      const ctx = {
+        logger: { info: () => {}, warn: (l) => warnings.push(l) },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      assert.ok(sent.length >= 1, `expected a reply (sourceContext=${sourceContext})`)
+      const prompt = sent[0].msg.item_list[0].text_item.text
+      if (sourceContext) {
+        assert.match(prompt, /<weixin_source channel="weixin"/)
+        assert.match(prompt, new RegExp(`senderId="${ALLOWED}"`))
+        assert.match(prompt, /who are you/)
+      } else {
+        assert.ok(!prompt.includes('weixin_source'), prompt)
+        assert.equal(prompt, 'pong: who are you')
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
+  }
+})
+
 test('an inbound image is downloaded, decrypted, saved and handed to the agent', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 
