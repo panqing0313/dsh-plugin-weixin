@@ -52,12 +52,27 @@ after(() => {
 })
 
 /**
- * Stop a fake server without waiting for its idle keep-alive sockets.
+ * Stop a fake server without waiting out its keep-alive window.
  *
- * `server.close()` only stops accepting new connections; a socket the client
- * parked after its last reply keeps the callback pending for the whole
- * keep-alive window, which made the re-bind test sit for three seconds after
- * its assertions had already passed.
+ * `server.close()` only stops accepting new connections; it still waits for
+ * live sockets, and the client parks its connections until the keep-alive
+ * window expires. That cost three seconds of teardown in two tests, after
+ * their assertions had already passed. `closeAllConnections()` is the only
+ * deterministic way to release them: `closeIdleConnections()` misses a socket
+ * whose long-poll is still in flight at that instant, and the response only
+ * lands afterwards — by which time nothing is left to reap it. Reaping on a
+ * timer instead worked, but only sometimes: which test stalled varied between
+ * runs.
+ *
+ * Destroying sockets this bluntly is safe only because this runs *after* the
+ * plugin is disposed (see withPlugin), so the transport has stopped and is no
+ * longer mid-request. Earlier, when the re-bind test closed its second server
+ * from inside the test body while the transport was still polling it, undici
+ * failed its own `writeH1` with `Error: setTypeOfService EINVAL` (`node:net` →
+ * `Socket.setTypeOfService`) on the destroyed socket. That surfaced as "A
+ * resource generated asynchronous activity after the test ended" and turned
+ * this file red roughly 1 run in 20, with nothing wrong in the code under test.
+ * The ordering is the fix, not the destructiveness.
  */
 function closeServer(server) {
   return new Promise((resolve) => {
@@ -197,21 +212,37 @@ function loginService(provided) {
 /**
  * Apply the plugin against a fake host and a throwaway state root, run `body`,
  * then dispose the plugin exactly as the host would.
- * @param {(helpers: {root: string, lines: string[], provided: object[], server: object}) => Promise<void>} body
+ *
+ * Servers are closed only AFTER the plugin is disposed, and `registerServer`
+ * exists so a test that starts a second server mid-body does not have to close
+ * it itself. Closing one while the transport is still polling it leaves that
+ * in-flight long-poll to run to completion, which cost the re-bind test three
+ * seconds of teardown after its assertions had already passed.
+ *
+ * @param {(helpers: {root: string, lines: string[], provided: object[], seen: object, baseUrl: string, registerServer: (server: object) => void}) => Promise<void>} body
  */
 async function withPlugin(body) {
   const root = withStateRoot()
   const previousStateDir = process.env.DSH_WEIXIN_STATE_DIR
   process.env.DSH_WEIXIN_STATE_DIR = root
   const { server, baseUrl, seen } = await startFakeILink()
+  const servers = [server]
   const { ctx, disposers, lines, plugins, provided } = makeCtx()
   const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
   try {
     plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED] }))
-    await body({ root, lines, plugins, provided, seen, baseUrl })
+    await body({
+      root,
+      lines,
+      plugins,
+      provided,
+      seen,
+      baseUrl,
+      registerServer: (extra) => servers.push(extra),
+    })
   } finally {
     for (const disposer of disposers) await (await disposer)?.()
-    await closeServer(server)
+    for (const target of servers.reverse()) await closeServer(target)
     if (previousStateDir === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
     else process.env.DSH_WEIXIN_STATE_DIR = previousStateDir
   }
@@ -246,33 +277,32 @@ test('a credential saved after load starts the inbound loop without a reload', a
 })
 
 test('a re-bind moves the running loop to the new credential', async () => {
-  await withPlugin(async ({ root, lines, provided, seen, baseUrl }) => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl, registerServer }) => {
     seedAccount(root, { baseUrl })
     await waitFor(() => seen.getupdates > 0, 'the loop to start for the credential present at load')
 
     // The operator logs out and scans again: the account record now points at a
     // different iLink host, which is what a redirect during a scan produces.
+    // Registered rather than closed here: the transport keeps long-polling it
+    // until the plugin is disposed at the end of withPlugin.
     const second = await startFakeILink()
-    try {
-      seedAccount(root, { baseUrl: second.baseUrl, token: 'tok-2' })
-      loginService(provided).onAccountBound()
-      await waitFor(() => second.seen.getupdates > 0, 'the loop to come up on the new credential')
+    registerServer(second.server)
+    seedAccount(root, { baseUrl: second.baseUrl, token: 'tok-2' })
+    loginService(provided).onAccountBound()
+    await waitFor(() => second.seen.getupdates > 0, 'the loop to come up on the new credential')
 
-      const settled = seen.getupdates
-      await settle()
-      assert.equal(
-        seen.getupdates,
-        settled,
-        'the transport for the replaced credential must be stopped: two live long-polls on one credential split the inbound queue',
-      )
-      assert.equal(
-        lines.filter((line) => line.includes(`listening as account ${ACCOUNT_ID}`)).length,
-        2,
-        'the swap must be reported once for each credential',
-      )
-    } finally {
-      await closeServer(second.server)
-    }
+    const settled = seen.getupdates
+    await settle()
+    assert.equal(
+      seen.getupdates,
+      settled,
+      'the transport for the replaced credential must be stopped: two live long-polls on one credential split the inbound queue',
+    )
+    assert.equal(
+      lines.filter((line) => line.includes(`listening as account ${ACCOUNT_ID}`)).length,
+      2,
+      'the swap must be reported once for each credential',
+    )
   })
 })
 

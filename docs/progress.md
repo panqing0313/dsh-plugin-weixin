@@ -362,3 +362,70 @@ shasum -a 256 ~/.dsh/profiles/desktop/node_modules/dsh-plugin-weixin/src/index.j
 `invalid plugin, expect function or object with an "apply" method, received object`。
 注意 cordis 的 logger 默认 exporter `level: 1` **会丢掉 warn(2)/debug(3)**——
 正是本缺陷产生的日志级别，捕获时须显式 `levels: { default: 3 }`。
+
+## 2026-10-15（续）— 测试污染了操作者日志，且把「无日志」误当成「无请求」（已修复）
+
+排查上面三条缺陷时，有一条线索把我带偏过：为确认入站循环是否在跑，我 grep 了操作者日志里的
+`getupdates`，得到 **277 条命中**。看上去证据确凿，实际**一条都不是真的** —— 全是 `node --test`
+的流量。它们是本机回环地址（`http://127.0.0.1:<port>`），只有端口号能泄底。
+
+**根因**：vendor logger 在 `vendor/openclaw-weixin/util/logger.js` 首次 import 时**一次性地**
+解析日志目录，默认 `~/.dsh/weixin/logs/openclaw-YYYY-MM-DD.log`，也就是操作者排查「微信不回消息」时
+真正会读的那个文件。只有两个测试文件自己重定向了目录，其余文件全部把测试流量追加进了真日志。
+
+**量化**（逐文件比对前后字节数）：
+
+| 测试文件 | 追加字节 |
+| --- | --- |
+| `test/e2e.test.js` | +5378 |
+| `test/outbound-media.test.js` | +1637 |
+| `test/markdown*.test.js` | 少量 |
+
+一次全量运行约 **+8 KB**。危害不是「不整洁」，而是**证据被污染**：这正是本次排查的失败模式。
+
+**修复**：新增 `test/isolate-vendor-log.mjs`，由 `package.json` 的 `test` 脚本用 `--import`
+在**每个** `node --test` 子进程加载任何测试文件**之前**执行（`--import` 而非 `--require`，因为
+它是 ESM），把 `DSH_WEIXIN_LOG_DIR` 指向每个进程独立的 mkdtemp，并在 `process.on('exit')` 清理。
+放在这里而不是各测试文件里，是为了让**新写的测试无法因为忘记 opt-in 而重新泄漏**；需要读日志的
+测试仍可自己设 `DSH_WEIXIN_LOG_DIR` 再读回（`test/login-remote.test.js`、
+`test/inbound-loop-start.test.js` 就是这么做的）。
+
+**验证**：修复后跑 `npm test`，操作者真实日志字节数 **310296 → 310296，零增长**。
+
+## 2026-10-15（续）— 偶发红：`setTypeOfService EINVAL`（已修复）
+
+现象：全量运行偶尔 `tests 186 / pass 185 / fail 1`，失败的是**整个**
+`test/inbound-loop-start.test.js`（不是其中某条），报
+
+```
+Error: A resource generated asynchronous activity after the test ended.
+```
+
+附带的错误是 `Error: setTypeOfService EINVAL`（`node:net` → `Socket.setTypeOfService`），
+从 undici 的 `writeH1` 抛出。**约每 20 次跑出 1 次**，且与被测代码无关——这类红最消耗信任。
+
+**根因**：`test/inbound-loop-start.test.js` 的 re-bind 用例在**它自己体内**关掉了第二个假服务器
+（`finally { await closeServer(second.server) }`），而那一刻传输层**正在对它做长轮询**。
+`closeAllConnections()` 在客户端写到一半时销毁 socket，undici 便在自己的写入路径上炸了。
+
+**修复是顺序问题，不是强度问题**：把关闭推迟到**插件 dispose 之后**。`withPlugin` 现在持有
+一个 `servers` 数组，测试启动第二个服务器时调 `registerServer(second.server)` 登记，
+统一在 `finally` 里**先 dispose、再关闭**。此时传输层已停止，不再有 in-flight 写入。
+
+**同时修掉 3 秒 teardown**：`server.close()` 只停止接受新连接，已 park 的 keep-alive socket
+会一直吊着回调。原先的 `closeIdleConnections()` 仍会漏掉「关闭那一刻长轮询还在飞行中」的
+socket——响应几毫秒后才落地，那时已经没有东西去回收它了（试过用定时器反复回收：能work，但
+**哪个用例卡住每次都不一样**，不是确定性修复）。改为 `closeAllConnections()`：因为顺序已经
+正确，激进销毁是安全的。
+
+| | 之前 | 之后 |
+| --- | --- | --- |
+| 本文件耗时 | 6679ms | ~700ms |
+| re-bind 用例 | 3017ms | 177ms |
+| 30 次连跑 | — | **30/30 pass，EINVAL 0 次** |
+
+**教训**：`--test` 把「测试结束后仍有异步活动」归到**整个文件**上，看不出是哪条用例——所以
+定位靠的是 `--test-timeout` + 流式输出（能看出是哪条挂住），以及给 `closeServer` 加计时打印。
+另外：那次「挂住不返回」的直接原因是**我自己的编辑错误** —— re-bind 用例的回调忘了从参数里
+解构 `registerServer`（`ReferenceError`），而它发生在第二个服务器创建**之后**，于是那个监听句柄
+再也没人关，事件循环永远不空。**报错发生在资源获取之后，就等于资源泄漏。**
