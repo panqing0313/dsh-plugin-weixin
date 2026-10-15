@@ -455,3 +455,30 @@ Fixes shipped:
 - `89a2145` — allowlist refusals, duplicate skips and settled turns are now
   also written to the vendor file log, so "the bot ignores me" is always
   greppable.
+
+## 2026-10-15 — first marketplace release (dsh-plugin-weixin@0.1.0)
+
+Published to npm (the registry DSH's plugin page installs from), as
+`dsh-plugin-weixin@0.1.0` — the same tree the operator's desktop profile runs
+(verified: all four core files SHA-256 identical between the published tarball
+and the deployed copy).
+
+Publish path and its one human step:
+
+- The npm CLI's OTP browser flow cannot be driven from a captured (non-TTY)
+  shell: `npm publish` prints the auth URL masked as `***`. So publishing is a
+  two-party routine: the agent bumps the version, prepares and verifies
+  everything, then the OPERATOR runs `npm publish` in a real terminal and
+  approves the browser prompt.
+- A `0.0.0-stage` placeholder was briefly created while grabbing the name;
+  publishing 0.1.0 as the same account superseded it (`latest` now points at
+  0.1.0). Re-running publish after a success fails with "cannot publish over
+  the previously published versions" — that error means the earlier run won.
+- Pre-publish gate (every future release): full suite green, stash-proven
+  discriminating tests, real-endpoint verification, `bin/install.mjs` redeploy
+  + SHA-256 check, then bump the version — never republish over an existing
+  one.
+- Post-publish verification performed: `npm view` (latest = 0.1.0, integrity
+  matches the local `npm pack`), fresh `npm install dsh-plugin-weixin` into a
+  scratch directory (9 deps resolved, 0 vulnerabilities), tarball copy vs
+  deployed copy hashes.
