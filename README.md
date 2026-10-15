@@ -56,7 +56,7 @@ dsh-plugin-weixin
 ### 方式二：从源码安装
 
 ```bash
-git clone <this-repo> && cd dsh-weixin
+git clone <this-repo> && cd dsh-plugin-weixin
 node bin/install.mjs                      # 默认装到 $DSH_PROFILE（或 desktop）
 node bin/install.mjs --profile web        # 装到别的 profile
 node bin/install.mjs --uninstall
