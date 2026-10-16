@@ -52,8 +52,9 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@0.4.0`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@0.5.0`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
+- **0.5.0** —— 新增 `/clear` 清空当前会话并重开；出站附件收件人在转接处被丢成 `to=undefined` 的修复（自 0.1.0 起插件驱动的附件上传一直如此失败）；入站长轮询 body 挂死的看门狗（手机显示「暂无法连接 openclaw」的根因）；PDF/Word 等文档以 markdown 链接写出时也能送达；schema 默认值不再覆盖设置页保存的 ASR 命令。
 - **0.4.0** —— 一个微信会话可挂多条 DSH 会话（`/new`、`/list`、`/use`，切走不销毁）；**全部配置项都能在设置页里看和改**；会话列表里给本插件开的会话加微信图标；二维码不再依赖 python 或未声明的包（Windows 修复）；出站相对路径按 agent 工作目录解析。
 - **0.3.0** —— 仓库自带 ASR 桥，语音识别开箱可用（详见[语音识别](#语音识别asr)）。
 - **0.2.0** —— 忙时排队/插话、超时补发、来源块、设置卡进入宿主 Settings。
