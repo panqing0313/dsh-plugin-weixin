@@ -511,27 +511,57 @@ function main() {
 
 	const previousVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
 	const previousTag = git(['describe', '--tags', '--abbrev=0']) || ''
+	// Composed before the bump: the notes describe the commits being released,
+	// and the bump commit is not one of them.
+	const notes = releaseNotes(previousTag)
 
 	confirm(previousVersion)
 
 	runTests()
+
+	if (dryRun) {
+		// A dry run must not touch the tree. The version bump and the tarball are
+		// exactly what is being rehearsed, so build them, report, then undo.
+		const before = snapshotTextFiles()
+		try {
+			bumpVersion(previousVersion)
+			const tarball = buildAndVerify()
+			note(`would publish ${path.basename(tarball)}`)
+			note(`would tag v${version} and push (GitHub release notes ready)`)
+		} finally {
+			restoreTextFiles(before)
+			for (const leftover of fs.readdirSync(ROOT).filter((f) => f.endsWith('.tgz'))) {
+				fs.rmSync(path.join(ROOT, leftover), { force: true })
+			}
+		}
+		process.stdout.write(`\n${C.green}${C.bold}Dry run for ${PKG_NAME}@${version} finished — tree unchanged.${C.off}\n`)
+		return
+	}
+
 	bumpVersion(previousVersion)
 	const tarball = buildAndVerify()
-
-	if (!dryRun) {
-		commitRelease(previousVersion)
-	}
-	const published = publish(tarball)
-	if (published) verifyPublished(tarball)
-	tagAndPush(releaseNotes(previousTag))
-	if (!dryRun) installLocally()
+	commitRelease(previousVersion)
+	if (publish(tarball)) verifyPublished(tarball)
+	tagAndPush(notes)
+	installLocally()
 
 	process.stdout.write(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
-	if (dryRun) {
-		process.stdout.write('Dry run finished — the tree was left as it was (use git checkout to discard the version bump).\n')
-	} else {
-		process.stdout.write(`npm:      https://www.npmjs.com/package/${PKG_NAME}/v/${version}\n`)
-		process.stdout.write(`release:  https://github.com/${git(['remote', 'get-url', 'origin']).replace(/^git@github\.com:|\.git$/g, '')}/releases/tag/v${version}\n`)
+	process.stdout.write(`npm:      https://www.npmjs.com/package/${PKG_NAME}/v/${version}\n`)
+	const repo = git(['remote', 'get-url', 'origin'])
+		.replace(/^git@github\.com:/, '')
+		.replace(/^https:\/\/github\.com\//, '')
+		.replace(/\.git$/, '')
+	process.stdout.write(`release:  https://github.com/${repo}/releases/tag/v${version}\n`)
+}
+
+/** Read the files the version bump rewrites, so a dry run can put them back. */
+function snapshotTextFiles() {
+	return ['package.json', 'README.md'].map((p) => ({ path: p, text: fs.readFileSync(path.join(ROOT, p), 'utf8') }))
+}
+
+function restoreTextFiles(snapshot) {
+	for (const { path: p, text } of snapshot) {
+		fs.writeFileSync(path.join(ROOT, p), text)
 	}
 }
 
