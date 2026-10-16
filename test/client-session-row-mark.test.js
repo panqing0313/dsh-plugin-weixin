@@ -219,7 +219,7 @@ async function mountRowSeat() {
         return { dispose: async () => {} }
       },
     },
-    locale: { current: () => 'zh', t: (en, zh) => zh ?? en, onChange: () => () => {} },
+    locale: { getSnapshot: () => ({ active: 'zh', locales: ['zh', 'en'], revision: 0 }) },
   }
   // A context resolves dotted service names as literal keys, so they must be
   // reachable both ways: `ctx["remote.weixin"]` for the declaration and

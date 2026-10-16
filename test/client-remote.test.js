@@ -121,7 +121,7 @@ function fakeCtx(hooks = {}) {
       inject: (_name, register) => { register() },
       register: (meta, component) => { seats.push({ meta, component }); return () => {} },
     },
-    locale: { current: { language: 'zh' } },
+    locale: { getSnapshot: () => ({ active: 'zh', locales: ['zh', 'en'], revision: 0 }) },
   }
   // The shell mounts this Remote itself (the web client's platform-neutral
   // assembly calls $mount for the workspace controller), so it is present

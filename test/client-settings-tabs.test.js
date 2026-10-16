@@ -53,3 +53,24 @@ test('the ASR panels save through one explicit bar, not on every click', () => {
   assert.match(client, /onClick: saveDownloadSettings/)
   assert.match(client, /onClick: discardDownloadSettings/)
 })
+
+test('the card reads the language from the service DSH actually provides', () => {
+  // The card used to read `ctx.locale.current.language`, which no DSH exposes:
+  // the locale plugin calls `ctx.provide("locale", locale)` with an object whose
+  // accessors are getSnapshot()/getLocale()/resolveText()/subscribe(). Reading a
+  // shape that does not exist yields `undefined`, which the `?? "zh"` default
+  // turned into Chinese -- so an English client got a Chinese card and nothing
+  // failed, because "undefined" and "zh" were indistinguishable.
+  //
+  // Pin BOTH halves: the real accessor must be consulted, and the fallback must
+  // not silently convert an unreadable language into Chinese.
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const hook = client.match(/function useLocaleText\(ctx\) \{[\s\S]*?\n\t\t\}/)
+  assert.ok(hook, 'useLocaleText must stay findable')
+  assert.match(hook[0], /ctx\.locale\?\.getSnapshot\?\.\(\)/, 'must read the real snapshot accessor')
+  assert.match(hook[0], /getLocale\?\.\(\)/, 'must tolerate the older accessor name')
+  // `current` is a function on some hosts and an object on others; picking up
+  // the function itself would stringify it and never match a language.
+  assert.match(hook[0], /typeof ctx\.locale\?\.current === "function"/)
+  assert.match(hook[0], /startsWith\("zh"\)/, 'the zh test must be explicit')
+})

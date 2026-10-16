@@ -286,7 +286,7 @@ async function mountCard(remote) {
       inject: (_name, register) => { register() },
       register: (meta, component) => { seats.push({ meta, component }); return () => {} },
     },
-    locale: { current: { language: 'zh' } },
+    locale: { getSnapshot: () => ({ active: 'zh', locales: ['zh', 'en'], revision: 0 }) },
     'remote.directoryPicker': { namespace: 'directoryPicker', pick: async () => null },
   }
   ctx['remote.weixin'] = remote.weixin

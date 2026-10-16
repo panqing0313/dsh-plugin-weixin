@@ -311,7 +311,7 @@ async function mountCard(host) {
         return { dispose: async () => {} }
       },
     },
-    locale: { current: () => 'zh', t: (en, zh) => zh ?? en, onChange: () => () => {} },
+    locale: { getSnapshot: () => ({ active: 'zh', locales: ['zh', 'en'], revision: 0 }) },
   }
   // `src/client.js` declares its dependencies by dotted service name, and a
   // context resolves those as literal keys, so the namespaces have to be

@@ -376,8 +376,25 @@ window.__ModuleLoader__.load({
 		function useLocaleText(ctx) {
 			// Simple bilingual labels without the locale dictionaries: the plugin
 			// card stays self-contained and reads the client's current language.
-			const lang = ctx.locale?.current?.language ?? ctx.locale?.language ?? "zh";
-			const zh = lang.startsWith("zh");
+			//
+			// The service DSH actually provides exposes `getSnapshot()` /
+			// `getLocale()` returning `{ active: "zh" | "en", ... }`, plus
+			// `resolveText()`. There is no `locale.current.language`, which is what
+			// this used to read -- so on an English client every lookup fell
+			// through to the `"zh"` default and the card rendered Chinese next to
+			// an English shell. The older shapes are kept as fallbacks because
+			// this plugin is installed into whatever DSH the user runs, and the
+			// service is not versioned with it.
+			const snapshot = ctx.locale?.getSnapshot?.() ?? ctx.locale?.getLocale?.();
+			// `locale.current` is a function on some hosts and an object on others,
+			// so accept either rather than picking up the function itself.
+			const rawCurrent = typeof ctx.locale?.current === "function" ? ctx.locale.current() : ctx.locale?.current;
+			const lang =
+				snapshot?.active ??
+				(typeof rawCurrent === "string" ? rawCurrent : rawCurrent?.language) ??
+				ctx.locale?.language ??
+				"zh";
+			const zh = typeof lang === "string" && lang.toLowerCase().startsWith("zh");
 			return {
 				lang,
 				t: (en, zhText) => (zh ? zhText : en),
