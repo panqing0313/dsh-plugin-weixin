@@ -284,6 +284,7 @@ async function mountCard(host) {
   const source = fs.readFileSync(CLIENT_PATH, 'utf8')
   const hooks = createHooks()
   let registration
+  const registrations = new Map()
 
   const ctx = {
     remote: { ...host.remote, $mount: async () => async () => {} },
@@ -295,9 +296,12 @@ async function mountCard(host) {
       },
       register: (options, component) => {
         // `register(options, Component)` — the component is the second
-        // argument, and the bundle page is registered first, so keep the one
-        // that actually carries a component rather than the first call.
-        if (component) registration = { options, component }
+        // argument. Registrations are kept BY SLOT NAME: the plugin now
+        // occupies more than one seat (the settings card on
+        // plugins.bundle.config, plus the session row mark on
+        // sidebar.session.row.leading), so "keep the last component" would
+        // hand this file the row mark instead of the card it is about.
+        if (component) registrations.set(options.name, { options, component })
         return { dispose: async () => {} }
       },
     },
@@ -332,7 +336,7 @@ async function mountCard(host) {
   new vm.Script(source, { filename: CLIENT_PATH }).runInContext(sandbox)
   await registration.factory(require).apply(ctx)
 
-  hooks.setRoot(registration.component)
+  hooks.setRoot(registrations.get('plugins.bundle.config').component)
   await await hooks.flush()
   return { hooks, calls: host.calls }
 }

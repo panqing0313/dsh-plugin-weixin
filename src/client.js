@@ -1446,6 +1446,70 @@ window.__ModuleLoader__.load({
 
 		//#endregion
 
+		// ----------------------------------------------------- session row mark --
+
+		// The WeChat mark a Session row leads with, on the Sessions this plugin
+		// opened. The `sidebar.session.row.leading` seat (declared by
+		// ui-workspace — the same seat ui-schedule's clock occupies) renders only
+		// while the row's primary status is idle and is left blank on an archived
+		// row; search results have no leading seat at all. The seat receives the
+		// row's Session identity and nothing else, so the occupant decides from
+		// `sessionId` alone.
+		//
+		// Only *our* Sessions carry the mark. `baseSessionIdFor` mints
+		// `weixin-<slug>`, and a new line appends `--<stamp>`; an ordinary
+		// workspace Session keeps its unrelated `session-<uuid>` id, so a prefix
+		// test shows the mark exactly where WeChat opened the conversation — and
+		// never on someone else's rows.
+		const SESSION_ID_PREFIX = "weixin-";
+
+		// WeChat's own logo: the simple-icons "WeChat" path (24x24 viewBox) — the
+		// same glyph the host draws for `weixin.qq.com` links, so this mark and a
+		// WeChat link in a transcript read as one identity. Kept inline because
+		// the client bundle may only require `react` and `react/jsx-runtime`; a
+		// glyph module is not on that list.
+		const WECHAT_GLYPH = "M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z";
+
+		// WeChat green, the brand's own value. The `--dsw-alias-state-success-*`
+		// tokens sit near it but are the interface's "everything is fine" green
+		// rather than WeChat's, and a brand mark that shifts with the shell's
+		// state palette stops being a brand mark.
+		const WECHAT_GREEN = "#07C160";
+
+		/** Whether a Session id belongs to a conversation this plugin opened. */
+		function isWeixinSession(sessionId) {
+			return typeof sessionId === "string" && sessionId.startsWith(SESSION_ID_PREFIX);
+		}
+
+		/**
+		 * The row mark for one of this plugin's Sessions.
+		 *
+		 * Returns `null` for every other Session, which is the whole point: the
+		 * seat is shared with the host's own marks, so an occupant that claimed
+		 * every row would stamp the WeChat logo on unrelated conversations.
+		 * Decorative only — the seat is not a button and has no tab stop, so the
+		 * glyph is `aria-hidden` and carries no label of its own.
+		 *
+		 * @param props.sessionId - the row's Session identity.
+		 * @returns the glyph, or `null` for a Session this plugin did not open.
+		 */
+		function SessionRowMark({ sessionId }) {
+			if (!isWeixinSession(sessionId)) return null;
+			return createElement("span", {
+					className: "weixin-session-row-mark",
+					"aria-hidden": "true",
+					style: { display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" },
+				},
+				createElement("svg", {
+					width: 14,
+					height: 14,
+					viewBox: "0 0 24 24",
+					fill: WECHAT_GREEN,
+					focusable: "false",
+					"aria-hidden": "true",
+				}, createElement("path", { d: WECHAT_GLYPH })));
+		}
+
 		// This list must NOT name the namespaces: `remote.weixin` only comes into
 		// existence inside apply() when $mount installs it, so waiting for it here
 		// is a deadlock — the boot audit reports
@@ -1552,6 +1616,24 @@ window.__ModuleLoader__.load({
 						inject: () => actions,
 					},
 					WeixinSettingsCard));
+
+			// The session row mark. ui-workspace declares this seat on every
+			// Session row and renders it only while the row is idle, so the
+			// occupant is asked about rows it has nothing to do with — hence
+			// `SessionRowMark` returning `null` rather than an empty glyph.
+			// Order 20 sits after ui-schedule's 10: when a WeChat Session also
+			// has an active scheduled task the host's clock still leads, and
+			// the mark follows it instead of competing for the same cell.
+			ctx.slots.inject("sidebar.session.row.leading", () =>
+				ctx.slots.register(
+					{
+						name: "sidebar.session.row.leading",
+						id: `${PKG}-row-mark`,
+						order: 20,
+						locale: NS,
+						inject: () => actions,
+					},
+					SessionRowMark));
 		}
 
 		async function apply(ctx) {

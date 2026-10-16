@@ -301,10 +301,15 @@ async function mountCard(remote) {
   }
   await (await registration.factory(require).apply(ctx))
 
-  // Two seats since the settings.section registration: the bundle page and
-  // the shell Settings nav share one component. The bundle page is seat 0.
-  assert.equal(seats.length, 2, 'the card must register the bundle page and the settings.section entry')
-  hooks.setRoot(seats[0].component)
+  // Three seats: the bundle page and the shell Settings nav share one
+  // component, and the session row mark now occupies a third
+  // (sidebar.session.row.leading) on every Session row in the workspace.
+  // This file is about the card, so it renders the bundle page by name rather
+  // than by position — a fourth seat must not silently change what is tested.
+  assert.equal(seats.length, 3, 'the card must register the bundle page, the settings.section entry, and the row mark')
+  const card = seats.find((seat) => seat.meta.name === 'plugins.bundle.config')
+  assert.ok(card, 'the bundle page seat must be registered')
+  hooks.setRoot(card.component)
   hooks.flush()
 
   return {

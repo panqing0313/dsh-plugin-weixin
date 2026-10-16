@@ -854,3 +854,75 @@ agent 在真实场景里写的恰恰是相对路径，于是这个测试从一�
 
 教训：**验证要有节制**，失败重试会叠加热度；诊断一旦确认是服务端拦截，就该停下等，
 而不是换文件、换大小继续试——那样既拿不到结论，又把账号推得更深。
+
+## 会话行前那个微信图标（不是回归，是从来没做过）
+
+现象：工作区会话列表里，本插件开的两条会话只显示「微信 · 问候与协助请求」这样的纯文字，
+行首没有图标。
+
+### 排查：先排除文件，再找渲染面
+
+按顺序全部实测排除：图标文件（`assets/icon-128.png`，5019 字节，128×128 RGBA）、
+部署副本（`assets/` 四个文件都在，icon 与仓库逐字节一致）、`package.json` 的
+`"icon": "./assets/icon-128.png"`、`exports` 里的 `./package.json` 子路径解析、
+宿主自己的 `readPluginMeta()` 读出 `has icon: true` 且无 error、产出的 data URL
+（`data:image/png;base64,iVBORw0K...`）解码回来是魔数 `89504e47`、IHDR 128×128 的合法 PNG。
+**这条链路是好的**——但它管的是插件管理器里的**卡片**，不是会话行。
+
+真正的渲染面在 `@deepseek-ai/dsh-client-ui-workspace` 的会话行里：
+
+```js
+children: showStatus
+  ? <SessionStatusDots statuses={statuses} />
+  : renderSlot("sidebar.session.row.leading", { sessionId: node.id })
+```
+
+`sidebar.session.row.leading` 是**留给插件的槽位**，按行渲染、只接收该行的 Session 身份。
+本插件此前只注册了 `plugins.bundle.config` 与 `settings.section` 两个座位，
+**从没注册过这个槽位**——所以那片空白是设计如此，图标不是丢了。
+
+### 实现
+
+`src/client.js` 新增 `SessionRowMark`，并注册第三个座位：
+
+- 判定只看前缀 `weixin-`（`baseSessionIdFor` 生成 `weixin-<slug>`，新会话线追加 `--<stamp>`），
+  不是本插件的会话**返回 `null`**——座位是共享的，贪心的前缀判断会把微信图标贴到别人的会话上；
+- 图标用 simple-icons 的 WeChat 路径（1220 字符，24×24 viewBox）**内联**在组件里。
+  之所以内联：客户端 bundle 只允许 `require("react")` 与 `require("react/jsx-runtime")`，
+  图形模块不在白名单上；而这条路径与宿主自己给 `weixin.qq.com` 链接画的图形**完全一致**，
+  于是会话行的这个标记和正文里的微信链接看起来是同一个身份；
+- 颜色用微信品牌绿 `#07C160`，**不用** `--dsw-alias-state-success-*`：那套 token 是界面的
+  「一切正常」绿，会随壳的语义色板变化，而品牌标记不该变；
+- 座位 id 独立（`dsh-plugin-weixin-row-mark`，order 20），排在 ui-schedule 的时钟（order 10）
+  之后。`list` 座位每个 cell id 只取一个赢家，独立 id 是两者共存、而不是互相顶掉的原因。
+
+### 测试
+
+新增 `test/client-session-row-mark.test.js`（6 条）。harness 沿用
+`client-sessions-section.test.js` 的真 hooks 运行时，但**按座位名记录注册**——
+旧 harness 只保留「最后一个带组件的注册」，插件一旦注册第二个座位就会把卡片换成行标记，
+这正是本次暴露出的 harness 假设。
+
+**辨别力**（逐个注入回归，看是否被抓）：
+
+| 注入的回归 | 结果 |
+| --- | --- |
+| `isWeixinSession` 恒为 `true`（吞下所有会话行） | 2 条红（外来 id / 非字符串 id） |
+| 槽位完全不注册 | 6 条全红 |
+| 只认裸 base id（额外会话线丢图标） | 3 条红 |
+| 用主题绿替代 `#07C160` | 1 条红（品牌色） |
+| 换成另一个通用聊天图标 | 1 条红（形状） |
+
+另外三处既有测试的断言写死了座位数量或位置（`client-remote.test.js` 断言 2 个座位、
+`client-login-poll.test.js` 断言 2 个座位且用 `seats[0]` 取卡片、
+`client-sessions-section.test.js` 用「最后一个带组件的注册」取卡片），
+都已改为**按座位名**定位——否则新增座位会让它们悄悄测错对象。
+
+### 验证
+
+- 全量 **257 pass / 0 fail**，连跑 3 次稳定；
+- 跑完操作者日志 `~/.dsh/weixin/logs/openclaw-2026-10-16.log` 字节数 **19811 → 19811，零增长**；
+- 装到 desktop profile 并核验 `src/client.js`、`package.json` 逐字节一致；
+- 用**部署副本**跑一遍真实注册：3 个座位，行标记座位 `dsh-plugin-weixin-row-mark` order=20；
+  拿真实会话 id 逐条调用组件——`weixin-o9cq804qN9Kjha-YsRWQwG8hWo3I-im-wechat` 与其
+  `--mvag9l5s0vuey9` 那条**有标记**，DSH 自己的 `session-ddac398a-...` **无标记**。
