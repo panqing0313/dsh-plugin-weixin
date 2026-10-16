@@ -1287,3 +1287,43 @@ send: ({ filePath, to, contextToken, cdnBaseUrl }) =>
 - 全量 **285 pass / 0 fail** 连跑 2 次；操作者日志 outbound media 行 24 → 24 零增长。
 - 部署：`node bin/install.mjs --profile desktop`；`src/index.js` 两侧 SHA-256
   `d80f89f3…` 均打印肉眼比对一致。
+
+## 2026-10-16 深夜（二）：`/clear` 清空当前会话并重开
+
+### 需求
+
+用户：「增加清除会话的功能」；确认的语义是**清空当前会话并重开**（推荐项）：当前这条
+从 `/list` 里删掉，立刻开一条全新会话接续；旧上下文不再出现在列表里。
+
+### 设计决策
+
+- **不带参数**：`/clear 3` 不识别。带序号的「清除第 N 条」读起来像 `/use 3` 加重置，
+  误触会销毁上下文；更安全的表面是**打不歪的那一个**——只清当前。
+- **只删索引，不碰宿主文件**：`SessionLines.clear()` 把该会话的 lines 重置为一条全新的
+  `--` 戳记 id；宿主的 `session.v4.jsonl.zstd` 原样保留为孤儿（那是宿主的数据）。
+- **新 id 而非复用旧 id**：新行拿到新的戳记 id，旧的内存 record 被 dispose 并从
+  `this.sessions` 移除——否则排队中的旧消息会到达一条用户认为已经不存在的会话；
+  `/use` 也永远切不回已清掉的上下文。
+
+### 实现踩坑
+
+`clear()` 最初写成 `{lines:[], active:''}` 再调 `create()`——但 `list()` 对空条目会
+**合成历史 base id**，`create()` 把新行压到它上面，等于 `/clear` 之后列表里第一条还是
+被要求删除的那条老 base 线（实测 store：`[base, stamped]`）。改为 `clear()` 直接写入
+单条新行，绕开合成。
+
+### 测试（辨别力）
+
+- `test/sessions.test.js` +3：clear 后恰一条新戳记行且老 id（含 base）全部不在；
+  只认整条消息（`/clear 3`、`/clearall`、句中提及都不算）；回复话术。
+- `test/session-commands.test.js` +1（端到端，fake host）：第一条消息建上下文 →
+  `/clear` 由插件直接回答且不耗模型轮 → **旧会话句柄被 dispose**（`disposedSessions`
+  追踪）→ 下一条消息打开的是带 `--` 戳记的全新会话，绝不是旧 id。
+- 辨别力：stash `src/agent-bridge.js` → dispose 断言超时红（5/6）；stash 两个源文件
+  → 4 红。恢复后全绿。
+
+### 验证
+
+- 全量 **289 pass / 0 fail**（285 → 289）。
+- 部署：`node bin/install.mjs --profile desktop`；`src/sessions.js` `5ceef83a…`、
+  `src/agent-bridge.js` `5a1a5b67…` 两侧 SHA-256 均打印肉眼比对一致。

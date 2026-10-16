@@ -241,6 +241,34 @@ export class SessionLines {
   }
 
   /**
+   * Drop every recorded line for a conversation and start a fresh one.
+   *
+   * `/clear` semantics: the current conversation's context is gone and the
+   * next message opens a brand-new line. The recorded line entries are removed
+   * from `sessions.json` so `/list` no longer shows them (a list that keeps
+   * growing through `/new` was the reason /clear was asked for); the host-side
+   * transcript files are NOT touched — they are the host's data, and an
+   * orphaned transcript is harmless.
+   *
+   * The new line gets a fresh id (a `--`-stamped suffix), so a stale in-memory
+   * record for an old id can never answer again, and `/use` cannot switch back
+   * into cleared context.
+   *
+   * @param {string} conversationId
+   * @returns {string} the fresh line's session id
+   */
+  clear(conversationId) {
+    // Write the fresh line directly rather than going through create(): the
+    // empty list would make list() synthesize the historical base id and
+    // create() would push onto it, silently resurrecting the line /clear was
+    // asked to remove.
+    const now = new Date().toISOString()
+    const sessionId = newSessionIdFor(conversationId)
+    this.#set(conversationId, { lines: [{ sessionId, createdAt: now, lastUsedAt: now }], active: sessionId })
+    return sessionId
+  }
+
+  /**
    * Create a new line and make it active. Lines already present are untouched,
    * so switching away and back preserves the earlier context.
    *
@@ -361,7 +389,7 @@ export class SessionLines {
  * worse failure than requiring the exact form.
  *
  * @param {string} text
- * @returns {{command: 'new'|'list'|'use', index?: number} | undefined}
+ * @returns {{command: 'new'|'list'|'use'|'clear', index?: number} | undefined}
  */
 export function parseSessionCommand(text) {
   const trimmed = String(text ?? '').trim()
@@ -373,6 +401,8 @@ export function parseSessionCommand(text) {
   if (useMatch !== null) {
     return { command: 'use', index: useMatch[1] === undefined ? undefined : Number(useMatch[1]) }
   }
+  const clearMatch = /^\/clear$/i.exec(trimmed)
+  if (clearMatch !== null) return { command: 'clear' }
   return undefined
 }
 
@@ -385,6 +415,7 @@ export const SESSION_COMMANDS_HELP = [
   '/new 开一条新会话（当前这条会保留，之后可以切回来）',
   '/list 查看这个微信会话下的所有会话',
   '/use <序号> 切换到第几条',
+  '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
 ].join('\n')
 
 /**
@@ -412,6 +443,14 @@ export function runSessionCommand(lines, conversationId, text) {
   }
   if (command.command === 'list') {
     return lines.render(conversationId)
+  }
+  if (command.command === 'clear') {
+    // Deliberately refuses an argument: `/clear 3` would read like `/use 3`
+    // with a reset bolted on, and picking one line out of the list to wipe is
+    // a rarer need than "start over" — misfiring it destroys context, so the
+    // safer surface is the one that cannot be aimed at the wrong line.
+    lines.clear(conversationId)
+    return `已清空当前会话，接下来是一条全新的会话。\n之前的上下文不再使用，也没有别的影响。`
   }
   if (command.index === undefined) {
     return `${USE_USAGE}\n\n${lines.render(conversationId)}`

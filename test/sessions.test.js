@@ -352,3 +352,46 @@ test('malformed on-disk state warns rather than crashing the plugin load', async
   assert.equal(lines.active('room-21'), 'weixin-room-21', 'a broken index must not break the plugin')
   assert.match(await warned, /ignoring malformed/)
 })
+
+test('/clear drops every recorded line and starts one fresh line', () => {
+  const lines = freshLines()
+  const first = lines.create('room-clear')
+  lines.title('room-clear', first, 'first topic')
+  const second = lines.create('room-clear')
+  assert.equal(lines.active('room-clear'), second)
+  // Two creates on a virgin conversation: the synthesized historical base line
+  // plus two stamped lines.
+  assert.equal(lines.list('room-clear').length, 3)
+
+  lines.clear('room-clear')
+
+  const after = lines.list('room-clear')
+  assert.equal(after.length, 1, 'clear must leave exactly one line')
+  assert.ok(after[0].sessionId.startsWith('weixin-room-clear--'), 'the fresh line must be a stamped new id')
+  assert.equal(lines.active('room-clear'), after[0].sessionId)
+  // No old id survives: /use cannot switch back into cleared context.
+  assert.ok(!after.some((line) => line.sessionId === first))
+  assert.ok(!after.some((line) => line.sessionId === second))
+  assert.ok(!after.some((line) => line.sessionId === baseSessionIdFor('room-clear')))
+  // And the store is really persisted, not just in-memory.
+  assert.deepEqual(readLines()?.['room-clear']?.lines.map((line) => line.sessionId), [after[0].sessionId])
+})
+
+test('/clear is recognized only as the entire message', () => {
+  assert.deepEqual(parseSessionCommand('/clear'), { command: 'clear' })
+  assert.deepEqual(parseSessionCommand(' /CLEAR '), { command: 'clear' })
+  assert.equal(parseSessionCommand('/clear 3'), undefined, 'no aimed variant exists: misfire destroys context')
+  assert.equal(parseSessionCommand('/clearall'), undefined)
+  assert.equal(parseSessionCommand('帮我 /clear 一下'), undefined)
+})
+
+test('/clear replies with the fresh-start notice and resets the list', () => {
+  const lines = freshLines()
+  lines.create('room-clear-reply')
+  lines.create('room-clear-reply')
+
+  const reply = runSessionCommand(lines, 'room-clear-reply', '/clear')
+  assert.match(reply ?? '', /已清空当前会话/)
+  assert.match(reply ?? '', /全新的会话/)
+  assert.equal(lines.list('room-clear-reply').length, 1)
+})

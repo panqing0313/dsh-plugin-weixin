@@ -152,17 +152,20 @@ async function withPlugin(body) {
   const disposers = []
   /** @type {string[]} */
   const sessionsOpened = []
+  /** Session handles the bridge explicitly tore down (e.g. via /clear). */
+  const disposedSessions = []
+  const trackedDispose = (sessionId) => async () => { disposedSessions.push(sessionId) }
   let deliverCalls = 0
 
   const agents = {
     get: () => undefined,
     async resume({ resumeSessionId }) {
       sessionsOpened.push(resumeSessionId)
-      return { agent: { session: { id: resumeSessionId }, inbox: { clear() {} } }, dispose: async () => {} }
+      return { agent: { session: { id: resumeSessionId }, inbox: { clear() {} } }, dispose: trackedDispose(resumeSessionId) }
     },
     async create({ sessionId }) {
       sessionsOpened.push(sessionId)
-      return { agent: { session: { id: sessionId }, inbox: { clear() {} } }, dispose: async () => {} }
+      return { agent: { session: { id: sessionId }, inbox: { clear() {} } }, dispose: trackedDispose(sessionId) }
     },
   }
 
@@ -187,7 +190,7 @@ async function withPlugin(body) {
     plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false }))
     seedAccount(root, { baseUrl: fake.baseUrl })
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
-    await body({ root, lines, fake, sessionsOpened, servers, agents, get deliverCalls() { return deliverCalls } })
+    await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, get deliverCalls() { return deliverCalls } })
   } finally {
     for (const disposer of disposers) await (await disposer)?.()
     for (const target of servers.reverse()) await closeServer(target)
@@ -252,5 +255,34 @@ test('a command does not start the typing indicator or an agent turn', async () 
     // second bubble would mean the command leaked into the normal path.
     assert.equal(fake.outbound.length, 1)
     assert.match(fake.outbound[0].text, /共 1 条会话/)
+  })
+})
+
+test('/clear clears the context and the next message opens a fresh session', async () => {
+  await withPlugin(async ({ fake, sessionsOpened, disposedSessions }) => {
+    // Turn 1 lands in the historical base session and gives it context.
+    fake.deliver('记一下：项目代号是蓝鲸', 'm1')
+    await waitFor(() => sessionsOpened.length > 0, 'the first session to open')
+    const oldId = sessionsOpened[0]
+    await waitFor(() => fake.outbound.length > 0, 'the first reply')
+    fake.outbound.length = 0
+
+    fake.deliver('/clear', 'm2')
+    await waitFor(() => fake.outbound.length > 0, 'the clear reply')
+    assert.match(fake.outbound[0].text, /已清空当前会话/)
+    assert.equal(fake.seen.delivered, 2, 'a command must not cost a model turn')
+
+    // The orphaned record must be torn down: a stale agent that keeps
+    // answering would let queued messages reach a session the user believes
+    // is gone.
+    await waitFor(() => disposedSessions.includes(oldId), 'the old session handle to be disposed')
+
+    // The next message must NOT go back to the cleared session id.
+    fake.deliver('蓝鲸是什么？', 'm3')
+    await waitFor(() => sessionsOpened.length > 1, 'the fresh session to open')
+    const freshId = sessionsOpened[sessionsOpened.length - 1]
+    assert.notEqual(freshId, oldId, 'the next message must open a different session')
+    assert.match(freshId, /--/, 'the fresh session must be a stamped new line')
+    await waitFor(() => fake.outbound.length > 0, 'the fresh reply')
   })
 })

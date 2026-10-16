@@ -179,8 +179,25 @@ export class AgentBridge {
    * @returns {string | undefined}
    */
   handleCommand(conversationId, text) {
+    // Capture the target BEFORE the command runs: `/clear` replaces the line,
+    // and the id to orphan is the one that was active up to now.
+    const previouslyActive = this.conversationTargets.get(conversationId)
     const reply = runSessionCommand(this.lines, conversationId, text)
     if (reply === undefined) return undefined
+    // `/clear` orphans the line that was active: its session id is no longer
+    // in the list and the fresh line has a different id, so the old in-memory
+    // record must not keep answering (a queued message would otherwise reach a
+    // session the user believes is gone). Disposal is best-effort; the host
+    // transcript stays on disk as an orphan, untouched.
+    if (reply.includes('已清空') && typeof previouslyActive === 'string') {
+      const record = this.sessions.get(previouslyActive)
+      if (record !== undefined) {
+        this.sessions.delete(previouslyActive)
+        void Promise.resolve()
+          .then(() => record.dispose())
+          .catch((error) => this.errLog(`cleared session dispose failed: ${String(error)}`))
+      }
+    }
     // A command can change which line is active, so the next message must not
     // reuse a mapping taken before it ran.
     this.conversationTargets.delete(conversationId)
