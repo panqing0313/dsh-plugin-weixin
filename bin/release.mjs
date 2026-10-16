@@ -355,6 +355,32 @@ function buildAndVerify() {
 	}
 	ok(`${files.length} files, no dev artifacts`)
 
+	// File modes travel into the tarball. `npm pack` reads the filesystem, while
+	// git only records whether a file is executable — so a file that is 600 on
+	// disk but 644 in the index (what a restrictive umask produces) ships as
+	// owner-only and is unreadable to every other user on the machine. That had
+	// already happened to LICENSE, THIRD-PARTY-NOTICES.md and most of src/
+	// before this check existed.
+	const entries = capture('tar', ['-tvzf', tarball])
+		.split('\n')
+		.filter((line) => line.trim() !== '')
+		.map((line) => {
+			// `-rw-r--r--  0 0 0 1408 Oct 26 1985 package/LICENSE`
+			const mode = line.slice(0, 10)
+			const parts = line.split(/\s+/)
+			return { mode, file: parts[parts.length - 1] }
+		})
+	// The "other" permission triple: r bits at index 7 (read) and 9 (execute).
+	const unreadable = entries.filter((e) => e.mode[7] !== 'r')
+	if (unreadable.length > 0) {
+		die(
+			`${unreadable.length} file(s) in the tarball are not world-readable`,
+			`for example: ${unreadable.slice(0, 5).map((e) => e.file).join(', ')}\n` +
+				'fix with:  chmod -R go+rX .   (then re-run)',
+		)
+	}
+	ok('every packaged file is world-readable')
+
 	const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-release-'))
 	try {
 		run('tar', ['-xzf', tarball, '-C', extractDir], { stdio: 'ignore' })
