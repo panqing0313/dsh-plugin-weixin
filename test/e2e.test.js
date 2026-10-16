@@ -783,6 +783,15 @@ test('a reply that references a local file uploads it and sends an IMAGE item', 
     // The upload really happened, against the CDN base URL from the config.
     assert.equal(uploadUrls.length, 1, `expected one getuploadurl, got ${uploadUrls.length}; warnings: ${warnings.join(' | ')}`)
     assert.equal(uploaded.length, 1, `expected one CDN POST, got ${uploaded.length}`)
+    // The peer id must survive the send seam into BOTH requests. The seam once
+    // forwarded `to` into a parameter slot named `conversationId`, so every
+    // plugin-driven attachment went out with `to=undefined`: getUploadUrl lost
+    // `to_user_id` (server answered `{ret:-2}`) and the sendmessage envelope
+    // lost `msg.to_user_id` — yet this fake answered success to everything,
+    // which is why the drop stayed invisible until it was measured in the field.
+    assert.equal(uploadUrls[0].to_user_id, ALLOWED, `getuploadurl lost the peer id: ${JSON.stringify(uploadUrls[0])}`)
+    const fileMsg = sent.find((s) => s.msg?.item_list?.[0]?.type === 4)?.msg
+    assert.equal(fileMsg?.to_user_id, ALLOWED, `sendmessage lost the peer id: ${JSON.stringify(fileMsg?.to_user_id)}`)
 
     const item = sent.find((s) => s.msg?.item_list?.[0]?.type === 4)?.msg?.item_list?.[0]?.file_item
     assert.ok(item, `no FILE item was sent; sent=${JSON.stringify(sent.map((s) => s.msg?.item_list?.[0]?.type))}`)
@@ -879,6 +888,9 @@ test('a reply naming a file RELATIVE to the agent cwd still uploads it', async (
 
     assert.equal(uploadUrls.length, 1, `expected one getuploadurl, got ${uploadUrls.length}; warnings: ${warnings.join(' | ')}`)
     assert.equal(uploaded.length, 1, `expected one CDN POST, got ${uploaded.length}; warnings: ${warnings.join(' | ')}`)
+    // Same seam regression as the absolute-path test: the peer id has to reach
+    // the upload request, not vanish between deliverOutboundMedia and sendMedia.
+    assert.equal(uploadUrls[0].to_user_id, ALLOWED, `getuploadurl lost the peer id: ${JSON.stringify(uploadUrls[0])}`)
     const item = sent.find((s) => s.msg?.item_list?.[0]?.type === IMAGE_ITEM)?.msg?.item_list?.[0]?.image_item
     assert.ok(item, `no IMAGE item was sent; sent=${JSON.stringify(sent.map((s) => Object.keys(s.msg?.item_list?.[0] ?? {})))}; warnings: ${warnings.join(' | ')}`)
     // An image item carries only `media` (no name/length on the wire), so the

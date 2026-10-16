@@ -1231,3 +1231,59 @@ watchdog 之后**仍在发起新请求**（不是静默退循环）；`stop()` �
   `start returned in 10208ms` → 两次 `ERR: getUpdates watchdog: one poll round
   exceeded 10200ms` → `stopped` → `server closed`。循环对持续挂死的服务器
   **永不卡死、每次都有日志、每次都重试**。
+
+## 2026-10-16 深夜：出站附件的收件人被 send seam 丢掉（`to=undefined`）
+
+### 现场
+
+22:21 微信 agent 回复 `pdf_test/测试文档-test.pdf`，文件日志：
+
+```
+[weixin] sendWeixinMediaFile: uploading file attachment filePath=... to=undefined
+uploadFileAttachmentToWeixin: getUploadUrl returned no upload URL (need upload_full_url or upload_param), resp={"ret":-2}
+outbound media: sending media ... failed: upload/send failed: ...
+```
+
+关键差异：20:25 一次直接调 vendor（探针）的上传 `to=o9cq804qN9Kjha_YsRWQwG8hWo3I@im.wechat`
+能走到 sendMessage（`ret=-2 prepare failed` 是当时的账号级封锁）；插件自己路径的
+`to=undefined` 连 getUploadUrl 都过不了。
+
+### 根因：两个模块对同一个值的命名不同，seam 原样转发
+
+- `deliverOutboundMedia`（src/media/outbound.js）的 send seam 传 `to`（对端 id，见
+  `OutboundMedia` typedef）。
+- `ILinkTransport.sendMedia`（src/transport/ilink.js:459）解构的名字是 `conversationId`。
+- `src/index.js` 的 seam 写的是 `send: (mediaParams) => params.transport.sendMedia(mediaParams)`
+  ——**逐字转发**，键名不改。`to` 掉在解构的缝隙里，`conversationId === undefined`。
+
+于是每个插件驱动的附件都带着 `to_user_id: undefined` 发出 `getuploadurl`
+（`JSON.stringify` 直接丢掉 undefined 键），服务端回 `{ret:-2}`。**从
+`2405fd5`（初始提交）起就是坏的**：图片/文档的「成功收到」全部来自探针直调
+vendor 或后来修好的检测让文件走进了这条路之外的通道——不，恰恰相反，走了这条路
+的从来没成功过。假服务器对什么都回成功 + 测试从不断言 `to_user_id`，让它一直绿灯。
+
+### 修法
+
+`src/index.js` 的 seam 显式改键：
+
+```js
+send: ({ filePath, to, contextToken, cdnBaseUrl }) =>
+  params.transport.sendMedia({ filePath, conversationId: to, contextToken, cdnBaseUrl }),
+```
+
+### 测试补钉（test/e2e.test.js，两条既有 e2e 加断言）
+
+- 绝对路径上传测试：断言 `uploadUrls[0].to_user_id === ALLOWED` 且
+  sendmessage 信封 `msg.to_user_id === ALLOWED`。
+- 相对路径上传测试：断言 `uploadUrls[0].to_user_id === ALLOWED`。
+
+**辨别力**：stash 修复后 `getuploadurl lost the peer id: {...无 to_user_id...}`，
+两条都红；恢复后全绿。单文件跑 `node --test test/e2e.test.js`（不带 npm test 的
+`--import ./test/isolate-host-state.mjs`）会因 `DSH_WEIXIN_LOG_DIR` 未设而误红——
+辨别力判定必须用 `npm test`。
+
+### 验证
+
+- 全量 **285 pass / 0 fail** 连跑 2 次；操作者日志 outbound media 行 24 → 24 零增长。
+- 部署：`node bin/install.mjs --profile desktop`；`src/index.js` 两侧 SHA-256
+  `d80f89f3…` 均打印肉眼比对一致。

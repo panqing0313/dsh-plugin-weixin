@@ -824,7 +824,15 @@ async function resolveOutboundReply(params) {
         params.warn(line)
         fileLog.info(`outbound media: ${line}`)
       },
-      send: (mediaParams) => params.transport.sendMedia(mediaParams),
+      // deliverOutboundMedia's send seam passes `to` (the peer id; see
+      // OutboundMedia and deliverOutboundMedia in src/media/outbound.js), while
+      // `sendMedia` names the same value `conversationId`. Forwarding
+      // mediaParams verbatim dropped the peer id on the floor: every
+      // plugin-driven attachment went out as `to=undefined`, the getUploadUrl
+      // request lost `to_user_id`, and the server answered `{ret:-2}` — the
+      // file never reached the upload path at all. Adapt the differing key.
+      send: ({ filePath, to, contextToken, cdnBaseUrl }) =>
+        params.transport.sendMedia({ filePath, conversationId: to, contextToken, cdnBaseUrl }),
     })
     if (result.sent.length > 0) {
       const names = result.sent.map((filePath) => filePath.split('/').pop()).join(', ')
