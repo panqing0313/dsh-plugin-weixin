@@ -12,6 +12,8 @@ window.__ModuleLoader__.load({
 		const _str = () => (_str$value ??= intersection(string(), unknown()));
 		let _strMap$value;
 		const _strMap = () => (_strMap$value ??= intersection(record(string()), unknown()));
+		let _num$value;
+		const _num = () => (_num$value ??= intersection(number(), unknown()));
 		let _statusResult$value;
 		const _statusResult = () => (_statusResult$value ??= intersection(unknown(), unknown()));
 
@@ -20,6 +22,9 @@ window.__ModuleLoader__.load({
 		}
 		function string() {
 			return { type: "string" };
+		}
+		function number() {
+			return { type: "number" };
 		}
 		function record(key) {
 			return { type: "record", key };
@@ -92,6 +97,31 @@ window.__ModuleLoader__.load({
 					invocation: { kind: "direct" },
 					parameters: [{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/logout:p0`, create: _str } }],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/logout:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/sessions`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "sessions",
+					invocation: { kind: "direct" },
+					parameters: [],
+					// `unknown ∩ unknown`, like every other result here: the
+					// protocol requires a strict codec, and this one accepts any
+					// shape, so adding a field to a session line cannot make the
+					// card fail to mount.
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/sessions:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/useSession`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "useSession",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "conversationId", wire: "conversationId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:p0`, create: _str } },
+						{ name: "index", wire: "index", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:p1`, create: _num } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:result`, create: _statusResult },
 				},
 				// weixinAsr namespace (AsrController)
 				{
@@ -793,6 +823,120 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/**
+		 * Session lines: one WeChat conversation can hold several DSH sessions.
+		 *
+		 * Read-only over the store: `/new` and `/use` are meant to be sent from
+		 * WeChat, where the user already is. The card exists so the operator can
+		 * see which line is live and jump back to an older one without having to
+		 * remember its number.
+		 */
+		function SessionsSection({ ctx, t }) {
+			const [data, setData] = react.useState(null);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+			const [notice, setNotice] = react.useState("");
+
+			const load = async () => {
+				try {
+					// `callRemote` already unwraps the carrier envelope, so `r` is
+					// the host's own return value, not `{ok, value}`.
+					const r = await callRemote(() => ctx.remote.weixin.sessions());
+					setError("");
+					setData(Array.isArray(r?.conversations) ? r.conversations : []);
+				} catch (e) {
+					setError(String(e?.message ?? e));
+					setData(null);
+				}
+			};
+
+			react.useEffect(() => {
+				load();
+			}, []);
+
+			const pick = async (conversationId, index) => {
+				setBusy(true);
+				setNotice("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.useSession(conversationId, index));
+					if (r?.switched === false) {
+						setNotice(r.error || t("Could not switch", "切换失败"));
+					} else {
+						setNotice(t("Switched. New messages go to this session.", "已切换，接下来的消息进入这条会话。"));
+					}
+					await load();
+				} catch (e) {
+					setNotice(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			if (error) {
+				return createElement("div", { style: panelStyle },
+					createElement("p", { style: panelTitleStyle }, t("Sessions", "会话")),
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+						createElement("span", null, error)));
+			}
+			if (data === null) {
+				return createElement("div", { style: panelStyle },
+					createElement("p", { style: hintStyle }, t("Loading…", "加载中…")));
+			}
+			if (data.length === 0) {
+				return createElement("div", { style: panelStyle },
+					createElement("p", { style: panelTitleStyle }, t("Sessions", "会话")),
+					createElement("p", { style: hintStyle },
+						t("No conversation yet. Send the bot a message to start one.",
+							"还没有会话。给机器人发一条消息就会创建。")));
+			}
+
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+				...data.map((conversation) => createElement("div", {
+						key: conversation.conversationId,
+						style: panelStyle,
+					},
+					createElement("p", { style: panelTitleStyle }, conversation.conversationId),
+					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+						...conversation.lines.map((line, index) => {
+							const isActive = line.sessionId === conversation.active;
+							return createElement("div", {
+									key: line.sessionId,
+									style: {
+										display: "flex", alignItems: "center", gap: 8,
+										padding: "7px 10px",
+										border: `1px solid ${isActive ? C.brand : C.border}`,
+										borderRadius: RADIUS.control,
+										background: isActive ? C.surface : C.surfaceSunken,
+									},
+								},
+								createElement("span", { style: { flex: "0 0 auto", color: isActive ? C.brand : C.idle } }, isActive ? "▶" : "·"),
+								createElement("span", {
+										style: {
+											flex: "1 1 auto", minWidth: 0,
+											fontSize: 13, lineHeight: "20px",
+											overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+										},
+									},
+									`${index + 1}. ${line.title || t("(no messages yet)", "（尚无对话）")}`),
+								isActive
+									? createElement("span", { style: { flex: "0 0 auto", fontSize: 12, color: C.brand } }, t("in use", "使用中"))
+									: createElement("button", {
+											onClick: () => pick(conversation.conversationId, index),
+											disabled: busy,
+											style: buttonStyleFor(busy),
+										}, t("Use", "切换")));
+						})),
+					createElement("p", { style: captionStyle },
+						t("Send /new in WeChat to start another, /list to see them all.",
+							"在微信里发 /new 开新会话，发 /list 查看全部。")))),
+				notice
+					? createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+						createElement("span", null, notice))
+					: null);
+		}
+
 		function AsrSection({ ctx, t }) {
 			const [models, setModels] = react.useState([]);
 			const [modelDir, setModelDir] = react.useState("");
@@ -1336,6 +1480,7 @@ window.__ModuleLoader__.load({
 				// tab, which matches what the tests assert.
 				const TABS = [
 					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
+					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);

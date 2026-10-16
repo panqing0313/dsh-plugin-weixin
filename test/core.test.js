@@ -15,6 +15,7 @@ import { chunkText } from '../src/message/chunker.js'
 import { normalizeInbound } from '../src/transport/ilink.js'
 import { readAssistantReply, streamText, describePending } from '../src/session-reader.js'
 import { sessionIdFor } from '../src/agent-bridge.js'
+import { SessionLines } from '../src/sessions.js'
 import { MessageDeduper } from '../src/message/dedupe.js'
 import { accountsDir, ensureSessionsDir, sessionsDir, configFile, readSavedConfig, withSavedConfig } from '../src/state.js'
 
@@ -299,7 +300,11 @@ test('a created session is filed under its workspace, and a missing registry nev
   const ctx = {
     get: (n) => (n === 'agents' ? agents : n === 'workspaceRegistry' ? registry : undefined),
   }
-  const bridge = new AgentBridge({ ctx, cwd: workspace.path })
+  // `lines` is injected so the bridge never reaches the on-disk session-line
+  // index: this test has no state root of its own, and without this it would
+  // write into the operator's real ~/.dsh/weixin/sessions.json.
+  const lines = new SessionLines()
+  const bridge = new AgentBridge({ ctx, cwd: workspace.path, lines })
   await bridge.attach('room-1')
 
   // The created session adopts the registry's own path, so the cwd the header
@@ -310,7 +315,7 @@ test('a created session is filed under its workspace, and a missing registry nev
   assert.equal(registry.calls, 1)
 
   // A deployment without the registry still runs agents; grouping is optional.
-  const bare = new AgentBridge({ ctx: { get: (n) => (n === 'agents' ? agents : undefined) }, cwd: '/tmp/x' })
+  const bare = new AgentBridge({ ctx: { get: (n) => (n === 'agents' ? agents : undefined) }, cwd: '/tmp/x', lines: new SessionLines() })
   await bare.attach('room-2')
   assert.equal(created.length, 2)
 })

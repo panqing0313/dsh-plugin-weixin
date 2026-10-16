@@ -669,3 +669,73 @@ git 只记录「是否可执行」，**不记录 600 还是 644**；`npm pack` �
 
 **最终验证**：全量 **203 pass**；预演端到端跑通（57 files / world-readable / 桥冒烟通过 /
 838 kB）；预演结束与预演失败两种情况都确认工作区干净、无残留 `.tgz`。
+
+---
+
+## 一个微信会话可以用多条 DSH 会话（会话线）
+
+**要解决的问题**：一个微信会话只对应一条 DSH 会话，上下文只增不减。用户要的是
+「能发消息新建/切换会话，并在配置设置里管理用哪个」，且**切换必须是保留的**：
+切走的那条不能被结束或清空，切回来上下文原样都在。
+
+### 设计：会话线，第一条沿用历史 id
+
+`src/sessions.js` 是唯一的存放处。一个会话的条目形如
+`{ lines: [{sessionId, title?, createdAt?, lastUsedAt?}], active: "<sessionId>" }`。
+
+`baseSessionIdFor(conversationId)` = `weixin-<conversationSlug>`，**这条必须是历史 id**：
+升级前的老会话就是它，换成新 id 等于用户装上新版本后上下文凭空消失。新会话线是
+`<base>--<base36 时间戳><6 位随机>`。实测确认升级后 `lines.active()` 仍返回历史 id。
+
+### 三个真 bug（都是探针跑出来才暴露的，读代码看不出来）
+
+1. **标题永远不出现**。`title()` 读 `this.store[conversationId]`，而新会话**根本没有条目**
+   ——`list()` 是按默认值合成的、不落盘。于是第一条消息设的标题被静默丢弃。修法：
+   `title()` 里**物化**条目。
+2. **`/new` 会把新会话线永久钉成「无标题」**。原先 `create()` 后顺手 `title(..., '')`，
+   而 `title()` 对已存在标题直接返回 → 占位标题挡死了真标题。修法：`/new` **不设标题**，
+   「尚无对话」由渲染层兜底。
+3. **切换后 `attach` 仍用旧会话**。`attach()` 原本 `sessionIdFor(conversationId)` 取的是
+   固定 id；改为 `#activeSessionId(conversationId)`，并且**在任何 await 之前同步读**，
+   这样同一会话的两条并发消息不会对「当前是哪条」产生分歧。
+
+### 命令
+
+`/new`、`/list`、`/use <n>`，只有**整条消息恰好是命令**才生效（`/steer /new`、
+`看看 /new 这个命令`、`/newx`、`/use abc` 都不算）。由插件直接回，**不消耗模型对话**：
+端到端实测 `/new` 后 `sessionsOpened === []`。序号是**绝对序号**，折叠到最近 10 条时
+仍然从 1 数起（`▶ 15.`），不会错位。
+
+### 「测试全绿」曾经完全不能证明这个功能存在
+
+第一次辨别力检验：把 `attach()` 改回 `sessionIdFor(conversationId)`，**227 条全量测试
+仍然全绿**——因为 `test/sessions.test.js` 只测 store 这个孤岛，**从没碰过路由**。
+补了 `test/session-routing.test.js`（断言 `attach()` 究竟打开哪条会话）之后同样改法
+立刻 **3/6 红**；再关掉 `src/index.js` 的拦截，`test/session-commands.test.js` **3/5 红**。
+教训：**孤立单测证明不了接线**，必须断言「哪条会话被打开」。
+
+### 设置卡：一个协议陷阱
+
+`ctx.remote.$mount` 的调用会经 `unwrap()` 剥掉 carrier 信封（`{ok, value}`）。
+最初宿主 `sessions()`/`useSession()` 返回 `{ok: true, ...}`，而 `unwrap` 的判据是
+**「对象里有 `ok` 键」**——于是宿主自己的 `ok` 被当成信封，剥出 `undefined`，
+卡片永远空。改为返回**裸值**：`sessions()` → `{conversations}`，`useSession()` →
+`{switched, sessionId}` / `{switched:false, error}`。这是协议层的坑，不是笔误。
+
+`test/client-sessions-section.test.js` 用**真的 hook 运行时**渲染卡片（`useState` 真更新、
+`useEffect` 比较依赖、`flush()` 会 await 异步 effect）。期间踩到的两个 harness 坑：
+槽位**必须按组件分段**（扁平游标会让切换标签后的 `SessionsSection` 读到
+`LoginSection` 的值 → `data.map is not a function`），且 `segments` **必须跨轮保留**
+（每轮重建会让每个 effect 都像首次运行 → 无限渲染直到 OOM）。
+
+### 验证
+
+- 全量 **246 pass / 0 fail**，连跑 3 次一致；
+- 辨别力：把 `▶` 标记去掉 → 「active line is marked」红；去掉切换后的 `load()` →
+  「switching … reloads」红；
+- 真机路径探针：历史 id 保住、`/new` 开第 2 条、`/list` 标题正确、卡片 `sessions()`
+  与切换后的 `active` 一致、越界返回 `{switched:false,error}`、并行保留两条都在；
+- **操作者状态目录不再被测试污染**：`test/isolate-host-state.mjs` 现在同时隔离 vendor
+  日志目录与 state 根目录（原先只有日志）。根因是 bridge 默认 `lines` 落盘、而
+  `stateDir()` 在 `DSH_WEIXIN_STATE_DIR` 未设时回退到 `~/.dsh/weixin`——
+  `test/busy-turns.test.js` 的 fixture（`room-1` / `first`）就是这样写进了操作者的真文件。

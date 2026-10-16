@@ -1,6 +1,19 @@
 // Runs in EVERY `node --test` child process, before any test file is loaded
 // (wired up by the `test` script's `--import` flag).
 //
+// It redirects TWO things, for the same reason: the plugin's state root as well
+// as the vendor log. `src/state.js` resolves `stateDir()` from
+// DSH_WEIXIN_STATE_DIR and otherwise falls back to the operator's real
+// `~/.dsh/weixin`. Anything that builds an AgentBridge without setting the env
+// var therefore reads and writes live state, and the failure mode is quiet: the
+// session-line index (`sessions.json`) appeared in the operator's directory
+// during this feature's development, containing `{"room-1": ...}` — fixture
+// data from `test/busy-turns.test.js`, sitting in the state the running plugin
+// would read on its next restart. A test that wants its own state still gets
+// one: it sets DSH_WEIXIN_STATE_DIR itself, as `test/sessions.test.js` and
+// `test/session-routing.test.js` already do (their own mkdtemp root wins
+// because it is a non-empty override).
+//
 // Why it has to exist: the vendored logger resolves its directory once, when
 // `vendor/openclaw-weixin/util/logger.js` is first imported, and defaults to
 // `~/.dsh/weixin/logs/openclaw-YYYY-MM-DD.log` — the log the operator reads when
@@ -28,14 +41,21 @@ import path from 'node:path'
 const LOG_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-test-logs-'))
 process.env.DSH_WEIXIN_LOG_DIR = LOG_ROOT
 
+// One state root per test process, so a file that forgets its own mkdtemp still
+// cannot touch the operator's credentials, config or session lines.
+const STATE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-test-state-'))
+if (!process.env.DSH_WEIXIN_STATE_DIR?.trim()) process.env.DSH_WEIXIN_STATE_DIR = STATE_ROOT
+
 // The logger creates this lazily on its first write; creating it now means a
 // test can list it without racing the write that might not have happened yet.
 fs.mkdirSync(LOG_ROOT, { recursive: true })
 
 process.on('exit', () => {
-  try {
-    fs.rmSync(LOG_ROOT, { recursive: true, force: true })
-  } catch {
-    // Best effort: a leftover temp directory must never fail a test run.
+  for (const root of [LOG_ROOT, STATE_ROOT]) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      // Best effort: a leftover temp directory must never fail a test run.
+    }
   }
 })

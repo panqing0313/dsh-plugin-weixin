@@ -20,6 +20,7 @@
  * @module dsh-weixin/agent-bridge
  */
 import { readAssistantReply, describePending } from './session-reader.js'
+import { baseSessionIdFor, SessionLines, runSessionCommand } from './sessions.js'
 
 /**
  * `@deepseek-ai/dsh-llm` resolves only from inside a DSH profile, so it is
@@ -62,9 +63,6 @@ async function loadInstallModelSelection() {
   return installModelSelectionRef ?? undefined
 }
 
-/** Session ids are opaque strings; DSH only requires stability. */
-const SESSION_PREFIX = 'weixin-'
-
 /**
  * Deterministic session id for a Weixin conversation.
  *
@@ -72,13 +70,14 @@ const SESSION_PREFIX = 'weixin-'
  * prefixed so a session can be recognized as Weixin-owned in the GUI.
  * Non-alphanumerics are folded to `-` to keep the id filesystem- and
  * URL-safe.
+ *
+ * This is now the id of a conversation's FIRST session line; see
+ * `src/sessions.js` for why a conversation can have several and why this id
+ * must never change.
  * @param {string} conversationId
  */
 export function sessionIdFor(conversationId) {
-  const slug = String(conversationId ?? '')
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return `${SESSION_PREFIX}${slug || 'default'}`
+  return baseSessionIdFor(conversationId)
 }
 
 /**
@@ -105,6 +104,8 @@ export function parseSteerCommand(text) {
  * @property {number} [progressAfterMs]  Send a progress line after this long.
  * @property {number} [maxWaitMs]        Give up on a turn after this long.
  * @property {number} [pollMs]           Session-log polling interval.
+ * @property {SessionLines} [lines]      Session-line index. Defaults to the
+ *   on-disk store, so a bridge built without one still supports `/new`.
  */
 
 export class AgentBridge {
@@ -118,6 +119,14 @@ export class AgentBridge {
     this.progressAfterMs = options.progressAfterMs ?? 45_000
     this.maxWaitMs = options.maxWaitMs ?? 20 * 60_000
     this.pollMs = options.pollMs ?? 1_000
+    // Session lines: which of a conversation's sessions the next message goes
+    // to. Injectable so tests do not touch the operator's real state root.
+    this.lines = options.lines ?? new SessionLines({ warn: (message) => this.errLog(message) })
+    // Conversation id -> the session id its next message must reach. Needed
+    // because `deliver` is handed a session id but must still be able to route
+    // a late reply and, for a brand-new line, share one in-flight creation.
+    /** @type {Map<string, string>} */
+    this.conversationTargets = new Map()
     // How long the post-timeout listener keeps waiting for an answer to hand
     // to onLateReply. Configurable so tests do not have to wait an hour.
     this.lateReplyMaxWaitMs = options.lateReplyMaxWaitMs ?? 60 * 60_000
@@ -139,6 +148,52 @@ export class AgentBridge {
 
   #agents() {
     return this.ctx.get('agents')
+  }
+
+  /**
+   * The session id a conversation's next message must reach.
+   *
+   * Remembers the target so {@link deliver} — which receives a session id, not
+   * a conversation id — can still map back to the conversation for a late reply
+   * and for the first-message title.
+   *
+   * @param {string} conversationId
+   * @returns {string}
+   */
+  #activeSessionId(conversationId) {
+    const sessionId = this.lines.active(conversationId)
+    this.conversationTargets.set(conversationId, sessionId)
+    return sessionId
+  }
+
+  /**
+   * Handle a session-control command (`/new`, `/list`, `/use`).
+   *
+   * Returns the reply text when the message was a command, or undefined when it
+   * was an ordinary message that must go to the agent. The caller sends the
+   * returned text directly, so a control command costs no model turn and no
+   * context: it is answered by the plugin itself.
+   *
+   * @param {string} conversationId
+   * @param {string} text
+   * @returns {string | undefined}
+   */
+  handleCommand(conversationId, text) {
+    const reply = runSessionCommand(this.lines, conversationId, text)
+    if (reply === undefined) return undefined
+    // A command can change which line is active, so the next message must not
+    // reuse a mapping taken before it ran.
+    this.conversationTargets.delete(conversationId)
+    this.log?.(`session command handled for ${conversationId}: ${String(text).trim()}`)
+    return reply
+  }
+
+  /**
+   * Session lines recorded for a conversation, for the settings card.
+   * @param {string} conversationId
+   */
+  sessionLines(conversationId) {
+    return this.lines.list(conversationId)
   }
 
   /**
@@ -241,10 +296,17 @@ export class AgentBridge {
 
   /**
    * Attach (or resume) the agent session backing a Weixin conversation.
+   *
+   * Resolves the conversation's ACTIVE session line, not a fixed id: after
+   * `/new` or `/use`, the next message must reach a different session than the
+   * previous one. The session id is read synchronously before any await, so two
+   * concurrent messages for the same conversation cannot disagree about which
+   * line is active.
+   *
    * @param {string} conversationId
    */
   async attach(conversationId) {
-    const sessionId = sessionIdFor(conversationId)
+    const sessionId = this.#activeSessionId(conversationId)
     const existing = this.sessions.get(sessionId)
     if (existing !== undefined) return existing
 
@@ -391,6 +453,11 @@ export class AgentBridge {
    */
   async deliver({ conversationId, text, onProgress, signal, busyMessageMode, onLateReply }) {
     const record = await this.attach(conversationId)
+    const sessionId = this.conversationTargets.get(conversationId)
+    // Name the line after the first message that runs in it. Done before the
+    // turn so `/list` shows what the topic is even while the first reply is
+    // still being written; a later message never renames it.
+    if (sessionId !== undefined) this.lines.title(conversationId, sessionId, text)
     const mode = busyMessageMode === 'steer' ? 'steer' : 'queue'
 
     if (record.busy) {
@@ -407,7 +474,7 @@ export class AgentBridge {
         // turn this delivery did not start, so return immediately with a
         // receipt. The steered turn's eventual reply belongs to the turn's
         // own delivery wait.
-        return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionIdFor(conversationId) }
+        return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionId ?? baseSessionIdFor(conversationId) }
       }
       // queue (default): FIFO tail drained when the running turn settles.
       return await this.#enqueue({ record, conversationId, text, onProgress, signal, onLateReply })
@@ -438,7 +505,7 @@ export class AgentBridge {
    * reply path once the turn runs.
    */
   async #enqueue({ record, conversationId, text, onProgress, signal, onLateReply }) {
-    const sessionId = record.agent.session?.id ?? sessionIdFor(conversationId)
+    const sessionId = record.agent.session?.id ?? this.conversationTargets.get(conversationId) ?? baseSessionIdFor(conversationId)
     const entry = { text, onProgress, signal, onLateReply }
     entry.done = new Promise((resolve) => { entry.resolveDone = resolve })
     record.queue.push(entry)

@@ -21,6 +21,7 @@ import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
+import { SessionLines } from "./sessions.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -326,6 +327,80 @@ export class WeixinLoginController extends TypertRemoteService {
     clearSessionExpired() {
         this.sessionExpired = false;
     }
+
+    /**
+     * Session lines across every Weixin conversation, for the settings card.
+     *
+     * Read fresh from disk on every call rather than from a cached copy: the
+     * card is opened rarely, `/new` and `/use` are typed in WeChat between
+     * openings, and a stale list would make the card disagree with what the
+     * user just did on their phone. A read failure yields an empty list rather
+     * than an error, so a corrupt index degrades the card instead of breaking
+     * the settings page.
+     *
+     * @returns {Promise<{conversations: Array<{conversationId: string, active: string, lines: Array<{sessionId: string, title: string|null, createdAt: string|null}>}>}>}
+     */
+    async sessions() {
+        let store = {};
+        try {
+            store = new SessionLines({ warn: () => {} }).store ?? {};
+        } catch {
+            // An unreadable index must not take the settings page down.
+        }
+        const conversations = [];
+        for (const [conversationId, entry] of Object.entries(store)) {
+            const lines = Array.isArray(entry?.lines) ? entry.lines : [];
+            if (lines.length === 0) continue;
+            conversations.push({
+                conversationId,
+                active: typeof entry.active === "string" ? entry.active : lines[0].sessionId,
+                lines: lines.map((line) => ({
+                    sessionId: String(line.sessionId ?? ""),
+                    // The card shows its own placeholder for an unnamed line;
+                    // null keeps "no title yet" distinct from an empty title.
+                    title: typeof line.title === "string" && line.title !== "" ? line.title : null,
+                    createdAt: typeof line.createdAt === "string" ? line.createdAt : null,
+                })),
+            });
+        }
+        // Most recently used conversation first, so the one the operator is
+        // actually talking in is at the top of the card.
+        conversations.sort((a, b) => lastUsedAt(store[b.conversationId]) - lastUsedAt(store[a.conversationId]));
+        return { conversations };
+    }
+
+    /**
+     * Point a conversation at one of its session lines.
+     *
+     * Mirrors the `/use <n>` command so the operator can switch from the card
+     * without typing in WeChat. The write goes through the same store the
+     * inbound handler reads, so the next message follows the switch without a
+     * reload.
+     *
+     * @param {string} conversationId
+     * @param {number} index 1-based position in the conversation's line list
+     * @returns {Promise<{switched: true, sessionId: string} | {switched: false, error: string}>}
+     */
+    async useSession(conversationId, index) {
+        const lines = new SessionLines({ warn: () => {} });
+        const sessionId = lines.use(String(conversationId ?? ""), Number(index));
+        if (sessionId === undefined) {
+            // Not `{ok:false}`: the client's `unwrap()` treats any object with an
+            // `ok` key as a carrier envelope and would strip this to `undefined`.
+            return { switched: false, error: `no session line at position ${index}` };
+        }
+        return { switched: true, sessionId };
+    }
+}
+
+/** Latest `lastUsedAt` in a line entry, for sorting conversations. */
+function lastUsedAt(entry) {
+    let newest = 0;
+    for (const line of Array.isArray(entry?.lines) ? entry.lines : []) {
+        const parsed = Date.parse(line?.lastUsedAt ?? line?.createdAt ?? "");
+        if (Number.isFinite(parsed) && parsed > newest) newest = parsed;
+    }
+    return newest;
 }
 
 export function purgeStaleLogins() {
@@ -334,4 +409,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession"]);

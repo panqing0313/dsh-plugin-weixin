@@ -28,8 +28,8 @@
   "scripts": {
     "login": "node bin/login.js",
     "release": "node bin/release.mjs",
-    "test": "node --import ./test/isolate-vendor-log.mjs --test \"test/**/*.test.js\"",
-    "test:watch": "node --import ./test/isolate-vendor-log.mjs --test --watch \"test/**/*.test.js\""
+    "test": "node --import ./test/isolate-host-state.mjs --test \"test/**/*.test.js\"",
+    "test:watch": "node --import ./test/isolate-host-state.mjs --test --watch \"test/**/*.test.js\""
   },
   "dependencies": {
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",

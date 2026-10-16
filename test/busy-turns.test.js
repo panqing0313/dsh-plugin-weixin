@@ -102,7 +102,18 @@ async function bridgeWith(fake, overrides = {}) {
     async create() { return { agent: fake.agent, dispose: async () => {} } },
   }
   const ctx = { get: (n) => (n === 'agents' ? agents : undefined) }
-  const bridge = new AgentBridge({ ctx, cwd: '/tmp/busy-test', pollMs: 20, maxWaitMs: 3000, ...overrides })
+  // An explicit, in-memory line index: the default one is backed by
+  // ~/.dsh/weixin/sessions.json, and these tests must not touch the
+  // operator's real state.
+  const { SessionLines } = await import('../src/sessions.js')
+  const bridge = new AgentBridge({
+    ctx,
+    cwd: '/tmp/busy-test',
+    pollMs: 20,
+    maxWaitMs: 3000,
+    lines: new SessionLines({ warn: () => {} }),
+    ...overrides,
+  })
   return bridge
 }
 

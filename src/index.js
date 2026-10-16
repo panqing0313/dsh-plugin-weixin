@@ -574,7 +574,24 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
       return
     }
 
-    // 4. Media: authorized and de-duplicated, so it is now safe to fetch the
+    // 4. Session-control commands (`/new`, `/list`, `/use`) are answered by the
+    //    plugin itself, before any media download or agent turn. A command must
+    //    not cost a model turn: `/list` would otherwise burn context to print a
+    //    list the plugin already knows, and `/new` would run in the very session
+    //    it is meant to leave. Placed after the allowlist and dedupe so a
+    //    refused or replayed message still cannot steer a conversation.
+    const commandReply = bridge.handleCommand(message.conversationId, message.text)
+    if (commandReply !== undefined) {
+      await sendChunked(transport, config, {
+        conversationId: message.conversationId,
+        text: commandReply,
+        contextToken: message.contextToken,
+      })
+      fileLog.info(`answered session command ${JSON.stringify(message.text.trim())} for ${message.conversationId}`)
+      return
+    }
+
+    // 5. Media: authorized and de-duplicated, so it is now safe to fetch the
     //    attachments. A failure here is reported and the turn continues with
     //    whatever text remains, rather than dropping the message.
     let prompt = message.text
