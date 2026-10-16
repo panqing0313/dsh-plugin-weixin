@@ -1164,3 +1164,70 @@ merged.asr      = {"enabled":true,"command":"","args":[],…}                   
   `resolveAsrSettings` 返回 `null`（关掉就是关掉，不被 schema 默认重新打开）。
 - 部署：`node bin/install.mjs --profile desktop`，`src/state.js` 两侧 SHA-256
   均为 `5d4ab8657f04d92a58fd7d98f274a7ca9efcfc946f74f9144de69ad5abb58093`（肉眼比对）。
+
+---
+
+## 2026-10-16 晚：长轮询 body 挂死（「暂无法连接 openclaw」实锤）
+
+### 现场（21:05–21:17 本地）
+
+手机显示「暂无法连接 openclaw」；`dde7e4010d55@im.bot.sync.json` mtime 停在
+21:05:59（11 分钟无推进）、21:05:10 之后日志一条都没有（35s 超时本应每轮打一条）；
+TCP 采样看到**一条对 iLink 的连接纹丝不动**（另一条消失了）——入站循环整个停了，
+但没有报错、没有重试，因为**什么都没"失败"**。
+
+### 根因：vendor 的超时在响应头到达那一刻就被清掉
+
+`vendor/openclaw-weixin/api/api.js` 的 `apiPostFetch`：
+
+```js
+const res = await fetch(...)      // 头到了
+if (t !== undefined) clearTimeout(t)   // ← 自己的 35s 定时器在这里被清
+const rawText = await res.text()       // ← body 读取没有任何超时
+```
+
+服务端把头发了、body 吊住 → `res.text()` 永远 pending → `getUpdates` 永远
+不返回 → 循环卡死在一个死请求上。TCP 看着是 ESTABLISHED，日志里什么都没有。
+
+**第二暴露点（探针发现的）**：`start()` 里 `await notifyStart` 在武装循环**之前**
+执行。`notifyStart` 没有外部 signal，撞上同样的 body 挂死就**永远不返回**——
+watchdog 根本没机会武装，整个 transport 从第一轮挂死起就死了。
+`stop()` 里的 `notifyStop` 同理，会让插件 dispose 也挂住。
+
+### 修法（`src/transport/ilink.js`，不碰 vendor）
+
+1. **`#loop` 的 getUpdates watchdog**：每轮 poll 限时
+   `longPollTimeoutMs * 2 + 10s`（35s 默认 → 80s 硬上界），超时 `abort()` 掐掉
+   底层请求、打一行日志、计一次失败走既有 2s/30s 退避。
+   **关键细节**：vendor 的 `getUpdates` 会把 `AbortError` 吞掉并返回
+   `{ret:0, msgs:[]}`（把外部 abort 当长轮询超时的正常出口），所以 watchdog 的
+   abort 以「正常返回 + signal 已 aborted」的形态出现，**不会进 catch**。
+   循环在 poll 返回后检查 signal：aborted 且 `running` 仍为 true ⇒ 是 watchdog
+   触发（`stop()` 先翻 `running` 再 abort，以此区分两种 abort），重建
+   controller 继续轮询。若只靠 `while (!signal.aborted)` 判断，这里会**静默退出
+   循环**——正是现场那个冻结状态。
+2. **`start()` 的 notifyStart 竞速**：与同一 deadline race，输了打日志继续，
+   不再无限阻塞循环武装。
+3. **`stop()` 的 notifyStop 竞速**：同上，dispose 不再可能挂住。
+4. **退避 sleep 可中断**：`interruptibleSleep(100ms 步进)`，`stop()` 不用等完
+   30s 退避才返回。
+
+### 测试（`test/transport-watchdog.test.js`，1 条端到端）
+
+**复现挂死的关键是服务器形状**：plain headers-only 响应 undici 视为
+零长度 body **立即完成**（前几版测试因此什么都没测到）；必须发
+**chunked 响应且不给终止 chunk**——`fetch()` 在头处 resolve（vendor 清掉自己的
+定时器）、`res.text()` 永远 pending，才是生产形态。`longPollTimeoutMs=100` 把
+watchdog deadline 压到 ~10.2s。
+
+断言：`start()` 在 deadline 返回并打 `notifyStart did not answer within …`；
+watchdog 打 `one poll round exceeded … (headers arrived, body never did)`；
+watchdog 之后**仍在发起新请求**（不是静默退循环）；`stop()` 干净退出。
+
+### 验证
+
+- 全量 **285 pass / 0 fail**（284 → 285）；操作者日志 48697 → 48697 零增长。
+- 独立探针（非测试进程）完整时间线：
+  `start returned in 10208ms` → 两次 `ERR: getUpdates watchdog: one poll round
+  exceeded 10200ms` → `stopped` → `server closed`。循环对持续挂死的服务器
+  **永不卡死、每次都有日志、每次都重试**。

@@ -56,7 +56,12 @@ test('the loop raises errcode instead of silently polling on', () => {
   assert.match(source, /throw new SessionRejectedError\(resp\.errcode, resp\.errmsg\)/)
   // And a rejection must not fall through to the retry ladder: retrying cannot
   // fix an expired credential, and it would bury the message the operator needs.
-  const catchBlock = source.slice(source.indexOf('} catch (error) {', source.indexOf('#loop(onMessage)')))
+  // The loop now has TWO catch blocks (the poll-round watchdog catch, and the
+  // response-validation catch that owns errcode handling); this rule is about
+  // the response one, so slice from the errcode guard rather than the first
+  // catch in the loop.
+  const errcodeGuardAt = source.indexOf("if (typeof resp.errcode === 'number'")
+  const catchBlock = source.slice(source.indexOf('} catch (error) {', errcodeGuardAt))
   const rejectedAt = catchBlock.indexOf('instanceof SessionRejectedError')
   const retryAt = catchBlock.indexOf('classifyFetchError(error)')
   assert.notEqual(rejectedAt, -1, 'the catch must single out a rejected session')

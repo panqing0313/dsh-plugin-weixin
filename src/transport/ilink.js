@@ -56,6 +56,38 @@ export class SessionRejectedError extends Error {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * Recognise the abort the platform raises when a fetch/`res.text()` is
+ * cancelled through an AbortController. The watchdog and `stop()` both abort
+ * the loop's controller, so the catch path needs to tell "we cancelled this
+ * request on purpose" from any other network failure.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const isAbortError = (error) => error instanceof Error && error.name === 'AbortError'
+
+/**
+ * Wait `ms`, but return early when `isRunning()` turns false.
+ *
+ * The retry/backoff sleeps run between poll rounds. A plain `sleep` makes
+ * `stop()` wait out a 30s backoff before `loopPromise` settles, which stalls
+ * plugin dispose and (in tests) hangs the harness. Stepping in 100ms slices
+ * costs nothing and makes shutdown immediate.
+ *
+ * @param {number} ms
+ * @param {() => boolean} isRunning
+ * @returns {Promise<void>}
+ */
+const interruptibleSleep = async (ms, isRunning) => {
+  const step = 100
+  let waited = 0
+  while (waited < ms && isRunning()) {
+    await sleep(Math.min(step, ms - waited))
+    waited += step
+  }
+}
+
+/**
  * Reduce an iLink `WeixinMessage` to the channel's {@link InboundMessage}.
  *
  * Returns `null` for messages that carry nothing this channel can act on
@@ -250,10 +282,17 @@ export class ILinkTransport {
     this.running = true
     this.abort = new AbortController()
     // Best-effort startup notification; a failure here must not block polling.
-    try {
-      await notifyStart({ baseUrl: this.baseUrl, token: this.token })
-    } catch (error) {
-      this.log(`notifyStart failed (continuing): ${String(error)}`)
+    // Bounded: the vendor's own timeout is cleared the moment response HEADERS
+    // arrive, so a server that stalls the body leaves notifyStart pending
+    // FOREVER — and start() awaits it before arming the loop, which would keep
+    // the whole transport dead (no poll, no watchdog) against exactly the kind
+    // of server this file's watchdog exists for. Race it with a deadline; a
+    // lost race just skips the notification.
+    const notified = notifyStart({ baseUrl: this.baseUrl, token: this.token })
+    const notifyDeadline = sleep(this.longPollTimeoutMs * 2 + 10_000).then(() => 'deadline')
+    const outcome = await Promise.race([notified.then(() => 'notified', (error) => { this.log(`notifyStart failed (continuing): ${String(error)}`); return 'notified' }), notifyDeadline])
+    if (outcome === 'deadline') {
+      this.log(`notifyStart did not answer within ${this.longPollTimeoutMs * 2 + 10_000}ms (headers arrived, body never did); continuing without it`)
     }
     this.loopPromise = this.#loop(onMessage)
   }
@@ -262,14 +301,53 @@ export class ILinkTransport {
     let consecutiveFailures = 0
     while (this.running && !this.abort.signal.aborted) {
       let buf = loadGetUpdatesBuf(this.syncBufPath)
+      // The vendor's own timeout only covers the fetch() call — it is cleared
+      // the moment response HEADERS arrive, and `res.text()` (the body read)
+      // has no deadline of its own. A server that sends headers and then
+      // stalls the body leaves getUpdates pending forever: the loop hangs on
+      // one dead request, sync stops advancing, and the phone shows "cannot
+      // reach openclaw" while the TCP connection itself looks ESTABLISHED
+      // (observed 2026-10-16 21:05–21:17: no log line, no sync progress, one
+      // frozen TLS connection). This watchdog is the hard outer bound: if one
+      // poll round takes longer than the long-poll window plus margin, the
+      // request is aborted underneath and the round counts as a failure so the
+      // existing retry/backoff machinery runs.
+      const pollDeadlineMs = this.longPollTimeoutMs * 2 + 10_000
+      const pollWatchdog = setTimeout(() => this.abort.abort(), pollDeadlineMs)
+      let polled
       try {
-        const resp = await getUpdates({
+        polled = await getUpdates({
           baseUrl: this.baseUrl,
           token: this.token,
           get_updates_buf: buf ?? '',
           timeoutMs: this.longPollTimeoutMs,
           abortSignal: this.abort.signal,
         })
+      } finally {
+        clearTimeout(pollWatchdog)
+      }
+      // getUpdates swallows AbortError and returns an empty `{ret:0}` (vendor
+      // treats a long-poll timeout and an external abort as the same normal
+      // exit), so a watchdog abort lands HERE, not in a catch: the signal is
+      // left aborted and the `while` guard would silently end the loop — the
+      // exact "no log, no sync, connection frozen" state. Reset the signal so
+      // the loop keeps polling and surface one line saying what happened.
+      if (!this.running) break
+      if (this.abort.signal.aborted) {
+        this.errLog(`getUpdates watchdog: one poll round exceeded ${pollDeadlineMs}ms (headers arrived, body never did); aborted underneath and retrying`)
+        this.abort = new AbortController()
+        consecutiveFailures += 1
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
+          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
+          consecutiveFailures = 0
+        } else {
+          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
+        }
+        continue
+      }
+      try {
+        const resp = polled
         if (resp.ret !== undefined && resp.ret !== 0) {
           throw new Error(`getUpdates ret=${resp.ret} errmsg=${resp.errmsg ?? '(none)'}`)
         }
@@ -304,7 +382,9 @@ export class ILinkTransport {
           await dispatchMessage(onMessage, message, this.errLog)
         }
       } catch (error) {
-        if (!this.running || this.abort.signal.aborted) break
+        // stop() flips `running` before aborting, so a watchdog abort on a
+        // still-running loop is distinguishable from a real stop here too.
+        if (!this.running) break
         // A refused session never recovers on its own, so retrying is pointless
         // and would bury the one line the operator needs. Report it once, at
         // the level that reaches the GUI log, and stop polling.
@@ -318,15 +398,22 @@ export class ILinkTransport {
           this.#onSessionRejected?.(error)
           break
         }
+        if (isAbortError(error)) {
+          // Headers arrived but the body never did and the watchdog fired.
+          // A fresh controller for the next round; this round is a failure.
+          this.errLog(`getUpdates watchdog: poll round aborted after ${pollDeadlineMs}ms; retrying`)
+          this.abort = new AbortController()
+        } else {
+          const classified = classifyFetchError(error)
+          this.errLog(`getUpdates failed (${classified.type}): ${classified.description}`)
+        }
         consecutiveFailures += 1
-        const classified = classifyFetchError(error)
-        this.errLog(`getUpdates failed (${classified.type}): ${classified.description}`)
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
-          await sleep(BACKOFF_DELAY_MS)
+          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
           consecutiveFailures = 0
         } else {
-          await sleep(RETRY_DELAY_MS)
+          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
         }
       }
     }
@@ -496,7 +583,13 @@ export class ILinkTransport {
       // The loop swallows its own errors; nothing to propagate.
     }
     try {
-      await notifyStop({ baseUrl: this.baseUrl, token: this.token })
+      // Bounded for the same reason as notifyStart in start(): the vendor's
+      // timeout is cleared at headers, so a body-stalling server would hang
+      // shutdown forever. Best-effort either way.
+      await Promise.race([
+        notifyStop({ baseUrl: this.baseUrl, token: this.token }),
+        sleep(this.longPollTimeoutMs * 2 + 10_000),
+      ])
     } catch {
       // Shutting down; a failed notification is not actionable.
     }
