@@ -183,19 +183,28 @@ function preflight() {
 	// release's notes wrong: `git describe` still points at the older tag, so
 	// everything from the untagged release gets reported as new. This really
 	// happened with 0.3.0 — it was published, and v0.3.0 did not exist.
+	//
+	// Prereleases and throwaway versions (`0.0.0-stage`, published once to test
+	// the pipeline) are skipped: they are never releases, so their absence from
+	// the tag list is correct rather than drift, and flagging them every run
+	// would train the operator to ignore this warning.
 	if (published !== '') {
 		try {
 			const known = JSON.parse(published)
 			// The version being released right now is legitimately untagged yet.
 			const missing = known.filter(
-				(v) => v !== version && git(['rev-parse', '-q', '--verify', `refs/tags/v${v}`]) === '',
+				(v) =>
+					v !== version &&
+					/^\d+\.\d+\.\d+$/.test(v) &&
+					v !== '0.0.0' &&
+					git(['rev-parse', '-q', '--verify', `refs/tags/v${v}`]) === '',
 			)
 			if (missing.length > 0) {
 				warn(`published but never tagged: ${missing.join(', ')}`)
 				warn('this release\'s notes will report that work as new until the tags exist:')
 				for (const v of missing) note(`git tag -a v${v} <release-commit> && git push origin v${v}`)
 			} else {
-				ok('every published version is tagged')
+				ok('every published release is tagged')
 			}
 		} catch {
 			note('could not cross-check published versions against tags')
