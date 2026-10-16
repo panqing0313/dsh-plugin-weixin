@@ -71,10 +71,24 @@ function note(message) {
 function warn(message) {
 	process.stdout.write(`    ${C.yellow}!${C.off} ${message}\n`)
 }
+
+/** Cleanup registered by the dry run, so a failure still restores the tree. */
+let cleanup = () => {}
+
+/**
+ * Abort the release.
+ *
+ * This throws instead of calling `process.exit`: exiting here would skip the
+ * dry run's cleanup, and a failed dry run would leave the version bump sitting
+ * in package.json. The top-level handler turns the throw into exit code 1.
+ */
 function die(message, hint) {
+	cleanup()
 	process.stdout.write(`\n${C.red}✗ ${message}${C.off}\n`)
 	if (hint) process.stdout.write(`  ${hint}\n`)
-	process.exit(1)
+	const error = new Error(message)
+	error.reported = true
+	throw error
 }
 
 /** Run a command, inheriting stdio, and throw on failure. */
@@ -580,17 +594,24 @@ function main() {
 	if (dryRun) {
 		// A dry run must not touch the tree. The version bump and the tarball are
 		// exactly what is being rehearsed, so build them, report, then undo.
+		// Cleanup is registered globally too, so a `die()` inside the build step
+		// still restores the tree instead of leaving the bump behind.
 		const before = snapshotTextFiles()
+		const undo = () => {
+			restoreTextFiles(before)
+			for (const leftover of fs.readdirSync(ROOT).filter((f) => f.endsWith('.tgz'))) {
+				fs.rmSync(path.join(ROOT, leftover), { force: true })
+			}
+		}
+		cleanup = undo
 		try {
 			bumpVersion(previousVersion)
 			const tarball = buildAndVerify()
 			note(`would publish ${path.basename(tarball)}`)
 			note(`would tag v${version} and push (GitHub release notes ready)`)
 		} finally {
-			restoreTextFiles(before)
-			for (const leftover of fs.readdirSync(ROOT).filter((f) => f.endsWith('.tgz'))) {
-				fs.rmSync(path.join(ROOT, leftover), { force: true })
-			}
+			undo()
+			cleanup = () => {}
 		}
 		process.stdout.write(`\n${C.green}${C.bold}Dry run for ${PKG_NAME}@${version} finished — tree unchanged.${C.off}\n`)
 		return
@@ -626,5 +647,16 @@ function restoreTextFiles(snapshot) {
 try {
 	main()
 } catch (error) {
-	die(String(error?.message ?? error))
+	if (error?.reported === true) {
+		// die() already printed the reason and the hint; just fail the process.
+		process.exitCode = 1
+	} else {
+		// An unexpected failure (a spawn error, a filesystem problem): report it
+		// through die() so the cleanup still runs and the message stays uniform.
+		try {
+			die(String(error?.message ?? error))
+		} catch {
+			process.exitCode = 1
+		}
+	}
 }
