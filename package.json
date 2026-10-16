@@ -27,6 +27,7 @@
   },
   "scripts": {
     "login": "node bin/login.js",
+    "release": "node bin/release.mjs",
     "test": "node --import ./test/isolate-vendor-log.mjs --test \"test/**/*.test.js\"",
     "test:watch": "node --import ./test/isolate-vendor-log.mjs --test --watch \"test/**/*.test.js\""
   },

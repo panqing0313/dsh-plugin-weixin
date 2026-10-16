@@ -601,3 +601,40 @@ Rosetta 那一档是本机环境造成的（conda 是 x86_64 构建），不是�
 **测试**：`test/asr.test.js` 24 条（+5）。新增覆盖 `cwd` 解析与实际 spawn 目录、
 自带桥真的存在且可执行、协议三种非法输入、stdout 每行都是 JSON、以及平台默认 repo
 不能硬编码 mlx。全量 **203 pass**。
+
+## 2026-10-16 — 一键发布脚本 `bin/release.mjs`
+
+**诉求**：用户要「一键提交和发布的脚本，后续自己执行上线发布」。
+
+**为什么不是一行 `npm publish`**：把此前几次手工发布做过的事逐条列出来，发现每一步都至少
+失败过一次，且失败只在事后才看得见 —— 先发布后改版本号、npm 还在处理上传时就去查 registry
+（读到旧版本，误判为失败）、给没推上去的提交打 tag、上传的 tarball 里少了 `bin/`。脚本把
+「实际跑通的顺序」固化下来。
+
+**执行顺序**：预检 → `npm test` → 改 `package.json` 与 README 版本行/版本列表 → `npm pack`
+并检查文件清单 → **在临时解压目录里真跑一次 `bin/asr-bridge.py`** → 提交 → `npm publish`
+→ 轮询 registry 直到版本可见 → 比对 `dist.shasum` → 打 tag/推/GitHub Release → 本机安装。
+
+**这次顺手查出的真实漂移**（不是假设）：
+
+- **`0.3.0` 已发布但从未打 tag**。于是 `git describe --tags --abbrev=0` 还指向 `v0.2.0`，
+  下一次发布的 Release Notes 会把 ASR 桥那批工作当成新内容再报一遍。已补 `v0.3.0`
+  并建对应 GitHub Release；`0.1.0`/`0.1.1` 同样漏打，一并补上（`0.1.0` 是 `2405fd5`，
+  `0.1.1` 是 `751e18e`）。`0.0.0-stage` 是当初试发布管线的产物，本就不该有 tag，
+  预检按 prerelease 跳过 —— 否则每次跑都报一条真警告，会训练出「看到就忽略」的习惯。
+- 补 tag 后 GitHub 把 `Latest` 徽标挪到了 `0.1.1`，已 `gh release edit v0.3.0 --latest` 拨回。
+
+**脚本自身测出并修掉的两个 bug**：
+
+1. **`--dry-run` 说「工作区未改动」却真的改了** `package.json` 与 `README.md`。改为先快照这两个
+   文件、跑完真实 bump+pack 后还原并删掉 tarball；实测跑完 `git status --porcelain` 为空。
+2. **确认提示在真终端里必然失败**：原来是 `sh -c 'read line; ...'` 且没接 stdin，`read` 在
+   stdio 继承下仍从**管道**读，stdin 在 EOF → 直接 `aborted`，而操作者明明就在终端前。
+   改为 `spawnSync(..., { stdio: ['inherit','pipe','inherit'] })` + `read -r line </dev/tty`。
+   用 `script -q /dev/null` 造真 pty 实测：答 `n` → `aborted (answer "y" to release)`，且未进入
+   测试步骤；答 `y` 才继续。另外 Release Notes 改为**在改版本号之前**生成，否则会把
+   `chore(release)` 提交自己也算进去。
+
+**验证**：`npm test` 全量 **203 pass**；`--dry-run` 端到端跑通（57 files、836 kB、桥冒烟通过）；
+预检的六道关卡逐条手工触发确认（无版本号 / 非法版本号 / 脏工作区 / 未同步 origin /
+已发布版本 / 未登录 npm），其中「已发布版本」是靠先 staging 脚本制造脏工作区反向确认的。

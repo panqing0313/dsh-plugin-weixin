@@ -322,6 +322,35 @@ ln -sfn ~/.dsh/profiles/desktop/node_modules/@deepseek-ai/cosmokit    node_modul
 ln -sfn ~/.dsh/profiles/node_modules/@deepseek-ai/dsh-llm            node_modules/@deepseek-ai/dsh-llm
 ```
 
+## 发布
+
+一条命令做完整条发布链路（校验 → 测试 → 改版本号 → 打包核验 → 发布 → 打标签 → GitHub Release）：
+
+```bash
+npm run release 0.4.0 -- --dry-run   # 预演：不提交、不发布，跑完还原工作区
+npm run release 0.4.0                # 正式发布
+```
+
+脚本按「实际能跑通的顺序」执行，每一步都对应一次手工发布踩过的坑：
+
+| 步骤 | 做什么 | 为什么 |
+| --- | --- | --- |
+| 预检 | 工作区干净、在 main、与 origin 同步、版本未发布过、npm 已登录、**已发布版本都有对应 tag** | `git describe` 靠 tag 定位上一版；漏打 tag 会让本次 Release Notes 把上一版内容重复报一遍（0.3.0 就漏打过） |
+| 测试 | `npm test` 必须全绿 | 发布不能带着红灯 |
+| 版本号 | 改 `package.json`，同步 README 的「当前已发布版本」行与版本列表 | README 曾长期写着 0.1.0 而 npm 上已是 0.2.0 |
+| 打包核验 | `npm pack` 后检查文件清单（不缺 `bin/asr-bridge.py`、无 `__pycache__`/测试文件），并**在临时解压目录里真跑一次 `bin/asr-bridge.py`** | 证明要上传的那个包本身可用，而不只是测试通过 |
+| 提交 | 一个 `chore(release): x.y.z` 提交 | |
+| 发布 | `npm publish`，然后**轮询 registry 直到版本真的可见** | npm 会先返回成功、再异步处理上传；立刻查询读到的是旧版本，看起来像失败 |
+| 核验 | 比对 registry 的 `dist.shasum` 与本地 tarball | 确认线上包就是本地构建的那个 |
+| 标签 | 打 `v x.y.z`、推 main 与 tag、按提交日志生成 GitHub Release | |
+| 安装 | `node bin/install.mjs --profile $DSH_PROFILE` | 本机自测 |
+
+三点注意：
+
+- **必须从真实终端运行**。`npm publish` 可能要求浏览器里输入一次性密码（OTP）；stdout 不是 TTY 时 npm 会把认证链接打码（`***`），这一步无法自动化。
+- 预演（`--dry-run`）会真实执行打包与桥的冒烟测试，但结束前还原 `package.json`/`README.md` 并删掉 tarball，工作区保持原样。
+- 新版本会在 README 版本列表顶部插入一条 `TODO` 文案的条目；**把它改成这次的实际内容再提交**（脚本会明确提示）。
+
 ## 文档
 
 - [实施方案](docs/plan.md)
