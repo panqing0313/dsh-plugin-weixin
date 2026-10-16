@@ -51,7 +51,11 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@0.1.0`](https://www.npmjs.com/package/dsh-plugin-weixin)（2026-10-15 首发，含扫码轮询、登录后自动起循环、allowlist 合并、归档会话自动恢复等全部修复）。
+当前已发布版本：[`dsh-plugin-weixin@0.3.0`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+
+- **0.3.0** —— 仓库自带 ASR 桥，语音识别开箱可用（详见[语音识别](#语音识别asr)）。
+- **0.2.0** —— 忙时排队/插话、超时补发、来源块、设置卡进入宿主 Settings。
+- **0.1.0 / 0.1.1** —— 首发：扫码轮询、登录后自动起入站循环、白名单合并、归档会话自动恢复。
 
 ### 方式二：从源码安装
 
