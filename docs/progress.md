@@ -982,3 +982,79 @@ if (url === undefined) { assert.ok(true); return }   // ← 静默通过
 
 **测试**：新增 `test/qr-png.test.js`（6 条）；`test/client-login-poll.test.js` 加 1 条破图回归。
 全量 264 pass / 0 fail。
+
+## 2026-10-16 — 把可配置项放进设置页（原来只能手改 JSON）
+
+**起因**：设置卡能编辑的只有它当初为 ASR 写的那几个字段（模型目录、下载源、代理），
+其余十几个选项——发件人白名单、长度上限、忙时策略、媒体大小上限、CDN 根——
+只能靠手改 `~/.dsh/weixin/config.json` 或 `cordis.patch.yml`。用户要求「把可配置项都可以放到设置界面」。
+
+### 做法：表单由宿主的数据驱动
+
+新增 `src/config-remote.js`（`ConfigController`，服务名 `configController`，命名空间 `weixinConfig`），
+导出三张表：`FIELDS`（每项的类型、标签、提示、默认值、范围、是否只读）、分组、以及
+`list` / `save` / `reset` 三个 Remote 方法。`src/client.js` 新增 `ConfigSection`，
+渲染宿主发来的字段列表——**宿主加一个选项，界面自动多一项，客户端不用改**。
+
+优先级链：**已保存 > `config`（来自 YAML）> schema 默认**，并且每一项都带
+`source` 字段告诉界面这个值从哪来，界面据此显示 `已保存` / `来自 config` 徽标，
+并提供「恢复默认」。表单里只发送**改动过**的字段，避免把没碰过的项用陈旧值覆盖掉。
+
+### 沿路修掉的四个真问题
+
+1. **`enabled: false` 会提前 return，导致设置服务根本不注册。** 注释上写着服务
+   「Registered regardless of enabled so a disabled plugin can still be configured」，
+   但代码在 `return` 之后就再没走到那些 `new`。这意味着**一旦关闭插件，设置页就再也打不开，
+   也就无法把它打开**——唯一的开关被自己锁死了。改为：服务先注册，只跳过轮询循环；
+   `onAccountBound` 也加了守卫，禁用时扫码成功不会偷偷把循环拉起来（凭证照常保存）。
+
+2. **`bringUpLoop` 在没有凭证时静默 return。** 「加载了，但因为没有凭证所以什么都没在听」
+   是排查「消息怎么不进来」时最需要的一句话，而它原本一个字都不打——与一个起来了却卡住的
+   循环无法区分。补了日志。
+
+3. **批次非原子写入。** `save` 先整批校验、再一次性落盘；半途失败的保存会让操作者看到报错
+   却分不清哪些已经写进去了。测试专门验证了这一点（见下）。
+
+4. **清空一个字符串字段会存 `""` 而不是删键**，于是 `source` 显示「已保存」而值是空的——
+   与清空数字字段（删键、回到默认）行为不一致。统一为：空且默认值也是空 ⇒ 删键。
+   `allowedSenders` 例外，空列表是**有含义的**（谁都不允许），必须写入而不是删除。
+
+另外把 `deletePath` 补上父对象剪枝：重置 `asr.model` 后不该留下一个空的 `asr: {}` 让文件
+看起来还带着配置（同时保证 `asr.env` 这类兄弟键不被误删）。
+
+### 远端参数为什么传 JSON 字符串
+
+`save` 收的是 `entriesJson`（一个 JSON 字符串），不是结构化数组。原因是 **wire 层会按声明的
+codec 校验每个参数，而这个插件的 codec 词表（`string`/`number`/`record`/`unknown`）里没有数组节点**，
+数组参数会在网关就被拒掉、根本进不到方法里。JSON 字符串复用已有的 `_str` codec。
+
+顺带查出一个**潜伏的坏代码**：`src/client.js` 里 `_strMap` 调用了不存在的 `record()`
+（这个 schemastery 版本只有 `dict`）。它当前没有任何调用点，所以没炸；没有动它，只在
+探测中确认了它是死代码。
+
+### 测试与辨别力
+
+新增 `test/config-remote.test.js`（10 条）。其中最重要的一条是**双向 schema 一致性**：
+表单自带的每份默认值必须等于 schema 的默认值，且 schema 里的每个字段都必须在表单里出现
+（后者正是这次的原始投诉）。逐条注入了 4 种缺陷确认测试真的会红：
+
+| 注入的缺陷 | 结果 |
+| --- | --- |
+| 默认值与 schema 漂移 | 1 条红 |
+| 清空字符串不删键 | 1 条红 |
+| 已保存不再压过 config | 4 条红 |
+| 逐条校验并写入（非原子） | 1 条红 |
+
+其中**非原子那条最初没被抓住**：我先注入的「缺陷」其实被前面的整批预校验循环挡掉了，
+真正的 `save` 根本没走到写入。把预校验循环一并换成逐条写入后测试才变红——
+教训是注入的缺陷必须确认**真的执行到了**，否则「测试没红」证明不了任何事。
+
+**另外四处 harness 更新**：插件现在注册三个服务（登录、ASR、配置），
+`test/client-login-poll.test.js`、`test/client-session-row-mark.test.js`、
+`test/client-sessions-section.test.js`、`test/client-remote.test.js` 的假 ctx
+需要补上 `remote.weixinConfig`，否则 `ctx.inject` 直接断言失败（21 条一起红）。
+`test/client-remote.test.js` 的方法清单也加了三个 `weixinConfig/*`。
+
+**验证**：全量 **274 pass / 0 fail**；操作者日志 24061 → 24061 字节（零增长）；
+用假宿主加载真 `src/index.js` 确认禁用时注册 3 个服务且不起循环、启用时照常；
+新文件权限 600 → 644（否则 release 脚本的 world-readable 检查会中止）。

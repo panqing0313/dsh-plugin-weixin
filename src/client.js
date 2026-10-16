@@ -184,6 +184,43 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setDownloadSettings:result`, create: _statusResult },
 				},
+				// weixinConfig namespace (ConfigController) — the options form.
+				{
+					id: `${PKG}#weixinConfig/list`,
+					service: "configController",
+					namespace: "weixinConfig",
+					method: "list",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/list:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixinConfig/save`,
+					service: "configController",
+					namespace: "weixinConfig",
+					method: "save",
+					invocation: { kind: "direct" },
+					// The batch is a JSON string, not a structured array: the wire
+					// validates each parameter against a declared codec and this
+					// plugin's codec vocabulary has no array node, so an array
+					// parameter would be refused before the method ran.
+					parameters: [
+						{ name: "entriesJson", wire: "entriesJson", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/save:p0`, create: _str } },
+						{ name: "lang", wire: "lang", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/save:p1`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/save:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixinConfig/reset`,
+					service: "configController",
+					namespace: "weixinConfig",
+					method: "reset",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "pathsJson", wire: "pathsJson", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/reset:p0`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinConfig/reset:result`, create: _statusResult },
+				},
 			],
 		};
 
@@ -941,6 +978,275 @@ window.__ModuleLoader__.load({
 					: null);
 		}
 
+		/**
+		 * Every configurable option, rendered from what the host reports.
+		 *
+		 * The form is data-driven on purpose: the host sends the field list
+		 * (type, label, default, current value, where that value came from), and
+		 * this component renders whatever arrives. Adding an option on the host
+		 * therefore makes it editable here with no change to this file.
+		 *
+		 * Values are held as strings while editing — a text input has no other
+		 * type — and the host coerces them, so this component never has to know
+		 * whether "1500" is a number, a list, or a JSON blob.
+		 */
+		function ConfigSection({ ctx, t }) {
+			const [groups, setGroups] = react.useState([]);
+			const [draft, setDraft] = react.useState({});
+			const [busy, setBusy] = react.useState(false);
+			const [message, setMessage] = react.useState("");
+			const [error, setError] = react.useState("");
+			const [configPath, setConfigPath] = react.useState("");
+			const [openGroup, setOpenGroup] = react.useState("");
+			// The host answers with localized validation messages, so it needs to
+			// know which language the card is showing.
+			const { lang } = useLocaleText(ctx);
+			/**
+			 * A Remote failure carries a stable `code` beside its message. The code
+			 * is what makes a report actionable — "bad_value" points at the field's
+			 * validation — so it is kept visible when the message alone would not
+			 * identify the offending input.
+			 */
+			const messageOf = (err) => {
+				const text = String(err?.message ?? err);
+				const code = err?.code;
+				return code && code !== "unknown" ? `${text} (${code})` : text;
+			};
+
+			const load = react.useCallback(async () => {
+				try {
+					const r = await callRemote(() => ctx.remote.weixinConfig.list());
+					const next = {};
+					for (const group of r?.groups ?? []) {
+						for (const field of group.fields ?? []) next[field.path] = field.value;
+					}
+					setGroups(r?.groups ?? []);
+					setDraft(next);
+					setConfigPath(r?.configFile ?? "");
+					setOpenGroup((current) => current || r?.groups?.[0]?.group || "");
+					return r;
+				} catch {
+					// The remote may not be mounted yet; the card shows the
+					// empty state rather than an error the user cannot act on.
+					return undefined;
+				}
+			}, [ctx]);
+
+			react.useEffect(() => {
+				load();
+			}, [load]);
+
+			/** Which fields differ from what the host reports as saved. */
+			const dirtyPaths = [];
+			for (const group of groups) {
+				for (const field of group.fields ?? []) {
+					if (field.readOnly) continue;
+					if (String(draft[field.path] ?? "") !== String(field.value ?? "")) {
+						dirtyPaths.push(field.path);
+					}
+				}
+			}
+
+			const save = async () => {
+				setBusy(true);
+				setMessage("");
+				setError("");
+				try {
+					// Only the changed fields are sent, so two people editing
+					// different sections do not overwrite each other's work with
+					// stale values they never touched.
+					const entries = dirtyPaths.map((path) => ({ path, value: draft[path] ?? "" }));
+					if (entries.length === 0) {
+						setMessage(t("Nothing to save.", "没有需要保存的改动。"));
+						return;
+					}
+					// The batch travels as a JSON string: the wire has no array
+					// codec, so a structured array would be rejected at the gateway.
+					await callRemote(() => ctx.remote.weixinConfig.save(JSON.stringify(entries), lang));
+					await load();
+					setMessage(t("Saved.", "已保存。"));
+				} catch (err) {
+					setError(messageOf(err));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const resetAll = async () => {
+				setBusy(true);
+				setMessage("");
+				setError("");
+				try {
+					const paths = groups.flatMap((group) =>
+						(group.fields ?? []).filter((field) => !field.readOnly && field.source === "saved").map((field) => field.path));
+					await callRemote(() => ctx.remote.weixinConfig.reset(JSON.stringify(paths)));
+					await load();
+					setMessage(t("Reset to defaults.", "已恢复默认值。"));
+				} catch (err) {
+					setError(messageOf(err));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const resetOne = async (path) => {
+				setBusy(true);
+				setError("");
+				try {
+					await callRemote(() => ctx.remote.weixinConfig.reset(JSON.stringify([path])));
+					await load();
+					setMessage("");
+				} catch (err) {
+					setError(messageOf(err));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			if (groups.length === 0) {
+				return createElement("div", { style: panelStyle },
+					createElement("p", { style: hintStyle }, t("Loading options…", "正在读取配置…")));
+			}
+
+			const renderField = (field) => {
+				const value = draft[field.path] ?? "";
+				const changed = String(value) !== String(field.value ?? "");
+				const set = (next) => setDraft((current) => ({ ...current, [field.path]: next }));
+				// The control is chosen by the type the host declared, so the
+				// browser enforces the same shape the host will validate.
+				let control;
+				if (field.type === "boolean") {
+					control = createElement("label", {
+							style: { display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 },
+						},
+						createElement("input", {
+							type: "checkbox",
+							checked: value === true || value === "true",
+							disabled: field.readOnly,
+							onChange: (event) => set(event.target.checked),
+							style: { width: 15, height: 15, accentColor: C.primaryFill, cursor: "pointer" },
+						}),
+						createElement("span", { style: { color: C.labelPrimary } },
+							value === true || value === "true" ? t("On", "开启") : t("Off", "关闭")));
+				} else if (field.type === "enum") {
+					control = createElement("div", { style: { display: "flex", gap: 12, flexWrap: "wrap" } },
+						...(field.options ?? []).map((option) =>
+							createElement("label", {
+									key: option.value,
+									style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 },
+								},
+								createElement("input", {
+									type: "radio",
+									name: `weixin-${field.path}`,
+									checked: value === option.value,
+									disabled: field.readOnly,
+									onChange: () => set(option.value),
+									style: { accentColor: C.primaryFill, cursor: "pointer" },
+								}),
+								createElement("span", {}, t(option.label, option.labelEn)))));
+				} else if (field.type === "stringList" || field.type === "text") {
+					control = createElement("textarea", {
+						value,
+						disabled: field.readOnly,
+						rows: field.type === "stringList" ? 3 : 4,
+						onChange: (event) => set(event.target.value),
+						style: { ...inputStyle, flex: "initial", width: "100%", resize: "vertical", fontFamily: "inherit", lineHeight: "20px" },
+					});
+				} else if (field.type === "number") {
+					control = createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+						createElement("input", {
+							type: "number",
+							value,
+							disabled: field.readOnly,
+							min: field.min,
+							max: field.max,
+							step: field.step,
+							onChange: (event) => set(event.target.value),
+							style: { ...inputStyle, flex: "0 0 auto", width: 160 },
+						}),
+						field.unit ? createElement("span", { style: captionStyle }, t(field.unit, field.unitEn)) : null);
+				} else {
+					control = createElement("input", {
+						type: "text",
+						value,
+						disabled: field.readOnly,
+						onChange: (event) => set(event.target.value),
+						style: { ...inputStyle, width: "100%" },
+					});
+				}
+				return createElement("div", {
+						key: field.path,
+						style: { display: "flex", flexDirection: "column", gap: 5, padding: "10px 0", borderTop: `1px solid ${C.border}` },
+					},
+					createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+						createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary } },
+							t(field.label, field.labelEn)),
+						// Where the value comes from decides what a reset will
+						// do, so it is shown rather than inferred.
+						field.source === "saved"
+							? createElement("span", { style: { ...captionStyle, padding: "1px 6px", border: `1px solid ${C.border}`, borderRadius: RADIUS.pill } },
+									t("saved", "已保存"))
+							: field.source === "config"
+								? createElement("span", { style: { ...captionStyle, padding: "1px 6px", border: `1px solid ${C.border}`, borderRadius: RADIUS.pill } },
+										t("from config", "来自配置"))
+								: null,
+						field.readOnly
+							? createElement("span", { style: captionStyle }, t("(read-only here)", "（此处只读）"))
+							: null,
+						field.source === "saved" && !field.readOnly
+							? createElement("button", {
+									onClick: () => resetOne(field.path),
+									disabled: busy,
+									style: { ...buttonStyle, minHeight: 24, padding: "1px 8px", fontSize: 12, marginLeft: "auto" },
+								}, t("Reset", "恢复默认"))
+							: null),
+					control,
+					createElement("p", { style: captionStyle }, t(field.hint, field.hintEn)),
+					changed
+						? createElement("p", { style: { ...captionStyle, color: C.warn } }, t("Not saved yet.", "尚未保存。"))
+						: null);
+			};
+
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+				createElement("p", { style: hintStyle },
+					t("These are the plugin's options. Saving writes them to the file below, so they survive a restart.",
+						"这里是插件的全部可配置项。保存会写入下方文件，重启后依然生效。")),
+				error ? createElement("p", { style: { ...hintStyle, color: C.danger } }, error) : null,
+				message ? createElement("p", { style: { ...hintStyle, color: C.success } }, message) : null,
+				...groups.map((group) => {
+					const open = openGroup === group.group;
+					return createElement("div", { key: group.group, style: panelStyle },
+						createElement("button", {
+								onClick: () => setOpenGroup(open ? "" : group.group),
+								style: {
+									display: "flex", alignItems: "center", gap: 8, width: "100%",
+									appearance: "none", background: "transparent", border: "none",
+									padding: 0, cursor: "pointer", font: "inherit", textAlign: "left",
+								},
+							},
+							createElement("span", { style: { color: C.labelTertiary, fontSize: 11 } }, open ? "▾" : "▸"),
+							createElement("span", { style: panelTitleStyle }, t(group.group, group.groupEn)),
+							createElement("span", { style: { ...captionStyle, marginLeft: "auto" } },
+								`${(group.fields ?? []).length}`)),
+						open ? createElement("div", {}, ...(group.fields ?? []).map(renderField)) : null);
+				}),
+				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+					createElement("button", {
+						onClick: save,
+						disabled: busy || dirtyPaths.length === 0,
+						style: dirtyPaths.length === 0 || busy ? buttonStyleFor(true) : primaryButtonStyle,
+					}, busy ? t("Saving…", "保存中…") : t("Save", "保存")),
+					createElement("button", { onClick: resetAll, disabled: busy, style: buttonStyleFor(busy) },
+						t("Reset all", "全部恢复默认")),
+					dirtyPaths.length > 0
+						? createElement("span", { style: captionStyle },
+								t(`${dirtyPaths.length} unsaved change(s)`, `${dirtyPaths.length} 项未保存`))
+						: null),
+				configPath
+					? createElement("p", { style: captionStyle }, t("Stored in: ", "保存在："), configPath)
+					: null);
+		}
+
 		function AsrSection({ ctx, t }) {
 			const [models, setModels] = react.useState([]);
 			const [modelDir, setModelDir] = react.useState("");
@@ -1549,6 +1855,7 @@ window.__ModuleLoader__.load({
 				const TABS = [
 					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
+					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);
@@ -1650,7 +1957,7 @@ window.__ModuleLoader__.load({
 			// `remote.directoryPicker` belongs to the shell's own assembly, not
 			// to this plugin, so it needs the same explicit declaration.
 			const ui = ctx.inject(
-				["remote.weixin", "remote.weixinAsr", "remote.directoryPicker", "slots", "locale"],
+				["remote.weixin", "remote.weixinAsr", "remote.weixinConfig", "remote.directoryPicker", "slots", "locale"],
 				registerUi,
 			);
 			try {

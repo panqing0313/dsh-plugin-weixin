@@ -31,6 +31,7 @@ import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES } from 
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
+import { ConfigController } from './config-remote.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -163,14 +164,20 @@ export function apply(ctx, config) {
   // YAML is the live decision and an overlay must not make it lie.
   config = withSavedConfig(config ?? {})
 
-  if (config.enabled === false) {
-    log('disabled by configuration; not starting the Weixin loop')
-    return
+  const disabled = config.enabled === false
+  if (disabled) {
+    // Deliberately NOT an early return. The settings card is the only way to
+    // turn the plugin back on, and it reads its own options from the
+    // ConfigController registered below -- so returning here would leave a
+    // disabled plugin with a card that cannot reach the very switch that
+    // re-enables it. The controllers register first; only the long-poll loop is
+    // skipped.
+    log('disabled by configuration; registering the settings services and starting no loop')
   }
 
-  // Settings-page services: QR login orchestration and ASR model management.
-  // Registered regardless of enabled so a disabled plugin can still be
-  // configured and logged in from the UI before being turned on.
+  // Settings-page services: QR login orchestration, ASR model management, and
+  // the options form. Registered regardless of enabled so a disabled plugin can
+  // still be configured and logged in from the UI before being turned on.
   //
   // Kept in a variable because the poll loop reports a refused session back to
   // it (markSessionExpired), which is what lets the card say "log in again"
@@ -214,6 +221,21 @@ export function apply(ctx, config) {
     warn(`settings ASR service unavailable: ${String(error)}`)
     asrController = undefined
   }
+  // The settings form's view of every configurable option. It is handed the
+  // *merged* config so the form can show effective values, and it reads the
+  // saved overlay itself on every call — so a value written from the form, or
+  // by hand while DSH is running, is reflected without a reload.
+  let configController
+  try {
+    configController = new ConfigController(ctx, { config })
+  } catch (error) {
+    warn(`settings config service unavailable: ${String(error)}`)
+    configController = undefined
+  }
+  // Constructing it IS the registration, so there is nothing else to do with
+  // the reference here; it is kept for the effect below, which asserts the
+  // service outlived the try block before anything tries to read options.
+  if (configController === undefined) warn('the options form will not be available')
 
   ctx.effect(() => {
     let cancelled = false
@@ -271,7 +293,15 @@ export function apply(ctx, config) {
       if (cancelled) return
 
       const account = await resolveAccount(config, warn)
-      if (account === undefined || cancelled) return
+      if (account === undefined) {
+        // Say so rather than returning in silence. "Loaded, but nothing is
+        // listening because no credential is saved yet" is the first thing an
+        // operator needs when messages do not arrive, and an unlogged return
+        // here is indistinguishable from a loop that started and then hung.
+        if (!cancelled) log('no saved Weixin credential yet; nothing is being listened to')
+        return
+      }
+      if (cancelled) return
 
       const next = new ILinkTransport({
         accountId: account.accountId,
@@ -378,11 +408,19 @@ export function apply(ctx, config) {
     // "scan" — the operator has already been told the phone shows bound, and
     // WeChat is still saying it cannot reach openclaw.
     const onAccountBound = () => {
+      // A disabled plugin must not begin listening even if a scan completes:
+      // `enabled` is the operator's switch, and a login is not a re-enabling
+      // action. The credential is still saved, so turning the plugin back on
+      // picks it up without a second scan.
+      if (disabled) {
+        log('a login completed while the plugin is disabled; not starting the loop')
+        return
+      }
       startLoop().catch((error) => warn(`restart after login failed: ${String(error)}`))
     }
     if (loginController !== undefined) loginController.onAccountBound = onAccountBound
 
-    const started = startLoop()
+    const started = disabled ? Promise.resolve() : startLoop()
 
     return async () => {
       cancelled = true

@@ -269,6 +269,12 @@ function fakeRemote(script = {}) {
         return { removed: [], reloadRequired: false }
       },
     },
+    weixinConfig: {
+      namespace: 'weixinConfig',
+      list: async () => ({ groups: [], configFile: '/tmp/config.json' }),
+      save: async () => ({ groups: [] }),
+      reset: async () => ({ groups: [] }),
+    },
     weixinAsr: {
       namespace: 'weixinAsr',
       listModels: async () => ({ models: [], modelDir: '' }),
@@ -313,6 +319,7 @@ async function mountCard(host) {
   // `ctx.remote.weixin` for the calls the card makes.
   ctx['remote.weixin'] = host.remote.weixin
   ctx['remote.weixinAsr'] = host.remote.weixinAsr
+  ctx['remote.weixinConfig'] = host.remote.weixinConfig
   ctx['remote.directoryPicker'] = host.remote.directoryPicker
   ctx.inject = (deps, callback) => {
     const sub = {}

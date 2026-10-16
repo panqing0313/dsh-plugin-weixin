@@ -221,7 +221,16 @@ function fakeHost(script = []) {
     listModels: async () => ({ models: [], modelDir: '' }),
     getDownloadSettings: async () => ({}),
   }
-  return { weixin: host, weixinAsr: asr, calls }
+  // The options tab reads this on mount, so the card cannot be mounted without
+  // it: an undeclared service makes ctx.inject fail, which fails every test in
+  // this file rather than only the ones about options.
+  const config = {
+    namespace: 'weixinConfig',
+    list: async () => ({ groups: [], configFile: '/tmp/config.json' }),
+    save: async () => ({ groups: [] }),
+    reset: async () => ({ groups: [] }),
+  }
+  return { weixin: host, weixinAsr: asr, weixinConfig: config, calls }
 }
 
 /**
@@ -270,6 +279,7 @@ async function mountCard(remote) {
       $mount: async () => async () => {},
       weixin: remote.weixin,
       weixinAsr: remote.weixinAsr,
+      weixinConfig: remote.weixinConfig,
       directoryPicker: { namespace: 'directoryPicker', pick: async () => null },
     },
     slots: {
@@ -281,6 +291,7 @@ async function mountCard(remote) {
   }
   ctx['remote.weixin'] = remote.weixin
   ctx['remote.weixinAsr'] = remote.weixinAsr
+  ctx['remote.weixinConfig'] = remote.weixinConfig
   ctx.inject = (deps, callback) => {
     const sub = {}
     for (const dep of deps) {

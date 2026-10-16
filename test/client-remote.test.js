@@ -225,6 +225,9 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixinAsr/listModels',
         'weixinAsr/setDownloadSettings',
         'weixinAsr/setModelDir',
+        'weixinConfig/list',
+        'weixinConfig/reset',
+        'weixinConfig/save',
       ],
     )
     await dispose()

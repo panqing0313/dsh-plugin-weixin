@@ -197,6 +197,12 @@ async function mountRowSeat() {
       listModels: async () => ({ models: [], modelDir: '' }),
       getDownloadSettings: async () => ({}),
     },
+    weixinConfig: {
+      namespace: 'weixinConfig',
+      list: async () => ({ groups: [], configFile: '/tmp/config.json' }),
+      save: async () => ({ groups: [] }),
+      reset: async () => ({ groups: [] }),
+    },
     directoryPicker: { namespace: 'directoryPicker', pick: async () => null },
   }
 
@@ -220,6 +226,7 @@ async function mountRowSeat() {
   // `ctx.remote.weixin` for the calls the card makes.
   ctx['remote.weixin'] = host.weixin
   ctx['remote.weixinAsr'] = host.weixinAsr
+  ctx['remote.weixinConfig'] = host.weixinConfig
   ctx['remote.directoryPicker'] = host.directoryPicker
   ctx.inject = (deps, callback) => {
     const sub = {}
