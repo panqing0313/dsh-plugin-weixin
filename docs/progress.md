@@ -1101,3 +1101,66 @@ codec 校验每个参数，而这个插件的 codec 词表（`string`/`number`/`
 **验证**：全量 **274 pass / 0 fail**；操作者日志 24061 → 24061 字节（零增长）；
 用假宿主加载真 `src/index.js` 确认禁用时注册 3 个服务且不起循环、启用时照常；
 新文件权限 600 → 644（否则 release 脚本的 world-readable 检查会中止）。
+
+## 2026-10-16 — 语音转写「未配置」：schema 默认值又压过了存档
+
+操作者在设置页配好了 ASR（`config.json` 里 `asr.enabled=true`、
+`asr.command=/Users/panqing/miniconda3/envs/mlx-arm/bin/python3`），发语音过来
+却仍然收到 `转写失败：no ASR bridge is configured`。
+
+### 根因：和 `allowedSenders` 是同一个 bug 形状，只是没人给 `asr` 补规则
+
+`withSavedConfig` 对 `asr` 只做了一层浅合并：
+
+```js
+merged.asr = { ...savedAsr, ...config.asr }
+```
+
+而宿主传给 `apply(ctx, config)` 的 `config` 是 **schemastery 实例化过**的——
+schema 给 `asr` 的每个字段都填了默认值，`command: ''`、`args: []`、`env: {}`。
+于是展开合并把 `''` 盖在了操作者的真命令上。实测（真 schema + 真 config.json）：
+
+```
+saved.asr       = {"enabled":true,"command":"/Users/panqing/miniconda3/envs/mlx-arm/bin/python3","args":["bin/asr-bridge.py"],…}
+hostConfig.asr  = {"enabled":true,"command":"","args":[],"timeoutMs":60000,"env":{},…}   ← schema 凭空补的空默认值
+merged.asr      = {"enabled":true,"command":"","args":[],…}                              ← 空 "" 赢了真命令
+=> resolveAsrSettings(merged, …) = null  →  asrBridge = undefined  →  「未配置」
+```
+
+`allowedSenders` 在 2026-10-15 撞过一模一样的墙（`4e9fa8a`），当时只修了白名单。
+
+### 为什么我之前的探针全都漏了
+
+**它们传的是空 config**（`withSavedConfig({})`）。`{}` 里没有 `asr` 键，
+所以 saved 自然胜出，一路绿灯。真宿主传的是 schema 实例化的 config，
+`saved` 与 `config` 之间有冲突——而冲突才是这个 bug 的载体。
+**教训：验证合并逻辑时，喂给它的必须是宿主真会传的那个形状，不是最省事的空对象。**
+
+### 修法
+
+按字段判定，且刻意保守：**存档里的值一律优先，除非存档里那个值本身是 schema 的空形态**
+（`''`、`[]`、`{}`、`undefined`）。理由是 `withSavedConfig` **无法区分**
+「schema 默认」和「操作者在 YAML 里写的值」——两者在 `config` 上形状完全相同——
+所以唯一安全的读法是「设置页是更新、更具体的陈述」。
+`false` 和 `0` 是真值，永远不当空，操作者关掉转写就保持关掉。
+
+### 测试与辨别力（`test/core.test.js`，+3 条）
+
+| 注入的缺陷 | 结果 |
+| --- | --- |
+| 退回 `{...savedAsr, ...config.asr}`（旧行为） | **3 条全红** |
+| 把 `false`/`0` 也当空值 | 恰好 1 条红（`an operator turning asr off …`） |
+
+### 验证
+
+- 全量 **284 pass / 0 fail**（281 → 284）；操作者日志 46438 → 46438 字节零增长。
+- **前后对照，同一探针同一配置**（`/tmp/e2easr.mjs`，加载部署副本）：
+  - 修复前：只有 `listening as account 973b0028f767@im.bot`
+  - 修复后：**`voice transcription enabled via /Users/panqing/miniconda3/envs/mlx-arm/bin/python3`** + 同一行
+- **完整链路真跑**（真 schema → `withSavedConfig` → `resolveAsrSettings` → `AsrBridge`
+  → 真 bridge 进程 → mlx-whisper 加载模型）转写操作者那条真语音：
+  `{"ok":true,"text":"我还是没说到。"}`
+- **反向**：`config.json` 写 `enabled:false` → `merged.asr.enabled === false`、
+  `resolveAsrSettings` 返回 `null`（关掉就是关掉，不被 schema 默认重新打开）。
+- 部署：`node bin/install.mjs --profile desktop`，`src/state.js` 两侧 SHA-256
+  均为 `5d4ab8657f04d92a58fd7d98f274a7ca9efcfc946f74f9144de69ad5abb58093`（肉眼比对）。

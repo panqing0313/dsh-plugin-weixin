@@ -392,6 +392,77 @@ test('the asr section merges one level deep so editing one field keeps the rest'
   })
 })
 
+test('a schema default cannot outrank a saved asr value', () => {  withStateRoot(() => {
+    // This is the config the host actually passes: the loader validates the
+    // composition through schemastery, so every asr field is present even when
+    // the composition never mentioned asr — `command: ''`, `args: []`, `env: {}`.
+    // Spread-merging that over the saved section erased the operator's command
+    // and left the voice bridge undefined while config.json still showed it,
+    // which is the whole "voice notes arrive but say no ASR bridge is
+    // configured" bug (2026-10-16).
+    fs.writeFileSync(
+      configFile(),
+      JSON.stringify({
+        asr: {
+          enabled: true,
+          command: '/opt/asr/python3',
+          args: ['bin/asr-bridge.py'],
+          env: { DSH_WEIXIN_ASR_LANGUAGE: 'zh' },
+        },
+      }),
+    )
+    const hostConfig = {
+      asr: {
+        enabled: true,
+        command: '',
+        args: [],
+        timeoutMs: 60000,
+        env: {},
+        model: '',
+        modelDir: '',
+        hfProxy: '',
+        hfEndpoint: 'https://hf-mirror.com',
+      },
+    }
+    const merged = withSavedConfig(hostConfig)
+    assert.equal(merged.asr.command, '/opt/asr/python3', 'the empty schema default erased the saved command')
+    assert.deepEqual(merged.asr.args, ['bin/asr-bridge.py'])
+    assert.deepEqual(merged.asr.env, { DSH_WEIXIN_ASR_LANGUAGE: 'zh' })
+    // Fields the composition really carries still win over the saved section.
+    assert.equal(merged.asr.hfEndpoint, 'https://hf-mirror.com')
+  })
+})
+
+test('the saved settings page outranks the composition for asr too', () => {  withStateRoot(() => {
+    // `withSavedConfig` cannot tell a schema default from a value the operator
+    // wrote in the plugin YAML — both arrive as plain values — so the file the
+    // settings card writes is treated as the newer statement, and only its own
+    // empty form falls through to the composition.
+    fs.writeFileSync(configFile(), JSON.stringify({ asr: { command: '/saved/python3', timeoutMs: 45000, enabled: true } }))
+    const merged = withSavedConfig({
+      asr: { command: '/composed/python3', timeoutMs: 5000, model: 'mlx-community/whisper-small-mlx' },
+    })
+    assert.equal(merged.asr.command, '/saved/python3', "the saved file is the operator's newer statement")
+    assert.equal(merged.asr.timeoutMs, 45000)
+    assert.equal(merged.asr.enabled, true)
+    // A saved field that is empty falls through, so a composition value survives it.
+    assert.equal(merged.asr.model, 'mlx-community/whisper-small-mlx')
+  })
+})
+
+test('an operator turning asr off is not mistaken for a missing field', () => {  withStateRoot(() => {
+    // `false` and `0` are real values and must survive; only a schema's own
+    // empty form ('', [], {}) is treated as "not set here".
+    fs.writeFileSync(configFile(), JSON.stringify({ asr: { enabled: false, command: '/opt/asr/python3', timeoutMs: 0 } }))
+    const merged = withSavedConfig({
+      asr: { enabled: true, command: '', args: [], timeoutMs: 60000, env: {} },
+    })
+    assert.equal(merged.asr.enabled, false, 'a saved false was treated as empty and replaced by the schema default')
+    assert.equal(merged.asr.command, '/opt/asr/python3')
+    assert.equal(merged.asr.timeoutMs, 0)
+  })
+})
+
 test('a missing or malformed settings file costs preferences, never the plugin', () => {
   withStateRoot(() => {
     // Missing file.

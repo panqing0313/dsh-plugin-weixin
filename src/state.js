@@ -176,16 +176,37 @@ export function withSavedConfig(config) {
   ) {
     merged.allowedSenders = saved.allowedSenders
   }
+  // `asr` needs the same protection, one level deeper. Its schema defaults are
+  // `command: ''`, `args: []`, `env: {}`, `model: ''` — so a host that passes
+  // the schema-instantiated config (which is every host: the loader validates
+  // the composition through schemastery before `apply` sees it) arrives with an
+  // `asr` object whose `command` is the empty string. Spread-merging that over
+  // the saved section erased the operator's real command and left the bridge
+  // undefined while `config.json` still showed it — the "voice notes arrive but
+  // say `no ASR bridge is configured`" symptom (observed 2026-10-16).
+  //
+  // The rule is per field and deliberately conservative: a saved value always
+  // outranks the composition UNLESS the saved value is itself the empty form.
+  // `withSavedConfig` cannot tell a schema default from a value the operator
+  // wrote in the YAML — both arrive as plain values on `config` — so the only
+  // safe reading is "the settings page is the newer, more specific statement".
+  // That is also how the top-level merge already behaves for every key the
+  // composition omits. `false` and `0` are real values and are never treated as
+  // empty, so an operator who switched transcription off keeps it off.
   const savedAsr = saved.asr
-  if (
-    savedAsr !== null &&
-    typeof savedAsr === 'object' &&
-    !Array.isArray(savedAsr) &&
-    config?.asr !== null &&
-    typeof config?.asr === 'object' &&
-    !Array.isArray(config.asr)
-  ) {
-    merged.asr = { ...savedAsr, ...config.asr }
+  const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+  const isEmptyDefault = (value) =>
+    value === undefined ||
+    value === '' ||
+    (Array.isArray(value) && value.length === 0) ||
+    (isPlainObject(value) && Object.keys(value).length === 0)
+
+  if (isPlainObject(savedAsr) && isPlainObject(config?.asr)) {
+    const asr = { ...config.asr }
+    for (const [key, savedValue] of Object.entries(savedAsr)) {
+      if (!isEmptyDefault(savedValue)) asr[key] = savedValue
+    }
+    merged.asr = asr
   }
   return merged
 }
