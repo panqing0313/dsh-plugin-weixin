@@ -926,3 +926,59 @@ children: showStatus
 - 用**部署副本**跑一遍真实注册：3 个座位，行标记座位 `dsh-plugin-weixin-row-mark` order=20；
   拿真实会话 id 逐条调用组件——`weixin-o9cq804qN9Kjha-YsRWQwG8hWo3I-im-wechat` 与其
   `--mvag9l5s0vuey9` 那条**有标记**，DSH 自己的 `session-ddac398a-...` **无标记**。
+
+## Windows 扫码不显示二维码：编码器依赖了机器上恰好存在的东西
+
+**现象**（用户报告 + 截图）：Windows 上装好插件、点「扫码登录微信」后，卡片中间是一个**破图
+图标**（浏览器的 broken-image 占位），下面「在浏览器打开」「复制链接」两个按钮却是好的。
+
+**为什么是破图而不是报错**：`src/client.js` 的渲染是一个三元链——
+`qrDataUrl ? <img src={qrDataUrl}> : qrUrl ? <img src={qrUrl}> : 提示"二维码加载中"`。
+`qrUrl` 是 iLink 返回的**登录链接**（`https://liteapp.weixin.qq.com/q/...`），不是图片。
+`qrDataUrl` 为 `undefined` 时，第二个分支就把这个链接塞进 `<img src>`，于是浏览器画一个破图。
+两个按钮正常，正好说明链接本身是好的——坏的只有「把链接当图片」这一步。
+
+**为什么 `qrDataUrl` 是 undefined**：`src/qr-png.js` 的 `writeQrPng` 依次尝试两条外部路线——
+① `import('qrcode')`（npm 包）；② `python3` / `python` / DSH 自带 python 的 `qrcode` 模块。
+两条在 Windows 上都不成立：
+- `qrcode` **从来不是本包的依赖**（`dependencies` 只有 typert-protocol / schemastery /
+  qrcode-terminal；`qrcode-terminal` 只能画半块字符，不能出图），所以 ① 必然 `ERR_MODULE_NOT_FOUND`；
+- Windows 上没有 `python3`/`python` 在 PATH 上，而自带 python 的路径按 POSIX 布局拼
+  （`bin/python`），Windows 上若没有对应 runtime 目录同样落空。
+
+**为什么本机测试全绿却漏了**：开发机 macOS 上 `~/miniconda3/bin/python3` 在 PATH 里，且
+DSH 自带 python 恰好装了 `qrcode` wheel，于是 ② 成功。而当时的测试写成了：
+
+```js
+if (url === undefined) { assert.ok(true); return }   // ← 静默通过
+```
+
+「这台机器没有编码器」被当成合法结果，所以**恰好覆盖了失败的那条路**——套件在 Windows 坏掉
+的同时保持全绿。
+
+**修法（去掉整类环境依赖）**：不再依赖任何外部工具。
+- 二维码矩阵取自 `qrcode-terminal` **自带的**编码器（`vendor/QRCode`）：它本来就是声明的依赖，
+  安装脚本也已经把它拷进 profile，所以这条路在每台机器上都在。用 `createRequire` 从
+  `require.resolve('qrcode-terminal')` 出发解析，保证在部署后（本模块与依赖不在同一棵树）也能找到。
+- PNG 由新增的 `src/png.js` 手工编码，只用 `node:zlib`：1 位灰度（颜色类型 0）、每行 filter
+  None、单个 IDAT 用 `deflateSync`、CRC 用 `zlib.crc32`（Node ≥ 20.15，本包要求 ≥ 22.13）。
+  二维码只有两色，所以 1 位灰度比真彩小 4 倍；高熵图形下 filter None 也是最小输出。
+- 旧的 `qrcode` / python 两条路保留为兜底，但**不再是唯一路径**。
+
+**正确性是怎么验的**（不是"看起来像二维码"）：
+- 自写解码器逐块校验每个 chunk 的 CRC、filter 字节、位深/颜色类型，并把像素和原矩阵**逐模块**
+  比对（含 quiet zone 必须为白）；极性注入（黑↔白反转）会让 3 条测试立刻红。
+- 矩阵正确性对照：Python `qrcode`（纠错等级 L）逐 mask 比对，**mask 7 时 1089 个模块完全一致**
+  （初次比对报 422 个差异，是因为默认用了 mask 2；mask 是合法可选的，不是缺陷）。
+- **真机扫码**：`zbarimg` 把我生成的 PNG 读回成
+  `QR-Code:https://liteapp.weixin.qq.com/q/verify999?qrcode=cafebabe&bot_type=3`。
+- **模拟 Windows 条件 A/B**（`env -i PATH=/usr/bin:/bin HOME=<clean>`，无 python、无自带 python）：
+  旧代码返回 `undefined`（即破图），新代码返回 662 字符的 PNG data URL。
+- 客户端那一步也钉住了：新增测试断言「`<img>` 的 src 必须是 `data:image/*`，绝不能是登录链接」，
+  并把旧的「链接塞进 img」注入回去确认只有这一条测试变红。
+
+**顺带修掉的测试缺陷**：`test/client-remote.test.js` 里 `if (url === undefined) assert.ok(true)`
+的静默分支已删除，改为硬断言——正是它让 Windows 的失败在套件里隐形。
+
+**测试**：新增 `test/qr-png.test.js`（6 条）；`test/client-login-poll.test.js` 加 1 条破图回归。
+全量 264 pass / 0 fail。

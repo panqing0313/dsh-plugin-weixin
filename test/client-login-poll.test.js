@@ -446,3 +446,58 @@ test('a transient poll failure keeps the loop alive', async () => {
   assert.equal(host.calls.poll.length, 2, 'the loop must continue past a transient error')
   assert.equal(card.timers.length, 1, 'a transient error must schedule the next poll')
 })
+
+test('a missing QR image is explained instead of rendered as a broken image', async () => {
+  // The Windows bug, and the reason it looked like a torn-page glyph: the host
+  // returned `qrDataUrl: undefined` (no encoder was reachable there) while
+  // `qrcodeUrl` was a real LOGIN LINK. The card put that link into an <img src>,
+  // so the browser drew its broken-image placeholder in the middle of the card
+  // while the "open in browser" button underneath worked fine — which reads as
+  // "the QR is broken" rather than "this machine cannot draw a QR".
+  //
+  // A link is never an image, so the only correct outcomes are: an <img> whose
+  // src is a data URL, or no <img> at all plus an explanation. This asserts
+  // both halves, because a future fallback that puts the link back in <img>
+  // would restore the exact symptom.
+  const host = fakeHost()
+  const card = await mountCard(host)
+
+  await card.click('扫码登录微信')
+  await card.pump(1)
+
+  const tree = card.render()
+  const images = collect(tree, (node) => node.type === 'img')
+  for (const img of images) {
+    assert.match(
+      String(img.props.src),
+      /^data:image\//,
+      `an <img> must carry image bytes, never the login link (saw ${img.props.src})`,
+    )
+  }
+  // With no image the card has to say what to do; the link buttons stay usable.
+  assert.ok(
+    !JSON.stringify(tree).includes('lt;/'),
+    'sanity: the tree is JSON-serialisable for this assertion',
+  )
+  const text = JSON.stringify(tree)
+  assert.ok(
+    !text.includes('"src":"https://liteapp.weixin.qq.com'),
+    'the login link must not be used as an img src',
+  )
+  assert.ok(
+    text.includes('二维码图片不可用') || images.length > 0,
+    'either a real image is shown, or the card explains that no image is available',
+  )
+})
+
+/** Depth-first collection of nodes matching `predicate`. */
+function collect(node, predicate, into = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return into
+  if (Array.isArray(node)) {
+    for (const child of node) collect(child, predicate, into)
+    return into
+  }
+  if (predicate(node)) into.push(node)
+  for (const child of node.children ?? []) collect(child, predicate, into)
+  return into
+}

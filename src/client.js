@@ -776,10 +776,14 @@ window.__ModuleLoader__.load({
 								},
 								qrDataUrl
 									? createElement("img", { src: qrDataUrl, alt: "QR", style: { width: 200, height: 200, display: "block" } })
-									: qrUrl
-										? createElement("img", { src: qrUrl, alt: "QR", style: { width: 200, height: 200, display: "block" } })
-										: createElement("div", { style: { width: 200, height: 200, display: "grid", placeItems: "center", color: C.labelTertiary } },
-												t("Loading QR code…", "二维码加载中…"))),
+									// `qrUrl` is a LOGIN LINK (https://liteapp.weixin.qq.com/q/…),
+									// never an image: putting it in an <img src> renders the
+									// browser's broken-image glyph, which is what a Windows user
+									// saw instead of a QR code. When there is no image, say so
+									// and point at the buttons below rather than showing a
+									// torn-page icon.
+									: createElement("div", { style: { width: 200, height: 200, display: "grid", placeItems: "center", textAlign: "center", padding: 12, color: C.labelTertiary, fontSize: 12, lineHeight: 1.6, boxSizing: "border-box" } },
+											t("No QR image. Open the link below to scan it.", "二维码图片不可用，请点下面的「在浏览器打开」扫码"))),
 							createElement("div", { style: hintStyle }, t("Scan with WeChat on your phone", "用手机微信扫码登录")),
 							qrUrl
 								? createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" } },

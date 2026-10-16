@@ -7,15 +7,19 @@
  * terminal that does not preserve the block glyphs. A PNG is scannable
  * everywhere, so `bin/login.js` writes one alongside the terminal render.
  *
- * There is no dependency-free QR encoder here on purpose: this is a one-shot
- * interactive command, so any available encoder is used and a failure is
- * reported as a non-fatal note (the printed URL remains a usable fallback).
+ * The encoder is our own (`src/png.js` plus the matrix out of the
+ * `qrcode-terminal` package that is already a dependency), because both
+ * external routes are unavailable on a stock machine: `qrcode` is not a
+ * dependency, and Windows has no `python3`/`python` on PATH. Those routes stay
+ * as fallbacks for environments that do have them.
  * @module dsh-weixin/qr-png
  */
+import { createRequire } from 'node:module'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { encodePng } from './png.js'
 
 /**
  * @param {string} text  URL encoded in the QR code.
@@ -26,14 +30,58 @@ import path from 'node:path'
 export async function writeQrPng(text, outFile) {
   fs.mkdirSync(path.dirname(outFile), { recursive: true })
 
-  // 1. A real npm `qrcode` package, when one is resolvable in this environment.
+  // 1. Our own encoder, fed by the QR matrix from `qrcode-terminal` — a real
+  //    dependency, so this works on every platform with no external tool.
+  if (writeWithOwnEncoder(text, outFile)) return outFile
+
+  // 2. A real npm `qrcode` package, when one is resolvable in this environment.
   if (await writeWithNodeQrcode(text, outFile)) return outFile
 
-  // 2. Python's `qrcode` (Pillow-backed), which is commonly present on macOS
+  // 3. Python's `qrcode` (Pillow-backed), which is commonly present on macOS
   //    and is what the bundled DSH python runtime can install.
   if (await writeWithPythonQrcode(text, outFile)) return outFile
 
   return undefined
+}
+
+/**
+ * Encode the QR with our own PNG writer, using the encoder vendored inside
+ * `qrcode-terminal` for the module matrix.
+ *
+ * `qrcode-terminal` is a declared dependency and the installer already copies
+ * it into the profile, so this path is the only one that is guaranteed to be
+ * present. Its public API only prints half-block characters, but it ships a
+ * complete `QRCode` implementation under `vendor/QRCode` whose `modules` array
+ * is the matrix we need.
+ *
+ * Resolved through `createRequire` from the installed package entry, so the
+ * vendored file is found relative to `qrcode-terminal` itself rather than to
+ * this module (which lives in a different tree once deployed).
+ *
+ * @returns {boolean} whether a PNG was written.
+ */
+function writeWithOwnEncoder(text, outFile) {
+  try {
+    const require = createRequire(import.meta.url)
+    const entry = require.resolve('qrcode-terminal')
+    const fromPackage = createRequire(entry)
+    const QRCode = fromPackage('./../vendor/QRCode')
+    const qrcode = new QRCode(-1, 1 /* error correction level L */)
+    qrcode.addData(text)
+    qrcode.make()
+    const modules = qrcode.getModuleCount()
+    const matrix = []
+    for (let row = 0; row < modules; row += 1) {
+      const cells = []
+      for (let col = 0; col < modules; col += 1) cells.push(qrcode.modules[row][col] === true)
+      matrix.push(cells)
+    }
+    // A quiet zone of 4 modules is part of the spec; without it scanners fail.
+    fs.writeFileSync(outFile, encodePng(matrix, { scale: 12, border: 4 }))
+    return fs.existsSync(outFile)
+  } catch {
+    return false
+  }
 }
 
 async function writeWithNodeQrcode(text, outFile) {

@@ -574,12 +574,12 @@ test('a descriptor table that repeats a wire field is rejected, as the runtime d
 
 test('qrDataUrl renders a scannable PNG, and the link stays the fallback', async () => {
   const url = await qrDataUrl('https://liteapp.weixin.qq.com/q/abc?qrcode=deadbeef&bot_type=3')
-  if (url === undefined) {
-    // No encoder on this machine is a supported outcome: the UI then shows the
-    // clickable link instead of an image, which is why the field is optional.
-    assert.ok(true)
-    return
-  }
+  // `undefined` used to be an accepted outcome here ("no encoder on this
+  // machine"), which is exactly how a broken-image icon on Windows shipped with
+  // a green suite: this assertion returned true and the next three never ran.
+  // The encoder no longer touches anything outside node:zlib and a declared
+  // dependency, so a real image is required on every platform.
+  assert.notEqual(url, undefined, 'the encoder must not depend on the machine having python or qrcode')
   assert.ok(url.startsWith('data:image/png;base64,'), 'must be a PNG data URL')
   const bytes = Buffer.from(url.slice('data:image/png;base64,'.length), 'base64')
   // PNG magic number, so the <img> actually decodes rather than showing a
