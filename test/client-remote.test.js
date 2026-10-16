@@ -494,9 +494,43 @@ test('every state the card renders matches what the host actually reports', () =
   // parsed from the CLI's own tqdm output. The original guard banned a progress
   // figure outright because the host reported none; the risk it protected
   // against is unchanged — rendering a number nobody measured.
-  const hostReads = new Set([...host.matchAll(/rec\.(\w+)\s*=/g)].map((m) => m[1]))
+  //
+  // `hostReads` used to be scraped with /rec\.(\w+)\s*=/ , which matched NOTHING
+  // in this file -- the host builds its records as object literals passed to
+  // `this.downloads.set`. So the allowlist below compared every rendered field
+  // against an empty set, and any field not named in `synthetic` was skipped
+  // without being checked at all. That is how `dlStatus.files` came to be read
+  // as an object while the host was sending a string, rendering a literal
+  // "undefined/undefined" in the card. Scrape the object literals instead, and
+  // require every rendered field to be one of them.
+  const hostFields = new Set()
+  for (const call of host.matchAll(/this\.downloads\.set\(repoId,\s*\{([\s\S]*?)\n\s*\}\)/g)) {
+    // `[^}]*` is wrong here: these records contain template literals like
+    // `${files.length}/...`, whose closing brace would end the match early and
+    // hide every field after it. Line-anchored matching reads the whole literal.
+    for (const key of call[1].matchAll(/^\s*(\w+):/gm)) hostFields.add(key[1])
+  }
+  assert.ok(hostFields.size > 0, 'expected the host to report download fields')
   const rendered = [...client.matchAll(/dlStatus\.(\w+)/g)].map((m) => m[1])
   assert.ok(rendered.length > 0, 'expected the card to render download fields')
+  for (const field of rendered) {
+    assert.ok(
+      hostFields.has(field),
+      `the card renders dlStatus.${field}, which the host never reports (host: ${[...hostFields].join(', ')})`,
+    )
+  }
+  // And the shape of a field must agree too, not just its name: `files` is a
+  // "done/total" string, and reading `.done`/`.total` off it yields the two
+  // "undefined"s this test exists to prevent.
+  assert.match(
+    client,
+    /typeof dlStatus\.files === "string"/,
+    'dlStatus.files must be read as the string the host sends',
+  )
+  assert.ok(
+    !/dlStatus\.files\.\w/.test(client),
+    'dlStatus.files must not be read as an object',
+  )
   const synthetic = new Set(['progress', 'eta', 'speed', 'rate', 'bytesPerSecond'])
   for (const field of rendered) {
     if (!synthetic.has(field)) continue

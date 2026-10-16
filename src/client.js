@@ -1705,9 +1705,13 @@ window.__ModuleLoader__.load({
 										typeof dlStatus.percent === "number"
 											? t(`Downloading… ${dlStatus.percent}%`, `下载中… ${dlStatus.percent}%`)
 											: t("Downloading…", "下载中…")),
-									dlStatus.files
-										? createElement("span", { style: captionStyle },
-												`${dlStatus.files.done}/${dlStatus.files.total}`)
+									// The host reports this as a ready-made `done/total`
+									// string. It used to be read as an object here, so
+									// the card rendered a literal "undefined/undefined"
+									// next to a perfectly good percentage — the shape
+									// was never agreed, and nothing checked.
+									typeof dlStatus.files === "string" && dlStatus.files
+										? createElement("span", { style: captionStyle }, dlStatus.files)
 										: null),
 								typeof dlStatus.percent === "number"
 									? createElement("div", { style: progressTrackStyle },
@@ -1722,7 +1726,16 @@ window.__ModuleLoader__.load({
 					dlStatus.status === "done"
 						? createElement("div", { style: { display: "flex", alignItems: "center", gap: 9 } },
 								createElement("span", { style: dotStyle("ok") }),
-								createElement("span", { style: hintStyle }, t("Download complete", "下载完成")))
+								createElement("span", { style: hintStyle }, t("Download complete", "下载完成")),
+								// The host dates the run so the card can say how long it
+								// took without inventing a rate from a percentage it
+								// cannot place in time; it was measured and then never
+								// shown, which is a report the operator cannot use to
+								// tell a slow mirror from a stuck one.
+								typeof dlStatus.elapsedMs === "number"
+									? createElement("span", { style: captionStyle },
+											t(`${Math.round(dlStatus.elapsedMs / 1000)}s`, `${Math.round(dlStatus.elapsedMs / 1000)} 秒`))
+									: null)
 						: null,
 					dlStatus.status === "failed"
 						? createElement("div", { style: noticeStyle },
