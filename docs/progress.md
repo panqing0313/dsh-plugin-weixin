@@ -794,3 +794,63 @@ agent 在真实场景里写的恰恰是相对路径，于是这个测试从一�
 `vendor/openclaw-weixin/api/types.js` 里 `MessageItemType` 与另一套枚举都叫 `IMAGE`，但一个是
 `IMAGE: 1`、一个是 `IMAGE: 2`。出站图片的 item 是 `{type: 2, image_item: {…}}`，出站文件才是
 `{type: 3, file_item: {…}}`。断言时用 **item 的键名**（`image_item` / `file_item`）比用数字可靠。
+
+## 2026-10-16 — 出站附件都能发哪些：实测与一个 URL 缺陷
+
+用户收到图片后问「我还能收到其他类型的附件吗」。答案不能靠读路由代码给，于是真机试了一遍。
+
+### 三类都通（真服务端）
+
+`sendWeixinMediaFile`（`vendor/openclaw-weixin/messaging/send-media.js`）按 MIME 三分支，
+但底下的 `uploadMediaToCdn` 是**同一条**，只是 `media_type` 不同：
+
+| MIME | 上传函数 | 发送函数 | 实测 |
+| --- | --- | --- | --- |
+| `image/*` | `uploadFileToWeixin`（IMAGE） | `sendImageMessageWeixin` | ✅（desktop2.png 2.4MB） |
+| `video/*` | `uploadVideoToWeixin`（VIDEO） | `sendVideoMessageWeixin` | ✅（ffmpeg 真实 mp4） |
+| 其他 | `uploadFileAttachmentToWeixin`（FILE） | `sendFileMessageWeixin` | ✅（txt / pdf） |
+
+**扩展名陷阱**：路由按 **MIME** 不按扩展名，而 `getMimeFromFilename` 只认一小撮扩展名。
+`.svg` `.heic` `.tif` `.avif` `.m4v` `.3gp` `.flv` `.wmv` 都被判成 `application/octet-stream`，
+于是**降级成 file 附件**发出——能到，但不是原生的图片/视频气泡。要原生效果就用
+`.png/.jpg/.jpeg/.gif/.webp/.bmp` 与 `.mp4/.mov/.avi/.mkv/.webm`。
+
+出站上限 `DEFAULT_MAX_MEDIA_BYTES = 100MB`（`config.maxMediaBytes` 可调），超了直接拒绝并说明。
+
+### 发现并修掉：URL 被当成不存在的本地文件
+
+`detectMediaReferences` 的 `MARKDOWN_IMAGE_RE` 不看 scheme，于是回复里写
+`![示意图](https://example.com/a.png)`（引用网络图，本来就不该上传）会被当成候选路径 →
+解析器 `stat` 失败 → 用户在一条好好的回复后面收到
+`（附件发送失败：https://example.com/a.png — the file does not exist）`。
+**没人犯的错，却报了一个错**。
+
+修法：`push()` 里丢弃除 `file:` 以外的 scheme。两个必须保住的边界：
+
+- `file://` 是本地路径，保留；
+- **Windows 盘符不是 scheme**。第一版写成「带冒号即 URL」，把 `C:\x\y.png` 一起丢了——
+  靠 `(?![A-Za-z]:[\\/])` 的负向断言修正。这条是自查出来的，值得记一笔。
+
+### 还不能发的
+
+`silk` 是**入站**语音格式；出站没有语音分支，`.mp3/.wav/.m4a/.silk` 一律按 file 附件发，
+不会变成微信语音气泡。服务端对 BOT 的 voice_item 只接受不投递（此前已实测），所以这不是遗漏。
+
+### 引用怎么写才会被识别
+
+只有 **markdown 图片语法**（含 `file://`、`~`、绝对路径、相对路径）与
+**单独成行的绝对/`~`/盘符裸路径**会被识别。这些**不会**：
+
+- `[说明](shot.png)` —— 普通链接不识别；
+- `shot.png` 单独一行或 bullet —— 裸相对路径刻意不认（对插件有歧义，见 `docs/DESIGN.md`）；
+- 行内代码 / 围栏代码块 —— 那是在**展示**语法，不是引用；
+- `![](my shot.png)` —— **路径带空格识别不了**（正则用 `\s` 截断）。
+
+### 一次自己造成的服务端节流（值得记）
+
+为了定位失败原因，几分钟内连打了 **22 次上传**。随后连**纯文本**都发不出去：
+`sendMessage ret=-2 errmsg=prepare failed`，而 `getConfig` 仍 `ret=0`（凭证有效）。
+即账号级发送节流，与早先「约 20 条/几分钟触发 ≥30min 封锁」的记录一致。
+
+教训：**验证要有节制**，失败重试会叠加热度；诊断一旦确认是服务端拦截，就该停下等，
+而不是换文件、换大小继续试——那样既拿不到结论，又把账号推得更深。

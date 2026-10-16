@@ -274,6 +274,33 @@ test('detectMediaReferences finds markdown images and path-only lines', async ()
   assert.deepEqual(detectMediaReferences(undefined), [])
 })
 
+test('a URL in an image reference is not treated as a local file', async () => {
+  // A reply that embeds a remote image is not asking us to upload anything.
+  // Detected anyway, the URL reaches the resolver, fails to `stat`, and the
+  // user gets "附件发送失败 … the file does not exist" stapled onto a good reply.
+  const { detectMediaReferences, splitOutboundMedia } = await loadOutbound()
+  for (const url of [
+    'https://example.com/a.png',
+    'http://example.com/a.png',
+    'HTTPS://EXAMPLE.COM/A.PNG',
+    'ftp://example.com/a.png',
+    'data:image/png;base64,AAAA',
+  ]) {
+    assert.deepEqual(detectMediaReferences(`![x](${url})`), [], `expected ${url} to be ignored`)
+    assert.equal(splitOutboundMedia(`before ![x](${url}) after`).media.length, 0)
+  }
+
+  // `file:` IS a local path, and a Windows drive letter is not a scheme — the
+  // naive "anything with a colon is a URL" rule silently dropped `C:\x\y.png`.
+  assert.equal(detectMediaReferences('![x](file:///tmp/x.png)').length, 1)
+  assert.equal(detectMediaReferences(String.raw`![x](C:\Users\me\x.png)`).length, 1)
+  assert.equal(detectMediaReferences('![x](C:/Users/me/x.png)').length, 1)
+
+  // A remote URL must leave the reply text untouched, not be cut out of it.
+  const split = splitOutboundMedia('看图：![x](https://example.com/a.png) 就这样')
+  assert.equal(split.text, '看图：![x](https://example.com/a.png) 就这样')
+})
+
 test('deliverOutboundMedia sends only allowed files and strips them from the text', async () => {
   const root = tempDir('deliver')
   const outside = tempDir('deliver-outside')

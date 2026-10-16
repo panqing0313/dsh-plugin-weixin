@@ -450,6 +450,13 @@ export function detectMediaReferences(text) {
   const push = (raw, target, alt, index) => {
     const value = String(target).trim()
     if (value === '' || seen.has(value)) return
+    // A URL is not a local file. Left in, `https://host/a.png` reaches the
+    // resolver, fails to `stat`, and the user gets "附件发送失败 … the file does
+    // not exist" stapled onto a perfectly good reply — a note about a mistake
+    // nobody made. Only `file:` is deliberately kept: that IS a local path.
+    // A single-letter scheme is a Windows drive (`C:\\x\\y.png`), not a URL, so it
+    // must survive; every longer scheme is a URL and must not.
+    if (/^(?!file:)(?![A-Za-z]:[\\/])[a-z][a-z0-9+.-]*:/i.test(value)) return
     seen.add(value)
     found.push({ path: value, ...(alt === undefined ? {} : { alt }), raw, index })
   }
