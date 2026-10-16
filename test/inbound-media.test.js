@@ -16,7 +16,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { encryptAesEcb } from '../vendor/openclaw-weixin/cdn/aes-ecb.js'
+import { decryptAesEcb, encryptAesEcb } from '../vendor/openclaw-weixin/cdn/aes-ecb.js'
 import {
   DEFAULT_CDN_BASE_URL,
   DEFAULT_MAX_INBOUND_MEDIA_BYTES,
@@ -415,15 +415,34 @@ test('a descriptor with no CDN reference is refused with a clear reason', async 
 })
 
 test('a wrong key is reported as a decryption failure rather than saving garbage', async () => {
-  const key = crypto.randomBytes(16)
-  const server = await serveOnce({ body: encryptAesEcb(Buffer.alloc(64, 3), key) })
+  // The wrong key must be one that PROVABLY fails. AES-ECB has no
+  // authentication, so a wrong key usually throws only because the PKCS#7
+  // padding happens not to validate -- and that is a random ~1-in-667 event.
+  // Picking `randomBytes(16)` therefore made this test flaky: it passed almost
+  // always and failed rarely, with no change to the code under test. Search for
+  // a key that fails against this exact ciphertext instead, so the assertion
+  // tests the error path rather than the odds.
+  const rightKey = crypto.randomBytes(16)
+  const body = encryptAesEcb(Buffer.alloc(64, 3), rightKey)
+  /** @type {Buffer} */
+  let wrongKey
+  for (;;) {
+    const candidate = crypto.randomBytes(16)
+    try {
+      decryptAesEcb(body, candidate)
+    } catch {
+      wrongKey = candidate
+      break
+    }
+  }
+  const server = await serveOnce({ body })
   const root = tempDir('badkey')
   try {
     const result = await downloadInboundMedia({
       media: {
         kind: 'file',
         encryptQueryParam: 'p',
-        aesKey: crypto.randomBytes(16).toString('base64'),
+        aesKey: wrongKey.toString('base64'),
         fileName: 'a.bin',
       },
       cdnBaseUrl: server.baseUrl,

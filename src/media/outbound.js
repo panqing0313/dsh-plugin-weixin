@@ -56,8 +56,8 @@ export class OutboundMediaError extends Error {
  *
  * `cwd` (the DSH session working directory) and `~/.dsh/weixin` (the plugin's
  * own state tree) are the only two places a Weixin conversation's files can be
- * produced by design — see docs/DESIGN.md ("Media"), which pins the outbound
- * directory scope.
+ * produced, and the outbound directory scope is pinned to exactly these — see
+ * `docs/security.md`, "出站附件" for the reasoning.
  *
  * @param {{ cwd?: string, stateDir?: string, allowedDirs?: string[] }} [params]
  * @returns {string[]} absolute, deduplicated directory paths
@@ -412,24 +412,65 @@ export function mediaSendOptions(params) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Extensions that are *attachments by nature* — a document, archive or media
+ * container the user is meant to receive, never something that renders inline.
+ *
+ * This set is what makes a markdown LINK an upload. An image in a link
+ * (`[shot](a.png)`) is plausibly the agent pointing at where a picture lives,
+ * and turning every link into an upload would send source trees to Tencent. But
+ * `[报告](报告.pdf)` cannot mean anything except "here is the file" — nothing
+ * renders a PDF inline in a WeChat reply, and this is exactly the shape agents
+ * write for documents (measured: every real .pdf/.docx reply in this project's
+ * own transcripts used link syntax with a relative path, and none arrived).
+ *
+ * Anything not listed here keeps the stricter rule: only image syntax.
+ */
+const ATTACHMENT_EXT = 'pdf|docx?|xlsx?|pptx?|csv|zip|tar|gz|tgz|7z|rar|mp3|wav|m4a|ogg|mp4|mov|webm|mkv|avi|silk'
+
+/** Every extension this channel will deliver, image or attachment. */
+const MEDIA_EXT = `png|jpe?g|gif|webp|bmp|${ATTACHMENT_EXT}|txt|md|json|log`
+
+/**
  * Markdown image reference: `![alt](path)`.
  *
- * Only image syntax counts here. A bare `](` is a link, and a link is what an
- * agent writes when it wants to *tell* the user where a file lives — turning
- * every link into an upload would send source trees to Tencent.
+ * Image syntax is accepted for **any** media extension: `![x](a.pdf)` is
+ * unambiguous, because the agent chose the upload-shaped delimiter itself.
+ *
+ * The path may be wrapped in `<...>` — the usual way to write a path containing
+ * spaces — and `<...>` contents are allowed to contain spaces.
  */
-const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g
+const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g
+
+/**
+ * Markdown link reference: `[text](path)`.
+ *
+ * Deliberately narrower than the image form — see {@link ATTACHMENT_EXT} for
+ * why only attachment extensions qualify. `[alt](a.png)` stays a link *about*
+ * an image and is not uploaded.
+ */
+const MARKDOWN_LINK_RE = /(?<!!)\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g
 
 /**
  * An explicit path written on its own line, or in a list/bullet.
  *
- * Anchored on a path-shaped token so prose is never mistaken for a path:
- * absolute, home-relative, or Windows-shaped, and required to look like a file
- * (has a dot extension). A relative path the agent wrote is matched only in the
- * absolute/`~` forms below, because a bare `report.pdf` is cwd-relative for the
- * agent but ambiguous for us — see docs/DESIGN.md.
+ * Absolute, home-relative and Windows-shaped paths are accepted for any media
+ * extension. A *relative* path is accepted too, but only when it carries an
+ * attachment extension (see {@link RELATIVE_SAFE_RE}): `report.pdf` alone on a
+ * line is an instruction to send that document, while `shot.png` alone on a
+ * line is ambiguous — the agent may only be naming a file it discussed. A wrong
+ * guess fails closed: the resolver tries every allowed root and reports why
+ * nothing was sent, and it can never reach outside the configured directories.
+ *
+ * The token may not contain a quote/backtick/angle bracket, so prose is still
+ * never mistaken for a path.
  */
-const BARE_PATH_RE = /^[\s>*\-+]*((?:~\/|\/|[A-Za-z]:[\\/])[^\s`'"<>|]+?\.(png|jpe?g|gif|webp|bmp|mp4|mov|webm|mkv|avi|pdf|docx?|xlsx?|pptx?|txt|csv|zip|tar|gz|md|json|log|mp3|wav|ogg))\s*$/gim
+const BARE_PATH_RE = new RegExp(
+  `^[\\s>\\-+*]*((?:(?:~/|/|[A-Za-z]:[\\\\/])[^\\s\`'"<>|]*?|(?![/~])[^\\s\`'"<>|]*?)\\.(?:${MEDIA_EXT}))\\s*$`,
+  'gim',
+)
+
+/** A relative path is auto-detected only for these extensions. */
+const RELATIVE_SAFE_RE = new RegExp(`\\.(${ATTACHMENT_EXT})$`, 'i')
 
 /** How many files one reply may carry: iLink sends one item per request. */
 export const MAX_MEDIA_PER_REPLY = 5
@@ -468,11 +509,29 @@ export function detectMediaReferences(text) {
   // `raw` spans out of that original.
   const scanText = maskCode(text)
 
+  // Both link forms capture the target twice: group 2 is the `<...>`-wrapped
+  // form (which may contain spaces) and group 3 the bare form (which may not).
+  const target = (match) => match[2] ?? match[3]
+
   for (const match of scanText.matchAll(MARKDOWN_IMAGE_RE)) {
-    push(text.slice(match.index ?? 0, (match.index ?? 0) + match[0].length), match[2], match[1], match.index ?? 0)
+    const value = target(match)
+    if (value === undefined) continue
+    push(text.slice(match.index ?? 0, (match.index ?? 0) + match[0].length), value, match[1], match.index ?? 0)
+  }
+  for (const match of scanText.matchAll(MARKDOWN_LINK_RE)) {
+    const value = target(match)
+    // A link is only a reference when the target is an attachment by nature.
+    if (value === undefined || !RELATIVE_SAFE_RE.test(value)) continue
+    push(text.slice(match.index ?? 0, (match.index ?? 0) + match[0].length), value, match[1], match.index ?? 0)
   }
   for (const match of scanText.matchAll(BARE_PATH_RE)) {
-    push(text.slice(match.index ?? 0, (match.index ?? 0) + match[0].length), match[1], undefined, match.index ?? 0)
+    const value = match[1]
+    // A bare relative path is only a reference for attachment extensions; the
+    // regex admits any extension so it can capture both shapes, so the filter
+    // lives here where the leading shape is still known.
+    const absolute = /^(?:~\/|\/|[A-Za-z]:[\\/])/.test(value)
+    if (!absolute && !RELATIVE_SAFE_RE.test(value)) continue
+    push(text.slice(match.index ?? 0, (match.index ?? 0) + match[0].length), value, undefined, match.index ?? 0)
   }
 
   found.sort((a, b) => a.index - b.index)

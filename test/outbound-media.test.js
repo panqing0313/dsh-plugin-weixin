@@ -701,3 +701,121 @@ test('a relative reference resolves inside whichever allowed root holds it', asy
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+/**
+ * A document reply is written as a markdown LINK with a relative path.
+ *
+ * Measured, not guessed: every real `.pdf`/`.docx` reply in this project's own
+ * DSH session transcripts used exactly this shape, and the plugin delivered
+ * none of them. `[报告](报告.pdf)` was invisible to the detector for two
+ * independent reasons -- the regex required a leading `!`, and the bare-path
+ * rule admitted relative paths only in image syntax -- so the file never
+ * reached the upload path at all.
+ */
+test('a document written as a markdown link with a relative path is delivered', async () => {
+  const { detectMediaReferences } = await loadOutbound()
+  const real = 'PDF 转好了：[OpenWrt-支持设备与搭建指南.pdf](OpenWrt-支持设备与搭建指南.pdf)'
+  assert.deepEqual(detectMediaReferences(real).map((r) => r.path), ['OpenWrt-支持设备与搭建指南.pdf'])
+  assert.equal(detectMediaReferences(real)[0].alt, 'OpenWrt-支持设备与搭建指南.pdf')
+})
+
+test('link syntax is accepted for attachment extensions, in every path shape', async () => {
+  const { detectMediaReferences } = await loadOutbound()
+  for (const [ext, path_] of [
+    ['pdf', '/tmp/a.pdf'],
+    ['docx', '~/报告.docx'],
+    ['doc', 'notes.doc'],
+    ['xlsx', '/tmp/sheet.xlsx'],
+    ['pptx', 'slides.pptx'],
+    ['zip', '/tmp/bundle.zip'],
+    ['mp3', '~/note.mp3'],
+    ['mp4', 'clip.mp4'],
+  ]) {
+    assert.equal(detectMediaReferences(`[说明](${path_})`).length, 1, `${ext} link should be detected: ${path_}`)
+  }
+})
+
+/**
+ * The guard that keeps the widening from becoming a source-tree uploader.
+ *
+ * `[alt](a.png)` is a link *about* an image: the agent is telling the user where
+ * a picture lives, not asking for it to be sent. Only extensions that are
+ * attachments by nature qualify for link syntax.
+ */
+test('a link is not a reference unless the target is an attachment by nature', async () => {
+  const { detectMediaReferences, splitOutboundMedia } = await loadOutbound()
+  for (const text of [
+    '[截图](/tmp/shot.png)',
+    '[图标](icon.jpg)',
+    '[动图](anim.gif)',
+    '[main.ts](src/main.ts)',
+    '[readme](README.md)',
+    '[config](app.json)',
+    '[日志](run.log)',
+    '[说明](notes.txt)',
+  ]) {
+    assert.deepEqual(detectMediaReferences(text), [], `should stay a link, not an upload: ${text}`)
+    assert.equal(splitOutboundMedia(text).media.length, 0, `media should be empty: ${text}`)
+  }
+  // The same path in image syntax IS a reference -- that is the agent choosing
+  // the upload-shaped delimiter itself.
+  assert.equal(detectMediaReferences('![截图](/tmp/shot.png)').length, 1)
+  assert.equal(detectMediaReferences('![说明](/tmp/notes.txt)').length, 1)
+})
+
+test('a bare relative path is accepted only for attachment extensions', async () => {
+  const { detectMediaReferences } = await loadOutbound()
+  // Attachment extension alone on a line: an instruction to send the document.
+  for (const text of ['report.pdf', '- report.pdf', '* 报告.docx', '明细：\n\narchive.zip', 'note.mp3', 'clip.mp4']) {
+    assert.equal(detectMediaReferences(text).length, 1, `should be detected: ${JSON.stringify(text)}`)
+  }
+  // An image alone on a line stays ambiguous: the agent may only be naming it.
+  for (const text of ['shot.png', '- shot.png', 'chart.jpg', 'anim.gif', 'notes.txt', 'app.json']) {
+    assert.deepEqual(detectMediaReferences(text), [], `should stay ambiguous: ${JSON.stringify(text)}`)
+  }
+  // Absolute and `~` forms keep working for every extension.
+  for (const text of ['/tmp/shot.png', '~/shot.png', '/tmp/notes.txt', String.raw`C:\Users\me\a.png`]) {
+    assert.equal(detectMediaReferences(text).length, 1, `absolute path should be detected: ${text}`)
+  }
+})
+
+/**
+ * A path with spaces is written inside `<...>`, which is the standard markdown
+ * way and the only unambiguous one. `![](my shot.png)` stays undetected: the
+ * space is indistinguishable from the delimiter, and guessing wrong would build
+ * a path out of prose.
+ */
+test('a path containing spaces is detected when written in angle brackets', async () => {
+  const { detectMediaReferences } = await loadOutbound()
+  for (const text of [
+    '![图](</tmp/my shot.png>)',
+    '[报告](</tmp/my 报告 v2.pdf>)',
+    '[说明](<report final.docx>)',
+  ]) {
+    assert.equal(detectMediaReferences(text).length, 1, `should be detected: ${text}`)
+  }
+  assert.equal(detectMediaReferences('![图](</tmp/my shot.png>)')[0].path, '/tmp/my shot.png')
+  assert.equal(detectMediaReferences('[报告](</tmp/my 报告 v2.pdf>)')[0].path, '/tmp/my 报告 v2.pdf')
+  // Unquoted spaces remain ambiguous.
+  assert.deepEqual(detectMediaReferences('![图](/tmp/my shot.png)'), [])
+})
+
+test('the widened rules still ignore prose, code and URLs', async () => {
+  const { detectMediaReferences } = await loadOutbound()
+  for (const text of [
+    '看看这个 /tmp/a.pdf 怎么样', // path inside a sentence
+    '文件在 /tmp/a.pdf 里', // ditto, not alone on a line
+    '把 `report.pdf` 发我', // inline code is showing syntax
+    '```\nreport.pdf\n```', // fenced block
+    '[报告](https://example.com/a.pdf)', // a URL is not a local file
+    '[资料](data:application/pdf;base64,AAAA)', // nor is a data: URI
+  ]) {
+    assert.deepEqual(detectMediaReferences(text), [], `should stay undetected: ${JSON.stringify(text)}`)
+  }
+
+  // A link written mid-sentence IS still a reference: `[说明](report.pdf)` is
+  // delimited, so it cannot be an accident the way a bare path in running text
+  // can -- the bare-path rule exists to avoid reading prose as a filename, and
+  // bracket syntax needs no such protection.
+  assert.equal(detectMediaReferences('整理 [说明](report.pdf) 好了').length, 1)
+})
