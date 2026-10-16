@@ -19,6 +19,23 @@ import test from 'node:test'
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 
 /**
+ * Read everything the vendored file logger wrote in this test process.
+ *
+ * `test/isolate-host-state.mjs` points `DSH_WEIXIN_LOG_DIR` at a throwaway
+ * directory per test file, so this reads the isolated log rather than the
+ * operator's real one.
+ */
+function readDurableLog() {
+  const dir = process.env.DSH_WEIXIN_LOG_DIR
+  if (!dir || !fs.existsSync(dir)) return ''
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith('.log'))
+    .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+    .join('\n')
+}
+
+/**
  * Whether the packages that only exist *inside* a DSH host can be resolved.
  *
  * `agent-bridge.js` loads `@deepseek-ai/dsh-llm` lazily to build the user
@@ -784,6 +801,96 @@ test('a reply that references a local file uploads it and sends an IMAGE item', 
     const texts = sent.filter((s) => s.msg?.item_list?.[0]?.type === 1).map((s) => s.msg.item_list[0].text_item.text)
     assert.ok(texts.some((t) => t.includes('报告在这里')), `caption missing; got ${JSON.stringify(texts)}`)
     assert.ok(!texts.some((t) => t.includes(filePath)), `the raw path leaked into the text: ${JSON.stringify(texts)}`)
+  } finally {
+    await new Promise((resolve) => cdn.close(resolve))
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
+test('a reply naming a file RELATIVE to the agent cwd still uploads it', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  // The regression this pins: an agent writes `![shot](desktop.png)` meaning the
+  // file in ITS working directory. Resolving that against the host process cwd
+  // landed outside every allowed directory, so the attachment was refused and
+  // the user simply never received an image — with no error anywhere they could
+  // see. The absolute-path variant above cannot catch this.
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-rel-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  const uploaded = []
+  const cdn = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      uploaded.push({ url: req.url, bytes: Buffer.concat(chunks) })
+      res.writeHead(200, { 'x-encrypted-param': 'DL-PARAM-REL' })
+      res.end('')
+    })
+  })
+  await new Promise((resolve) => cdn.listen(0, '127.0.0.1', resolve))
+  const cdnBaseUrl = `http://127.0.0.1:${cdn.address().port}`
+
+  try {
+    // The agent's own working directory, pinned through config so the test is
+    // deterministic. The file lives directly in it, named the way an agent
+    // names a screenshot.
+    const agentCwd = path.join(stateRoot, 'agent-cwd')
+    fs.mkdirSync(agentCwd, { recursive: true })
+    const payload = Buffer.from('relative-reference payload '.repeat(30), 'utf8')
+    fs.writeFileSync(path.join(agentCwd, 'desktop.png'), payload)
+
+    const { server, baseUrl, sent, uploadUrls } = await startFakeILinkWithUpload([
+      [{ message_id: 3001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-rel', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'screenshot it' } }] }],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({
+      allowedSenders: [ALLOWED],
+      accountId: ACCOUNT_ID,
+      cdnBaseUrl,
+      cwd: agentCwd,
+    })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      // Exactly the shape the agent produced in the field.
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: '成功了\n\n![桌面截图](desktop.png)\n\n内容如下' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    // A `.png` must go out as an IMAGE item — `MessageItemType.IMAGE` is 2 on
+    // the outbound envelope, and the item carries an `image_item` field. (The
+    // absolute-path test above asserts on a FILE item, whose number is 3; the
+    // two enums in api/types.js number these differently, so the item KEY is
+    // the reliable discriminator.)
+    const IMAGE_ITEM = 2
+    const deadline = Date.now() + 10_000
+    while (!sent.some((s) => s.msg?.item_list?.[0]?.type === IMAGE_ITEM) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    assert.equal(uploadUrls.length, 1, `expected one getuploadurl, got ${uploadUrls.length}; warnings: ${warnings.join(' | ')}`)
+    assert.equal(uploaded.length, 1, `expected one CDN POST, got ${uploaded.length}; warnings: ${warnings.join(' | ')}`)
+    const item = sent.find((s) => s.msg?.item_list?.[0]?.type === IMAGE_ITEM)?.msg?.item_list?.[0]?.image_item
+    assert.ok(item, `no IMAGE item was sent; sent=${JSON.stringify(sent.map((s) => Object.keys(s.msg?.item_list?.[0] ?? {})))}; warnings: ${warnings.join(' | ')}`)
+    // An image item carries only `media` (no name/length on the wire), so the
+    // proof the right bytes went is the CDN body plus the download param.
+    assert.deepEqual(Object.keys(item).sort(), ['media', 'mid_size'])
+    assert.equal(uploaded[0].bytes.length % 16, 0, 'ciphertext must be block-aligned')
+    const raw = fs.readFileSync(path.join(agentCwd, 'desktop.png'))
+    assert.equal(uploaded[0].bytes.length, Math.ceil(raw.length / 16) * 16, 'the uploaded ciphertext must match the file size')
+    // The decision is on the durable record, not only on ctx.logger — a refusal
+    // that leaves no trace looks identical to a detector that never matched.
+    const logText = readDurableLog()
+    assert.match(logText, /sent 1 outbound media file\(s\): desktop\.png/)
   } finally {
     await new Promise((resolve) => cdn.close(resolve))
     fs.rmSync(stateRoot, { recursive: true, force: true })

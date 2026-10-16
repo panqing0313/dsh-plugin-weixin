@@ -106,15 +106,76 @@ export function isInside(root, candidate) {
  *    a realpath'd candidate once the root is resolved too.
  *
  * @param {string} filePath
- * @param {string[]} roots
+ * @param {string[]} roots  Also the basis for resolving a relative path: each
+ *   root is tried in order, and a relative reference is taken to be relative to
+ *   the first root it resolves inside.
  * @returns {Promise<{ ok: true, path: string } | { ok: false, reason: string, code: string }>}
  */
 export async function resolveAllowedPath(filePath, roots) {
   if (typeof filePath !== 'string' || filePath.trim() === '') {
     return { ok: false, reason: 'empty path', code: 'invalid-path' }
   }
+  // An agent writes `![shot](desktop.png)` meaning "the file I just made", which
+  // lives in the agent's working directory — one of `roots` — NOT wherever this
+  // host process happens to have been started. Resolving against
+  // `process.cwd()` therefore lands outside every allowed directory and every
+  // relative reference is refused, which is indistinguishable to the user from
+  // the feature not existing at all.
+  //
+  // Trying each root in order (rather than only the first) keeps a deployment
+  // that allows several directories working: the reference resolves inside
+  // whichever one actually holds the file.
+  const isAbsolute = path.isAbsolute(filePath)
+  // The `..`-escape verdict must be read off the reference the agent WROTE.
+  // `path.join(root, 'sub/../../x')` collapses the `..` on the way in, so a
+  // containment check against the joined string can no longer tell a climb from
+  // a path that was simply never inside — and the user gets "outside the
+  // allowed directories" for a mistake that was actually a bad relative path.
+  const escapedWithDotDot = /(^|[/\\])\.\.([/\\]|$)/.test(filePath)
+  const candidates = isAbsolute ? [filePath] : roots.map((root) => path.join(root, filePath))
   // `~` is what an agent writes when it means the home directory.
-  const expanded = filePath.startsWith('~/') ? path.join(os.homedir(), filePath.slice(2)) : filePath
+  const expandedCandidates = candidates.map((candidate) =>
+    candidate.startsWith('~/') ? path.join(os.homedir(), candidate.slice(2)) : candidate,
+  )
+
+  const refusals = []
+  /** A contained candidate whose file is not there; a later root may still have it. */
+  let absent
+  for (const expanded of expandedCandidates) {
+    const attempt = await containPath(expanded, roots)
+    if (attempt.ok && attempt.existed) return attempt
+    // Contained but missing: remember it and keep looking, because the same
+    // relative name may resolve to a real file under a LATER allowed root. The
+    // absent result is still returned if no root has the file, so the caller
+    // refuses it with the accurate "does not exist" rather than a containment
+    // complaint that would be untrue.
+    if (attempt.ok) {
+      absent ??= attempt
+      continue
+    }
+    refusals.push(escapedWithDotDot ? { ...attempt, reason: 'path escapes the allowed directories with ".."' } : attempt)
+  }
+  if (absent !== undefined) return absent
+  // None resolved. Prefer a `..` escape over a plain miss, and a real reason
+  // over a synthetic one, so the note the user reads names the actual mistake.
+  return refusals.find((entry) => entry.reason.includes('..')) ?? refusals[0] ?? {
+    ok: false,
+    reason: 'path is outside the allowed directories',
+    code: 'path-not-allowed',
+  }
+}
+
+/**
+ * Containment test for one already-absolute spelling of a path.
+ *
+ * Split out so a relative reference can be tried against several candidate
+ * bases without repeating the realpath dance for each.
+ *
+ * @param {string} expanded  Absolute, `~` already expanded.
+ * @param {string[]} roots
+ * @returns {Promise<{ ok: true, path: string, existed: boolean } | { ok: false, reason: string, code: string }>}
+ */
+async function containPath(expanded, roots) {
   const absolute = path.resolve(expanded)
   let real = absolute
   let existed = true

@@ -739,3 +739,58 @@ git 只记录「是否可执行」，**不记录 600 还是 644**；`npm pack` �
   日志目录与 state 根目录（原先只有日志）。根因是 bridge 默认 `lines` 落盘、而
   `stateDir()` 在 `DSH_WEIXIN_STATE_DIR` 未设时回退到 `~/.dsh/weixin`——
   `test/busy-turns.test.js` 的 fixture（`room-1` / `first`）就是这样写进了操作者的真文件。
+
+## 2026-10-16 — 收不到出站图片：相对路径被当成越界
+
+用户报告「我收不到出站图片」。出站媒体这条链路早就有、也有测试，所以先看现场而不是读代码。
+
+### 现场
+
+- 操作者日志里 `sent N outbound media` / `refusing media` **一条都没有**，出站决策完全无痕；
+- 真实会话 transcript 里 agent 写的是 `![桌面截图](desktop2.png)` —— **相对路径**；
+- 文件确实在盘上：`~/.dsh/weixin/sessions/desktop2.png`（71KB）与 `desktop2.png`（2.4MB）。
+
+### 根因
+
+`resolveAllowedPath`（`src/media/outbound.js`）用 `path.resolve(filePath)` 解析相对路径，
+基准是**宿主进程的 cwd**；而 agent 的工作目录是 `~/.dsh/weixin/sessions`。两者不同，于是
+
+- 每个相对引用都落在允许目录之外 → `path is outside the allowed directories` → 拒绝；
+- 而 `detectMediaReferences` 明明匹配到了它（我先单独验过：markdown 图片、裸路径单行、
+  bullet 内的裸路径都能匹配，代码块与行内代码里的正确忽略）。
+
+对用户来说，「检测器没匹配」和「匹配了但被拒」看起来完全一样：图片就是不来。
+
+### 三个缺陷
+
+1. **相对路径基准错了**（主因）。修法：相对引用按**允许目录**逐个尝试，落在哪个就取哪个；
+   含 `..` 的越界判定改读**原文引用**，因为 `path.join(root, 'sub/../../x')` 会先把 `..` 折叠掉，
+   之后再判断就永远分不清「爬出去了」和「本来就不在里面」。
+2. **缺失文件会遮蔽后面的真实文件**。第一个根里没有该文件时，旧写法直接返回「不存在的候选」，
+   于是第二个根里真有的那个永远找不到。修法：`existed: false` 的候选记下来接着找，
+   全都没有才把它作为结果返回——这样调用方用准确的「does not exist」拒绝，而不是说谎的越界理由。
+3. **出站决策写进了会丢的日志**。`resolveOutboundReply` 的 warn 只走 `ctx.logger`，
+   而宿主 exporter 会按配置丢级别；这份日志文件里只有 vendor logger 的行。
+   修法：每一次发送/拒绝/异常都同时写 vendor 文件日志（带文件名、字符数、原因）。
+
+### 「测试全绿」曾经完全不能证明这条链路可用
+
+`test/e2e.test.js` 里早就有「a reply that references a local file uploads it and sends an
+IMAGE item」并且一直绿——**因为它用的是绝对路径**（`path.join(stateRoot, 'work', 'report.txt')`）。
+agent 在真实场景里写的恰恰是相对路径，于是这个测试从一开始就绕开了真缺陷。
+
+### 验证
+
+- 全量 **250 pass / 0 fail**；
+- 辨别力：把 `isAbsolute` 改回恒真（旧行为）→ 新增 3 条 `outbound-media` 测试 **3/3 红**，
+  新增的 e2e 也红；单独把「缺失遮蔽」改回去 → 只有「resolves inside whichever allowed root」红；
+- 真实文件、真实服务端：`desktop2.png`（2,413,739 字节）上传成功
+  （`filekey=bcc68285bcd51bd3c555950c5a149ac3 size=2413739`），
+  `sendImageMessageWeixin: success`。此前它 100% 走拒绝分支。
+- 操作者状态与日志无测试污染：`~/.dsh/weixin/sessions.json` 里只有用户自己的会话线。
+
+### 一个容易踩的坑：item 类型两套枚举
+
+`vendor/openclaw-weixin/api/types.js` 里 `MessageItemType` 与另一套枚举都叫 `IMAGE`，但一个是
+`IMAGE: 1`、一个是 `IMAGE: 2`。出站图片的 item 是 `{type: 2, image_item: {…}}`，出站文件才是
+`{type: 3, file_item: {…}}`。断言时用 **item 的键名**（`image_item` / `file_item`）比用数字可靠。

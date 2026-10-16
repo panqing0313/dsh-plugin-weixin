@@ -571,3 +571,106 @@ test('detectMediaReferences still finds an image that only looks like code', asy
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('a relative reference resolves against the allowed directories, not the host cwd', async () => {
+  // The real bug: an agent writing `![shot](desktop.png)` means the file in ITS
+  // working directory — which is one of the allowed dirs — but a `path.resolve`
+  // against `process.cwd()` looks in the host's own directory, lands outside
+  // every allowed root, and every relative reference is refused. The user sees
+  // an attachment that never arrives and no error anywhere.
+  const root = tempDir('relative')
+  const { resolveAllowedPath, deliverOutboundMedia, allowedMediaDirs } = await loadOutbound()
+  try {
+    const cwd = path.join(root, 'sessions')
+    const state = path.join(root, 'state')
+    fs.mkdirSync(cwd, { recursive: true })
+    fs.mkdirSync(state, { recursive: true })
+    const image = path.join(cwd, 'desktop.png')
+    fs.writeFileSync(image, 'x')
+
+    const roots = allowedMediaDirs({ cwd, stateDir: state })
+    assert.deepEqual(await resolveAllowedPath('desktop.png', roots), {
+      ok: true,
+      path: fs.realpathSync(image),
+      existed: true,
+    })
+
+    // In a subdirectory of an allowed root, too.
+    const nested = path.join(cwd, 'crops')
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(nested, 'a.png'), 'x')
+    assert.equal((await resolveAllowedPath('crops/a.png', roots)).ok, true)
+
+    // Delivered end to end: the reply the agent actually writes.
+    const sent = []
+    const result = await deliverOutboundMedia({
+      text: '成功了\n\n![桌面截图](desktop.png)\n\n内容如下',
+      to: CONVERSATION,
+      contextToken: 'ct',
+      allowedDirs: roots,
+      cdnBaseUrl: 'http://cdn.invalid',
+      opts: { baseUrl: 'http://ilink.invalid', token: 't' },
+      send: async (params) => sent.push(params.filePath),
+    })
+    assert.deepEqual(sent, [fs.realpathSync(image)])
+    assert.deepEqual(result.sent, [fs.realpathSync(image)])
+    assert.deepEqual(result.failed, [])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a relative reference cannot escape the allowed directories', async () => {
+  // Resolving against the allowed roots must not become a way out of them.
+  const root = tempDir('relative-escape')
+  const { resolveAllowedPath, allowedMediaDirs } = await loadOutbound()
+  try {
+    const cwd = path.join(root, 'sessions')
+    fs.mkdirSync(cwd, { recursive: true })
+    fs.writeFileSync(path.join(root, 'secret.png'), 'private')
+    const roots = allowedMediaDirs({ cwd, stateDir: path.join(root, 'state') })
+
+    // `..` climbs out of the allowed root and is refused — and the refusal still
+    // names the climb, which the joined spelling would have hidden.
+    for (const escape of ['../secret.png', 'sub/../../secret.png', '..\\secret.png']) {
+      const result = await resolveAllowedPath(escape, roots)
+      assert.equal(result.ok, false, `expected ${escape} to be refused`)
+      assert.match(result.reason, /\.\./, `expected ${escape} to be named a ".." escape`)
+    }
+    // A relative reference to something that simply is not there is NOT a
+    // traversal: containment holds (the path it would occupy is inside an
+    // allowed root), so the resolver reports it allowed-but-absent and the
+    // later `stat` refuses it with the accurate reason. Naming it "outside the
+    // allowed directories" would point at the wrong mistake.
+    const missing = await resolveAllowedPath('nope.png', roots)
+    assert.equal(missing.ok, true)
+    assert.equal(missing.existed, false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a relative reference resolves inside whichever allowed root holds it', async () => {
+  // Several allowed directories is a supported deployment; the reference must
+  // find the right one rather than being pinned to the first.
+  const root = tempDir('relative-multi')
+  const { resolveAllowedPath, allowedMediaDirs } = await loadOutbound()
+  try {
+    const cwd = path.join(root, 'sessions')
+    const state = path.join(root, 'state')
+    fs.mkdirSync(cwd, { recursive: true })
+    fs.mkdirSync(state, { recursive: true })
+    fs.writeFileSync(path.join(state, 'only-here.png'), 'x')
+    fs.writeFileSync(path.join(cwd, 'only-here.png'), 'y')
+
+    const roots = allowedMediaDirs({ cwd, stateDir: state })
+    // Present in both: the first root wins, deterministically.
+    assert.equal((await resolveAllowedPath('only-here.png', roots)).path, fs.realpathSync(path.join(cwd, 'only-here.png')))
+
+    fs.rmSync(path.join(cwd, 'only-here.png'))
+    // Present in only the second: still found.
+    assert.equal((await resolveAllowedPath('only-here.png', roots)).path, fs.realpathSync(path.join(state, 'only-here.png')))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

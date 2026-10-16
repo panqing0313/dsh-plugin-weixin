@@ -685,6 +685,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
             conversationId: message.conversationId,
             contextToken: '',
             warn,
+            fileLog,
           })
           await sendChunked(transport, config, {
             conversationId: message.conversationId,
@@ -711,6 +712,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
         conversationId: message.conversationId,
         contextToken: message.contextToken,
         warn,
+        fileLog,
       })
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
@@ -755,10 +757,12 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
  * @param {string} params.conversationId
  * @param {string} [params.contextToken]
  * @param {(line: string) => void} params.warn
+ * @param {{ info: (line: string) => void }} [params.fileLog]  Durable record.
  * @returns {Promise<string>} text to send, with a failure note when applicable
  */
 async function resolveOutboundReply(params) {
   const text = params.reply ?? ''
+  const fileLog = params.fileLog ?? { info: () => {} }
   if (params.config.mediaEnabled === false) return text
   try {
     const result = await deliverOutboundMedia({
@@ -773,15 +777,28 @@ async function resolveOutboundReply(params) {
         accountId: params.transport.accountId,
       },
       ...(params.config.maxMediaBytes === undefined ? {} : { maxBytes: params.config.maxMediaBytes }),
-      warn: params.warn,
+      // Every delivery decision is recorded durably, not only on the host
+      // logger: `ctx.logger` drops levels depending on the host's exporter
+      // config, and a refusal that leaves no trace is indistinguishable from a
+      // detector that never matched — which is exactly how a relative-path
+      // refusal stayed invisible.
+      warn: (line) => {
+        params.warn(line)
+        fileLog.info(`outbound media: ${line}`)
+      },
       send: (mediaParams) => params.transport.sendMedia(mediaParams),
     })
-    if (result.sent.length > 0) params.warn(`sent ${result.sent.length} outbound media file(s)`)
+    if (result.sent.length > 0) {
+      const names = result.sent.map((filePath) => filePath.split('/').pop()).join(', ')
+      params.warn(`sent ${result.sent.length} outbound media file(s)`)
+      fileLog.info(`sent ${result.sent.length} outbound media file(s): ${names}`)
+    }
     return result.text
   } catch (error) {
     // deliverOutboundMedia is written not to throw; if a future edit breaks
     // that, the reply must still go out rather than the turn dying here.
     params.warn(`outbound media step failed, sending text only: ${String(error)}`)
+    fileLog.info(`outbound media step failed: ${String(error)}`)
     return text
   }
 }
