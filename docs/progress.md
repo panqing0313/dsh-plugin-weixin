@@ -638,3 +638,34 @@ Rosetta 那一档是本机环境造成的（conda 是 x86_64 构建），不是�
 **验证**：`npm test` 全量 **203 pass**；`--dry-run` 端到端跑通（57 files、836 kB、桥冒烟通过）；
 预检的六道关卡逐条手工触发确认（无版本号 / 非法版本号 / 脏工作区 / 未同步 origin /
 已发布版本 / 未登录 npm），其中「已发布版本」是靠先 staging 脚本制造脏工作区反向确认的。
+
+### 后续：脚本自身又查出两个真问题
+
+**1）文件权限被带进了 tarball（真实缺陷，已修）**
+
+比对 `npm pack` 出的 tarball 与 registry 上 `0.3.0` 的 `dist.shasum` 时对不上，
+本以为「npm 打包不可复现」，实测**同一份源码连打两次 sha1 完全一致**。真正原因在
+`tar -tvzf` 的权限位：
+
+```
+本地：-rw-r--r-- … package/LICENSE      （644）
+线上：-rw------- … package/LICENSE      （600）
+```
+
+git 只记录「是否可执行」，**不记录 600 还是 644**；`npm pack` 读的是**文件系统**。
+本机 umask 导致 39 个已跟踪文件是 600（含 `LICENSE`、`THIRD-PARTY-NOTICES.md`、
+`src/` 大部分），这些权限原样进了 tarball —— 用户装下来是**别人读不了的文件**。
+已全部改为 644（可执行文件 755），并在 `buildAndVerify` 里读 tarball 自己的权限清单，
+发现非 world-readable 就**中止发布**。辨别力实测：把 `LICENSE` 改回 600 → 立即报
+`1 file(s) in the tarball are not world-readable` 并 exit 1。
+
+**2）失败时 `finally` 被跳过（已修）**
+
+`die()` 原本调 `process.exit(1)`，会**跳过 finally**：于是一次**失败**的预演会把
+版本号改动留在工作区 —— 正是预演要防的事。改为 `die()` 抛错、全局 `cleanup` 钩子
+先跑、顶层 catch 设 `exitCode`。实测：`LICENSE` 设 600 后跑预演 → 报错、退出码 1、
+`git status --porcelain` 为空；正常路径的 abort（无版本号 / 非法版本号 / 已发布版本）
+同样 exit 1 且不打印堆栈。
+
+**最终验证**：全量 **203 pass**；预演端到端跑通（57 files / world-readable / 桥冒烟通过 /
+838 kB）；预演结束与预演失败两种情况都确认工作区干净、无残留 `.tgz`。
