@@ -179,6 +179,29 @@ function preflight() {
 	}
 	ok(`npm authenticated as ${who}`)
 
+	// A published version whose release commit was never tagged makes the next
+	// release's notes wrong: `git describe` still points at the older tag, so
+	// everything from the untagged release gets reported as new. This really
+	// happened with 0.3.0 — it was published, and v0.3.0 did not exist.
+	if (published !== '') {
+		try {
+			const known = JSON.parse(published)
+			// The version being released right now is legitimately untagged yet.
+			const missing = known.filter(
+				(v) => v !== version && git(['rev-parse', '-q', '--verify', `refs/tags/v${v}`]) === '',
+			)
+			if (missing.length > 0) {
+				warn(`published but never tagged: ${missing.join(', ')}`)
+				warn('this release\'s notes will report that work as new until the tags exist:')
+				for (const v of missing) note(`git tag -a v${v} <release-commit> && git push origin v${v}`)
+			} else {
+				ok('every published version is tagged')
+			}
+		} catch {
+			note('could not cross-check published versions against tags')
+		}
+	}
+
 	note(`current version ${current} → releasing ${version}${dryRun ? ' (dry run: nothing will be published)' : ''}`)
 }
 
