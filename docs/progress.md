@@ -1367,3 +1367,54 @@ send: ({ filePath, to, contextToken, cdnBaseUrl }) =>
 ### 验证
 
 - 全量 **292 pass / 0 fail**（289 → 292，asr 1 转 0）。
+
+## 2026-10-17 深夜（二）：模型调用失败会卡住后续消息（`turnError`）
+
+### 需求与现场
+
+用户：「一但有一次模型调用失败，下一次发送的消息就卡那了」。
+
+### 机制（从真实会话 transcript 量出，非推测）
+
+解压 `~/.dsh/sessions/.../session.v4.jsonl.zstd` 找到失败回合（turn 8，429 RATE_LIMIT
+「余额不足」），事件序列铁证：
+
+```
+assistant/attempt ×6   stream 只有 usage/finish chunk，绝无 text-delta
+llm/retry ×5           重试 5 次全失败
+turn/end               reason.kind='error'，code='RATE_LIMIT'
+```
+
+**`readAssistantReply` 完全没看 `turn/end`**：SETTLED_TYPES 里的 `assistant/attempt`
+虽然被扫到，但 body 为空字符串 → `text` 恒为 `''` → `#awaitReply` 空转到 `maxWaitMs`
+（**默认 20 分钟**）才超时。这期间 `record.busy = true` 不放，用户下一条消息走
+`#enqueue` 排队「已排队，等当前回复完成后自动发送」，然后陪第一个死回合等满 20 分钟
+——正是「卡那了」。
+
+### 修法
+
+- `src/session-reader.js`：读 `turn/end`，`reason.kind === 'error'` 时置
+  `turnError = reason.error?.message`（新回合开始时重置）；`turnError` 进入返回值。
+- `src/agent-bridge.js`：`#awaitReply` 主循环见 `turnError` 立即返回
+  `（模型调用失败：<原因>）`——失败回合已终结，等待只会占住 busy 锁；late-reply
+  循环同样见 `turnError` 即止（不再空转 1 小时）。排队路径（`#runQueuedTurn` →
+  同一个 `#awaitReply`）自动受益。
+
+### 测试与踩坑
+
+`test/busy-turns.test.js` +1：合成 attempt(仅 usage) + `turn/end(error)`，断言
+① 回复含「模型调用失败」与「429」且 <5s 返回（不是 60s 空转）；② 下一 条消息立刻
+正常运行。**两个自造测试坑**：
+
+1. **推送事件与 `before` 游标的竞态**：固定 50ms 定时器推事件，可能在 `deliver()`
+   捕获 `#lastSeq` 之前落地 → 901 被当作「游标前」跳过 → 空转照旧。改为轮询等
+   `followup` 被记录后再推（followup 在 `before` 捕获之后发生，从此必然大于游标）。
+2. **事件 seq 与假 agent 计数器冲突**：第二轮用 `fake.release()` 发回复，其内部
+   计数器从 1 起，低于本测试推的 900/901 → 读者把回复当「游标前」跳过 → 第二轮
+   超时。改为手动推 `seq: 950` 的 assistant/message。
+
+### 验证
+
+- 全量 **293 pass / 0 fail**（292 → 293）。
+- 部署 `node bin/install.mjs --profile desktop`；`src/session-reader.js`
+  `ce61d88e…`、`src/agent-bridge.js` `e75e30bd…` 两侧 SHA-256 肉眼比对一致。

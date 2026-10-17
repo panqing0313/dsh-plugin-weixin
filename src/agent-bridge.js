@@ -601,6 +601,14 @@ export class AgentBridge {
       const events = record.agent.session?.snapshotEvents?.() ?? []
       const reply = readAssistantReply({ events, afterSeq: before })
       if (reply.text !== '') return { text: reply.text, sessionId }
+      // A failed turn is OVER: no assistant message will ever arrive, and the
+      // turn/end(error) event is already durable. Waiting out the deadline
+      // here holds record.busy for the whole budget, so the user's NEXT
+      // message queues behind a turn that can never answer — the "one model
+      // failure and everything after is stuck" report. Answer immediately.
+      if (reply.turnError !== undefined) {
+        return { text: `（模型调用失败：${reply.turnError}）`, sessionId }
+      }
 
       // A long tool run is invisible in WeChat; one progress line keeps the
       // user informed without spamming the conversation.
@@ -642,6 +650,9 @@ export class AgentBridge {
         // not send the normal reply path again.
         return { text: '', sessionId, late: true }
       }
+      // Same failure rule as the primary loop: an errored turn is over, and
+      // the late wait must not spin for its full hour either.
+      if (reply.turnError !== undefined) return { text: '', sessionId, late: true }
       await new Promise((resolve) => setTimeout(resolve, latePollMs))
     }
     this.errLog(`late reply wait gave up for ${sessionId}`)

@@ -257,3 +257,57 @@ test('without onLateReply the timeout path is unchanged', async () => {
   const reply = await bridge.deliver({ conversationId: 'room-1', text: 'q' })
   assert.equal(reply.text, '（处理超时，请稍后查看会话）')
 })
+
+test('a failed model turn is answered immediately instead of blocking the queue', async () => {
+  // The field report: one model call fails (e.g. 429 RATE_LIMIT), and every
+  // message after it sits queued. Mechanism (measured in a real session
+  // transcript): the failed turn emits assistant/attempt events holding ONLY
+  // usage/finish chunks — never a text-delta — and then turn/end with
+  // reason.kind='error'. The reader saw no settled text, so the wait spun for
+  // the whole budget with record.busy held; the user's next message queued
+  // behind a turn that could never answer.
+  const fake = fakeAgent()
+  const bridge = await bridgeWith(fake, { maxWaitMs: 60_000 })
+
+  const delivery = bridge.deliver({ conversationId: 'room-1', text: 'q' })
+  // The turn fails almost immediately — the error is durable, no reply comes.
+  // Push ONLY after followup is recorded: deliver() captures the `before` seq
+  // BEFORE calling followup, so once followup is in, events 900/901 are
+  // guaranteed to be after the cursor. (A fixed 50ms timer raced the first
+  // attach and pushed before the cursor was captured — the reader then skipped
+  // the error event and the wait spun out the full budget.)
+  await new Promise((resolve) => {
+    const wait = setInterval(() => {
+      if (fake.calls.followup.length >= 1) { clearInterval(wait); resolve() }
+    }, 5)
+  })
+  fake.agent.session.snapshotEvents().push(
+    { seq: 900, type: 'assistant/attempt', data: { turn: 1, step: 1, stream: [{ type: 'chunk', chunk: { type: 'usage', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } } }] } },
+    { seq: 901, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: '429: 余额不足或无可用资源包', code: 'RATE_LIMIT' } } } },
+  )
+
+  const startedAt = Date.now()
+  const reply = await delivery
+  const elapsed = Date.now() - startedAt
+
+  // The failure becomes an answer, promptly — not a 60-second spin.
+  assert.match(reply.text, /模型调用失败/)
+  assert.match(reply.text, /429/)
+  assert.ok(elapsed < 5000, `a failed turn must return promptly, took ${elapsed}ms`)
+
+  // And the conversation is free: the next message runs its own turn right
+  // away instead of queueing behind the dead one.
+  const second = bridge.deliver({ conversationId: 'room-1', text: 'still there?' })
+  const releaseNext = setInterval(() => {
+    if (fake.calls.followup.length >= 2) {
+      clearInterval(releaseNext)
+      // Not fake.release: its event counter starts at 1, which is BELOW the
+      // 900/901 this test pushed, so the reader would skip the reply as
+      // already-consumed. Emit with a seq above everything on the log.
+      const events2 = fake.agent.session.snapshotEvents()
+      events2.push({ seq: 950, type: 'assistant/message', data: { step: 2, turn: 2, message: { content: [{ type: 'text', text: 'done' }] } } })
+    }
+  }, 25)
+  const next = await second
+  assert.equal(next.text, 'done', 'the next message must run normally after a failure')
+})
