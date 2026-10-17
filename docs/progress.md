@@ -1327,3 +1327,43 @@ send: ({ filePath, to, contextToken, cdnBaseUrl }) =>
 - 全量 **289 pass / 0 fail**（285 → 289）。
 - 部署：`node bin/install.mjs --profile desktop`；`src/sessions.js` `5ceef83a…`、
   `src/agent-bridge.js` `5a1a5b67…` 两侧 SHA-256 均打印肉眼比对一致。
+
+## 2026-10-17 深夜：产出文件自动送达（`autoSendFiles`）
+
+### 需求
+
+用户（截图为证）：agent 明明在回合里产出了截图/PDF，却必须再发一条「发我微信」才收得到——
+因为现有出站媒体只认**回复文本里的引用**（`![x](p)` / 链接 / 裸路径），agent 用散文描述
+产物而不写引用时，文件就躺在工作目录里。
+
+### 实现
+
+- `src/media/outbound.js` 新增 `listProducedFiles({dir, sinceMs, max})`：纯扫描，深度 1
+  （绝不递归进 `tools/`、`crops/`、`pdf_test/`）、只认 `MEDIA_EXT` 扩展名（脚本/中间产物
+  按构造排除）、跳过点文件、mtime ≥ sinceMs、新者在前、默认上限 `MAX_MEDIA_PER_REPLY`。
+- `src/index.js` 新增 `sendProducedFiles`：回合结束（含 late reply 路径）后扫描 agent cwd
+  （`resolveCwd` 的结果，与 bridge 注册的 workspace 同一目录），剔除 `resolveOutboundReply`
+  已发送的，逐个 `transport.sendMedia`；单文件失败只落一行日志，绝不影响已发出的文本回复。
+  开关 `autoSendFiles`（schema 默认 true），设置页「媒体」组同步新增该项（双向 schema
+  一致性测试强制要求表单出现）。
+- `resolveOutboundReply` 返回值从 `string` 改为 `{text, sent}`——调用方需要 `sent` 来去重。
+
+### 测试（辨别力）
+
+- `test/outbound-media.test.js` +2：扩展名过滤（.py 不认）、点文件跳过、子目录内容永不卷入
+  （`crops/inner.png`）、mtime 截止、`max` 截断取最新。
+- `test/e2e.test.js` +1（端到端，真 `src/index.js`）：包一层 fake agents 的 `resume`/
+  `create`，在会话创建时写 `produced-report.pdf`（等价于真 agent 在回合中写文件），回复
+  文本只说 "done, nothing attached" → 断言 FILE item（**出站信封 FILE=4**，与引用路径
+  的既有测试一致）到达且 `msg.to_user_id === ALLOWED`，getuploadurl 也带对了收件人。
+  stash 修复后该测试红（无 FILE item）。**测试坑**：冷启动走 `resume` 不走 `create`，
+  只包 create 会写出 0 个文件；出站 item 编号与 api/types 注释里的枚举不同，以既有
+  e2e 断言为准。
+- `test/asr.test.js` 的既有失败（stash 验证为**先于本次改动存在**）：系统 `python3`
+  （homebrew）丢失 whisper 引擎后，桥对缺失文件报 `no usable ASR engine` 而非
+  `no such file`——导入失败先于 stat。断言改为按桥的实际报错分支（两种都是 ok:false，
+  「缺失文件绝不伪装成转写」的钉子保持不变）。
+
+### 验证
+
+- 全量 **292 pass / 0 fail**（289 → 292，asr 1 转 0）。

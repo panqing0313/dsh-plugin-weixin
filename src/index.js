@@ -27,7 +27,7 @@ import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
-import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES } from './media/outbound.js'
+import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
@@ -91,6 +91,7 @@ export const Config = z.object({
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
   mediaEnabled: z.boolean().default(true).description('Send local files the agent references in its reply as Weixin images/videos/file attachments.'),
+  autoSendFiles: z.boolean().default(true).description('Also deliver files the agent wrote into its working directory during a turn, even when the reply text never references them.'),
   maxMediaBytes: z.number().default(DEFAULT_MAX_MEDIA_BYTES).description('Largest referenced file that will be uploaded to the Weixin CDN.'),
   maxInboundMediaBytes: z
     .number()
@@ -373,6 +374,10 @@ export function apply(ctx, config) {
         // Resolved once: the allowlist is a property of the deployment, not of
         // the message, and re-resolving per reply would re-stat every directory.
         mediaDirs: allowedMediaDirs({ cwd, stateDir: stateRoot }),
+        // The directory produced-file delivery scans after a turn (see
+        // sendProducedFiles). The same value the agent bridge registers as the
+        // workspace, so "what the agent wrote" is well defined.
+        agentCwd: cwd,
       })
 
       const previous = transport
@@ -572,7 +577,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs }) {
+function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd }) {
   return async (message) => {
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
@@ -727,8 +732,19 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
           })
           await sendChunked(transport, config, {
             conversationId: message.conversationId,
-            text: outbound,
+            text: outbound.text,
             contextToken: '',
+          })
+          await sendProducedFiles({
+            config,
+            transport,
+            agentCwd,
+            sinceMs: startedAt,
+            alreadySent: outbound.sent,
+            conversationId: message.conversationId,
+            contextToken: '',
+            warn,
+            fileLog,
           })
           log(`late reply delivered for ${message.conversationId}`)
           fileLog.info(`late reply delivered to ${message.conversationId} after the wait gave up`)
@@ -754,8 +770,19 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
       })
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
-        text: outbound,
+        text: outbound.text,
         contextToken: message.contextToken,
+      })
+      await sendProducedFiles({
+        config,
+        transport,
+        agentCwd,
+        sinceMs: startedAt,
+        alreadySent: outbound.sent,
+        conversationId: message.conversationId,
+        contextToken: message.contextToken,
+        warn,
+        fileLog,
       })
     } catch (error) {
       warn(`turn failed: ${String(error)}`)
@@ -801,7 +828,7 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
 async function resolveOutboundReply(params) {
   const text = params.reply ?? ''
   const fileLog = params.fileLog ?? { info: () => {} }
-  if (params.config.mediaEnabled === false) return text
+  if (params.config.mediaEnabled === false) return { text, sent: [] }
   try {
     const result = await deliverOutboundMedia({
       text,
@@ -839,13 +866,69 @@ async function resolveOutboundReply(params) {
       params.warn(`sent ${result.sent.length} outbound media file(s)`)
       fileLog.info(`sent ${result.sent.length} outbound media file(s): ${names}`)
     }
-    return result.text
+    return { text: result.text, sent: result.sent }
   } catch (error) {
     // deliverOutboundMedia is written not to throw; if a future edit breaks
     // that, the reply must still go out rather than the turn dying here.
     params.warn(`outbound media step failed, sending text only: ${String(error)}`)
     fileLog.info(`outbound media step failed: ${String(error)}`)
-    return text
+    return { text, sent: [] }
+  }
+}
+
+/**
+ * Deliver the files the agent PRODUCED during the turn but never referenced.
+ *
+ * The reference path (`resolveOutboundReply`) only fires when the reply text
+ * names a file. An agent that converts a document or takes a screenshot has
+ * still produced a deliverable — writing it and then describing it in prose
+ * left the user to ask for it again ("发我微信"), which is exactly the round
+ * trip this removes. After the text reply, the agent working directory is
+ * scanned for new deliverable files ({@link listProducedFiles}) and each one
+ * that the reply did not already send is uploaded.
+ *
+ * Failure of one file (over the size cap, refused kind) costs one log line,
+ * never the reply — the text has already gone out above.
+ *
+ * @param {object} params
+ * @param {{ autoSendFiles?: boolean, maxMediaBytes?: number }} params.config
+ * @param {ILinkTransport} params.transport
+ * @param {string} params.agentCwd  The agent working directory to scan.
+ * @param {number} params.sinceMs  Turn start; only newer files are products.
+ * @param {string[]} params.alreadySent  Absolute paths resolveOutboundReply sent.
+ * @param {string} params.conversationId
+ * @param {string} [params.contextToken]
+ * @param {(line: string) => void} params.warn
+ * @param {{ info: (line: string) => void }} [params.fileLog]
+ */
+async function sendProducedFiles(params) {
+  const fileLog = params.fileLog ?? { info: () => {} }
+  if (params.config.autoSendFiles === false) return
+  if (typeof params.agentCwd !== 'string' || params.agentCwd === '') return
+  let produced
+  try {
+    produced = await listProducedFiles({ dir: params.agentCwd, sinceMs: params.sinceMs })
+  } catch (error) {
+    params.warn(`scanning produced files failed: ${String(error)}`)
+    return
+  }
+  const pending = produced.filter((filePath) => !params.alreadySent.includes(filePath))
+  for (const filePath of pending) {
+    try {
+      await params.transport.sendMedia({
+        filePath,
+        conversationId: params.conversationId,
+        contextToken: params.contextToken,
+        cdnBaseUrl: params.transport.cdnBaseUrl,
+        ...(params.config.maxMediaBytes === undefined ? {} : { maxBytes: params.config.maxMediaBytes }),
+      })
+      params.warn(`sent produced file ${filePath}`)
+      fileLog.info(`sent produced file: ${filePath}`)
+    } catch (error) {
+      const reason = String(error?.message ?? error)
+      params.warn(`sending produced file ${filePath} failed: ${reason}`)
+      fileLog.info(`sending produced file ${filePath} failed: ${reason}`)
+    }
   }
 }
 

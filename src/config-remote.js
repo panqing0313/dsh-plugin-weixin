@@ -206,6 +206,15 @@ export const FIELDS = [
         hintEn: "Send local files the agent references as images, videos or file attachments.",
       },
       {
+        path: "autoSendFiles",
+        type: T.boolean,
+        default: true,
+        label: "产出文件自动送达",
+        labelEn: "Auto-send produced files",
+        hint: "Agent 在回合中写进工作目录的文件（截图、转换的文档等）即使回复里没有提到，也直接发到微信。",
+        hintEn: "Files the agent wrote into its working directory during a turn (screenshots, converted documents) are sent even when the reply never references them.",
+      },
+      {
         path: "maxMediaBytes",
         type: T.number,
         default: DEFAULT_MAX_MEDIA_BYTES,

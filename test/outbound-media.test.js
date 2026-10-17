@@ -819,3 +819,56 @@ test('the widened rules still ignore prose, code and URLs', async () => {
   // bracket syntax needs no such protection.
   assert.equal(detectMediaReferences('整理 [说明](report.pdf) 好了').length, 1)
 })
+
+test('listProducedFiles returns only deliverable files created since the cutoff', async () => {
+  const { listProducedFiles } = await loadOutbound()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-produced-'))
+  try {
+    // Nothing to find yet.
+    assert.deepEqual(await listProducedFiles({ dir, sinceMs: Date.now() + 60_000 }), [])
+
+    const before = Date.now() - 5_000
+    fs.writeFileSync(path.join(dir, 'shot.png'), 'png')
+    fs.writeFileSync(path.join(dir, 'report.pdf'), 'pdf')
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'txt')
+    fs.writeFileSync(path.join(dir, 'make.py'), 'script') // not a deliverable extension
+    fs.writeFileSync(path.join(dir, '.hidden.png'), 'dot') // dotfile
+    fs.mkdirSync(path.join(dir, 'crops'))
+    fs.writeFileSync(path.join(dir, 'crops', 'inner.png'), 'nested') // subdir: never swept
+
+    const found = await listProducedFiles({ dir, sinceMs: before, max: 10 })
+    const names = found.map((p) => path.basename(p))
+    assert.ok(names.includes('shot.png'), `shot.png missing: ${JSON.stringify(names)}`)
+    assert.ok(names.includes('report.pdf'), 'report.pdf missing')
+    assert.ok(names.includes('notes.txt'), 'notes.txt missing')
+    assert.ok(!names.includes('make.py'), 'a script must not be swept up as a product')
+    assert.ok(!names.includes('.hidden.png'), 'dotfiles must be skipped')
+    assert.ok(!names.includes('inner.png'), 'subdirectory contents must never be swept')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('listProducedFiles ignores older files and caps at max, newest first', async () => {
+  const { listProducedFiles } = await loadOutbound()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-produced2-'))
+  try {
+    const old = Date.now() - 60_000
+    const cutoff = Date.now() - 10_000
+    fs.writeFileSync(path.join(dir, 'old.png'), 'x')
+    fs.utimesSync(path.join(dir, 'old.png'), old / 1000, old / 1000)
+    fs.writeFileSync(path.join(dir, 'new1.png'), 'x')
+    fs.writeFileSync(path.join(dir, 'new2.pdf'), 'x')
+
+    const found = await listProducedFiles({ dir, sinceMs: cutoff, max: 1 })
+    assert.equal(found.length, 1, `only the newest file must survive the cap: ${JSON.stringify(found)}`)
+    // Either order is fine — mtimes are within the same second — what matters
+    // is the old file is gone and the count is capped.
+    assert.ok(!found[0].endsWith('old.png'))
+
+    const both = await listProducedFiles({ dir, sinceMs: cutoff, max: 5 })
+    assert.equal(both.length, 2)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

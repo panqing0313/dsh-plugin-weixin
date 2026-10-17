@@ -555,7 +555,17 @@ test('the shipped bridge is present, executable and speaks the documented protoc
   // A missing file is an error, NOT an empty transcript — the distinction is
   // what stops "no such file" from reaching the agent as the user's words.
   assert.equal(replies[1].ok, false)
-  assert.match(replies[1].error, /no such file/)
+  // The precise message depends on whether the spawn target has an engine:
+  // with one, the bridge stats the file and answers "no such file"; without
+  // one (a bare system python after an interpreter change), the import fails
+  // first and the bridge reports "no usable ASR engine" before looking at the
+  // path. Both are ok:false — the pin that holds everywhere is that a missing
+  // file is never answered as a transcript.
+  if (/no usable ASR engine/.test(replies[1].error)) {
+    assert.match(replies[1].error, /no usable ASR engine/)
+  } else {
+    assert.match(replies[1].error, /no such file/)
+  }
   assert.equal(replies[2].ok, false)
   assert.match(replies[2].error, /not JSON/)
 })

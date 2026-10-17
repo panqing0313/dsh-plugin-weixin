@@ -476,6 +476,62 @@ const RELATIVE_SAFE_RE = new RegExp(`\\.(${ATTACHMENT_EXT})$`, 'i')
 export const MAX_MEDIA_PER_REPLY = 5
 
 /**
+ * List files the agent PRODUCED in its working directory since `sinceMs`.
+ *
+ * This backs the "deliver what you made" behaviour: a screenshot or a converted
+ * PDF the agent wrote during the current turn is sent to the user even when the
+ * reply text never references it. Deliberately narrow, because a working
+ * directory accumulates scratch that is not a deliverable:
+ *
+ *  - only regular files directly in `dir` — no recursion, so `tools/`,
+ *    `crops/`, `pdf_test/` and their contents are never swept up;
+ *  - only extensions this channel can actually deliver ({@link MEDIA_EXT}),
+ *    which excludes scripts and intermediate artifacts by construction;
+ *  - no dotfiles;
+ *  - newest first, capped at `max`.
+ *
+ * The mtime filter is the only link to the turn; a file touched by anything
+ * else in the same window is indistinguishable from an agent product, which is
+ * acceptable for a single-user deployment whose agent cwd is plugin-private.
+ *
+ * @param {object} params
+ * @param {string} params.dir  The agent working directory (absolute).
+ * @param {number} params.sinceMs  Epoch ms; files modified before this are ignored.
+ * @param {number} [params.max]  Cap, defaults to {@link MAX_MEDIA_PER_REPLY}.
+ * @returns {Promise<string[]>} absolute paths, newest first
+ */
+export async function listProducedFiles(params) {
+  const dir = params.dir
+  const sinceMs = params.sinceMs
+  const max = params.max ?? MAX_MEDIA_PER_REPLY
+  if (typeof dir !== 'string' || dir === '' || !Number.isFinite(sinceMs)) return []
+  let names
+  try {
+    names = await fs.readdir(dir)
+  } catch {
+    // A missing or unreadable working directory produces nothing to send.
+    return []
+  }
+  const produced = []
+  for (const name of names) {
+    if (name.startsWith('.')) continue
+    if (!new RegExp(`\\.(?:${MEDIA_EXT})$`, 'i').test(name)) continue
+    const filePath = path.join(dir, name)
+    let stat
+    try {
+      stat = await fs.stat(filePath)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) continue
+    if (stat.mtimeMs < sinceMs) continue
+    produced.push({ filePath, mtimeMs: stat.mtimeMs })
+  }
+  produced.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return produced.slice(0, max).map((entry) => entry.filePath)
+}
+
+/**
  * Find the local files an agent's reply references.
  *
  * @param {string} text

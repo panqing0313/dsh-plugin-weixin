@@ -909,3 +909,88 @@ test('a reply naming a file RELATIVE to the agent cwd still uploads it', async (
     delete process.env.DSH_WEIXIN_STATE_DIR
   }
 })
+
+test('a file the agent writes during the turn is sent even when the reply never mentions it', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-prod-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  const uploaded = []
+  const cdn = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      uploaded.push({ url: req.url, bytes: Buffer.concat(chunks) })
+      res.writeHead(200, { 'x-encrypted-param': 'DL-PARAM-PROD' })
+      res.end('')
+    })
+  })
+  await new Promise((resolve) => cdn.listen(0, '127.0.0.1', resolve))
+  const cdnBaseUrl = `http://127.0.0.1:${cdn.address().port}`
+
+  try {
+    const agentCwd = path.join(stateRoot, 'agent-cwd')
+    fs.mkdirSync(agentCwd, { recursive: true })
+
+    const { server, baseUrl, sent, uploadUrls } = await startFakeILinkWithUpload([
+      [{ message_id: 4001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-prod', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'make me a report' } }] }],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl, cwd: agentCwd })
+
+    // The product file must be written DURING the turn (after the scan window
+    // opens at turn start), exactly where a real agent writes it. Wrapping the
+    // fake agents' create is that moment: the bridge creates the session as
+    // part of the turn.
+    const innerAgents = createFakeAgents({ reply: 'done, nothing attached' })
+    const productPath = path.join(agentCwd, 'produced-report.pdf')
+    const writeProduct = () => fs.writeFileSync(productPath, Buffer.from('produced during the turn', 'utf8'))
+    const agents = {
+      get: (id) => innerAgents.get(id),
+      // The cold start goes through resume (the fake resolves it), so the
+      // product file is written there — the same moment a real agent would be
+      // writing files inside its turn.
+      resume: async (opts) => {
+        writeProduct()
+        return innerAgents.resume(opts)
+      },
+      create: async (opts) => {
+        writeProduct()
+        return innerAgents.create(opts)
+      },
+    }
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? agents : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (!sent.some((s) => s.msg?.item_list?.[0]?.type === 4) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    // The produced file was uploaded and delivered as a FILE item addressed to
+    // the operator — without the reply text ever referencing it.
+    const fileMsg = sent.find((s) => s.msg?.item_list?.[0]?.type === 4)?.msg
+    assert.ok(fileMsg, `no FILE item was sent; sent=${JSON.stringify(sent.map((s) => s.msg?.item_list?.[0]?.type))}; warnings: ${warnings.join(' | ')}`)
+    assert.equal(fileMsg.to_user_id, ALLOWED, `the produced file lost its recipient: ${JSON.stringify(fileMsg?.to_user_id)}`)
+    const item = fileMsg.item_list[0].file_item
+    assert.equal(item.file_name, 'produced-report.pdf')
+    assert.equal(uploadUrls.filter((u) => u.to_user_id === ALLOWED).length, 1, `getuploadurl missing the peer id: ${JSON.stringify(uploadUrls)}`)
+    assert.equal(uploaded.length, 1, 'exactly one CDN POST expected')
+  } finally {
+    await new Promise((resolve) => cdn.close(resolve))
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
