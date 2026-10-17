@@ -212,8 +212,11 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
       [...methods].sort(),
       [
         'weixin/cancel',
+        'weixin/label',
         'weixin/logout',
+        'weixin/pause',
         'weixin/poll',
+        'weixin/resume',
         'weixin/sessions',
         'weixin/startLogin',
         'weixin/status',

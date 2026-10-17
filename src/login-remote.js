@@ -19,6 +19,7 @@ import {
 import { logger } from "../vendor/openclaw-weixin/util/logger.js";
 import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { stateDir } from "./state.js";
+import { isAccountPaused, readRegistry, setAccountLabel, setAccountPaused } from "./account-registry.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
 import { SessionLines } from "./sessions.js";
@@ -299,7 +300,17 @@ export class WeixinLoginController extends TypertRemoteService {
             try {
                 const acct = loadWeixinAccount(id);
                 if (acct?.token) {
-                    accounts.push({ accountId: id, userId: acct.userId ?? null });
+                    // Registry side-table data: label/paused/lastSeenAt live
+                    // outside the credential on purpose (see account-registry.js).
+                    // A missing entry means "never touched" — defaults, not an error.
+                    const entry = readRegistry()[id] ?? {};
+                    accounts.push({
+                        accountId: id,
+                        userId: acct.userId ?? null,
+                        label: typeof entry.label === "string" ? entry.label : null,
+                        paused: isAccountPaused(id),
+                        lastSeenAt: typeof entry.lastSeenAt === "string" ? entry.lastSeenAt : null,
+                    });
                 }
             } catch {
                 // skip unreadable entries
@@ -315,6 +326,41 @@ export class WeixinLoginController extends TypertRemoteService {
             pendingLogin: logins.size > 0,
             sessionExpired: this.sessionExpired === true,
         };
+    }
+
+    /**
+     * Pause one account's inbound loop without logging it out.
+     *
+     * Pausing is "stop listening on purpose": the credential stays, so resuming
+     * needs no re-scan. The host's next bring-up pass (this call re-arms the
+     * host immediately via `onAccountControlChange`) skips paused accounts.
+     */
+    async pause(accountId) {
+        const id = String(accountId ?? "").trim();
+        if (!id) throw new RemoteError("account id is required");
+        setAccountPaused(id, true, (m) => logger.warn(m));
+        this.onAccountControlChange?.(id);
+        return { accountId: id, paused: true };
+    }
+
+    /** Undo `pause`: the account is served again from the next pass on. */
+    async resume(accountId) {
+        const id = String(accountId ?? "").trim();
+        if (!id) throw new RemoteError("account id is required");
+        setAccountPaused(id, false, (m) => logger.warn(m));
+        this.onAccountControlChange?.(id);
+        return { accountId: id, paused: false };
+    }
+
+    /**
+     * Rename an account on the card. The raw id is server-assigned and
+     * meaningless to an operator; the label is what the card shows instead.
+     */
+    async label(accountId, text) {
+        const id = String(accountId ?? "").trim();
+        if (!id) throw new RemoteError("account id is required");
+        setAccountLabel(id, typeof text === "string" ? text : "", (m) => logger.warn(m));
+        return { accountId: id };
     }
 
     /**
@@ -413,4 +459,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "pause", "resume", "label"]);

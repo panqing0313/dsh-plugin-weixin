@@ -123,6 +123,36 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/pause`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "pause",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/pause:p0`, create: _str } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/pause:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/resume`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "resume",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/resume:p0`, create: _str } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/resume:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/label`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "label",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/label:p0`, create: _str } },
+						{ name: "text", wire: "text", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/label:p1`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/label:result`, create: _statusResult },
+				},
 				// weixinAsr namespace (AsrController)
 				{
 					id: `${PKG}#weixinAsr/listModels`,
@@ -745,6 +775,80 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			// Per-account controls. The card's top line answers "is anything
+			// bound?"; these rows answer "is *this* account alive, and what can I
+			// do about it" — pause/resume without losing the login, rename to
+			// something an operator recognizes, and a per-account logout so a
+			// second bound account is not dragged down with the first.
+			const [busyAccount, setBusyAccount] = react.useState(null);
+			const [accountNotice, setAccountNotice] = react.useState("");
+
+			const setPausedFor = async (account, paused) => {
+				setBusyAccount(account.accountId);
+				setAccountNotice("");
+				try {
+					// Each branch wraps its own call: the envelope unwrap is
+					// per-invocation, and a shared wrapper around the ternary
+					// would leave the second branch's result unwrapped.
+					await (paused
+						? callRemote(() => ctx.remote.weixin.pause(account.accountId))
+						: callRemote(() => ctx.remote.weixin.resume(account.accountId)));
+					await refreshStatus();
+				} catch (err) {
+					setAccountNotice(String(err?.message ?? err));
+				} finally {
+					setBusyAccount(null);
+				}
+			};
+
+			const renameAccount = async (account) => {
+				const next = globalThis.prompt?.(
+					t(`Label for ${account.label || account.accountId}`, `给 ${account.label || account.accountId} 起个名字`),
+					account.label ?? "",
+				);
+				if (typeof next !== "string") return;
+				try {
+					await callRemote(() => ctx.remote.weixin.label(account.accountId, next));
+					await refreshStatus();
+				} catch (err) {
+					setAccountNotice(String(err?.message ?? err));
+				}
+			};
+
+			const logoutOne = async (account) => {
+				const ok = globalThis.confirm?.(
+					t(
+						`Log out ${account.label || account.accountId}? Its saved credentials are deleted and you will have to scan the QR code again.`,
+						`确定退出登录 ${account.label || account.accountId}？将删除该账号的登录凭证，需要重新扫码才能再次使用。`,
+					),
+				);
+				if (ok === false) return;
+				setBusyAccount(account.accountId);
+				setAccountNotice("");
+				try {
+					await callRemote(() => ctx.remote.weixin.logout(account.accountId));
+					await refreshStatus();
+				} catch (err) {
+					setAccountNotice(String(err?.message ?? err));
+				} finally {
+					setBusyAccount(null);
+				}
+			};
+
+			// "silent for …" from the registry's lastSeenAt, coarse on purpose:
+			// the point is to spot a dead account, not to time anything.
+			const seenText = (iso) => {
+				if (typeof iso !== "string" || iso === "") return null;
+				const ms = Date.now() - Date.parse(iso);
+				if (!Number.isFinite(ms) || ms < 0) return null;
+				const minutes = Math.floor(ms / 60000);
+				if (minutes < 1) return t("active just now", "刚刚有消息");
+				if (minutes < 60) return t(`last message ${minutes} min ago`, `${minutes} 分钟前有消息`);
+				const hours = Math.floor(minutes / 60);
+				if (hours < 24) return t(`last message ${hours} h ago`, `${hours} 小时前有消息`);
+				return t(`last message ${Math.floor(hours / 24)} d ago`, `${Math.floor(hours / 24)} 天前有消息`);
+			};
+
 			const bound = accounts.length > 0;
 			// One status line: a colored dot for the state, the account as the
 			// value. Stating "no account" in grey text made a real state read
@@ -756,6 +860,53 @@ window.__ModuleLoader__.load({
 				: bound
 					? t("Bound", "已绑定")
 					: t("Not logged in", "未登录");
+			// The per-account rows are the card's answer to "which account is
+			// which, and is it actually receiving": label (or raw id) plus the
+			// registry's last message time, then the four controls. Pausing is
+			// deliberately not logout — the credential stays, so resuming needs
+			// no re-scan.
+			const accountRows = bound
+				? createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+						accounts.map((account) => {
+							const busy = busyAccount === account.accountId;
+							const seen = seenText(account.lastSeenAt);
+							return createElement("div", {
+									key: account.accountId,
+									style: {
+										display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+										padding: "7px 10px",
+										border: `1px solid ${C.border}`,
+										borderRadius: RADIUS.control,
+										background: C.surfaceSunken,
+									},
+								},
+								createElement("span", {
+									style: { fontSize: 13, fontWeight: 500, color: C.labelPrimary },
+								}, account.label || account.accountId),
+								account.label ? createElement("span", {
+									style: { fontSize: 12, color: C.labelSecondary },
+								}, account.accountId) : null,
+								account.paused ? createElement("span", { style: pillStyle("idle") }, t("paused", "已暂停")) : null,
+								seen ? createElement("span", { style: { fontSize: 12, color: C.labelSecondary } }, seen) : null,
+								createElement("span", { style: { flex: 1 } }),
+								createElement("button", {
+									onClick: () => renameAccount(account),
+									style: buttonStyleFor(false),
+								}, t("Rename", "改名称")),
+								createElement("button", {
+									onClick: () => setPausedFor(account, !account.paused),
+									disabled: busy,
+									style: buttonStyleFor(busy),
+								}, account.paused
+									? t("Resume", "恢复")
+									: busy ? t("Pausing…", "正在暂停…") : t("Pause", "暂停")),
+								createElement("button", {
+									onClick: () => logoutOne(account),
+									disabled: busy,
+									style: buttonStyleFor(busy),
+								}, busy ? t("Logging out…", "正在退出…") : t("Log out", "退出登录")));
+						}))
+				: null;
 
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 
@@ -769,6 +920,15 @@ window.__ModuleLoader__.load({
 						: null,
 					sessionExpired ? createElement("span", { style: pillStyle("bad") }, t("action needed", "需要处理")) : null),
 				//#endregion status
+
+				// One row per bound account: identity, liveness, controls.
+				accountRows,
+
+				accountNotice
+					? createElement("div", { style: noticeStyle },
+							createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+							createElement("span", null, accountNotice))
+					: null,
 
 				// The expiry is the one state where the operator must act, and it
 				// cannot be inferred from the account list, so it gets a notice

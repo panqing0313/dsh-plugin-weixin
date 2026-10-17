@@ -32,6 +32,7 @@ import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/a
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
+import { isAccountPaused, touchAccount } from './account-registry.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -393,6 +394,7 @@ export function apply(ctx, config) {
       const seen = new MessageDeduper()
       const handler = createInboundHandler({
         config,
+        accountId: account.accountId,
         transport: next,
         bridge,
         asrBridge,
@@ -457,6 +459,26 @@ export function apply(ctx, config) {
     }
     if (loginController !== undefined) loginController.onAccountBound = onAccountBound
 
+    // Pause/resume from the settings card. Pausing must take effect now, not on
+    // the next reload — an operator who pauses an account is usually stopping
+    // noise *this minute* — so pause stops that account's transport here; resume
+    // brings the loop straight back up. `accountId` travels with the call so one
+    // card action never touches another account's live transport.
+    const onAccountControlChange = (accountId) => {
+      const id = typeof accountId === 'string' ? accountId.trim() : ''
+      if (id === '') return
+      if (isAccountPaused(id)) {
+        const running = transports.get(id)
+        if (running === undefined) return
+        transports.delete(id)
+        running.stop().catch((error) => warn(`pause stop failed for ${id}: ${String(error)}`))
+        log(`account ${id} paused; its inbound loop is stopped`)
+      } else if (!disabled) {
+        startLoop(id).catch((error) => warn(`resume after unpause failed: ${String(error)}`))
+      }
+    }
+    if (loginController !== undefined) loginController.onAccountControlChange = onAccountControlChange
+
     const started = disabled ? Promise.resolve() : startLoop()
 
     return async () => {
@@ -465,6 +487,9 @@ export function apply(ctx, config) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
         loginController.onAccountBound = undefined
+      }
+      if (loginController !== undefined && loginController.onAccountControlChange === onAccountControlChange) {
+        loginController.onAccountControlChange = undefined
       }
       await started.catch((error) => warn(`startup failed: ${String(error)}`))
       await handoff.catch(() => {})
@@ -562,6 +587,18 @@ async function resolveAccounts(config, wantedAccountId, warn) {
       continue
     }
 
+    // A paused account keeps its credentials but gets no loop: pausing is
+    // "stop listening on purpose", not "log out". Logged, so an operator who
+    // paused an account yesterday can tell deliberate silence from breakage.
+    // `warn` because `log` only exists inside apply's closure — this module
+    // function has never had it, and a ReferenceError here would be swallowed
+    // by the caller's per-account catch as "could not start the loop",
+    // disguising a deliberate pause as a broken credential.
+    if (isAccountPaused(accountId)) {
+      warn(`account "${accountId}" is paused; not starting its loop`)
+      continue
+    }
+
     // resolveWeixinAccount applies the upstream defaults and config overrides
     // (baseUrl, cdnBaseUrl, enabled) that the transport expects.
     let resolved
@@ -622,7 +659,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd }) {
+function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd }) {
   return async (message) => {
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
@@ -661,6 +698,12 @@ function createInboundHandler({ config, transport, bridge, asrBridge, seen, log,
       fileLog.info(`skipping duplicate message ${message.id} from ${message.senderId}`)
       return
     }
+
+    // 3.5. Last-seen bookkeeping: the card shows "silent since" from this
+    // timestamp, so it is written once a message is actually accepted — not on
+    // every poll, which would make a busy loop mask a dead inbound path. A
+    // registry write failure is a warning, never a dropped message.
+    touchAccount(accountId, warn)
 
     // 4. Session-control commands (`/new`, `/list`, `/use`) are answered by the
     //    plugin itself, before any media download or agent turn. A command must

@@ -424,3 +424,59 @@ test('a completed login re-arms only the account that bound', async () => {
     )
   })
 })
+
+test('pausing an account stops its polling now, without touching other accounts', async () => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl, registerServer }) => {
+    seedAccount(root, { baseUrl })
+    const second = await startFakeILink()
+    registerServer(second.server)
+    seedAccount(root, { accountId: 'bot2', token: 'tok-2', baseUrl: second.baseUrl })
+
+    // seedAccount writes a single-entry index, so bring bot2 up the way a
+    // completed login would — same path, same code under test.
+    await waitFor(() => seen.getupdates > 0, 'bot1 to start polling')
+    loginService(provided).onAccountBound('bot2')
+    await waitFor(() => second.seen.getupdates > 0, 'bot2 to start polling')
+
+    const { setAccountPaused } = await import(path.join(PROJECT_ROOT, 'src', 'account-registry.js'))
+    setAccountPaused('bot1', true)
+    loginService(provided).onAccountControlChange('bot1')
+    await waitFor(
+      () => lines.some((line) => line.includes(`account ${ACCOUNT_ID} paused; its inbound loop is stopped`)),
+      'the pause to be reported',
+    )
+    const firstBefore = seen.getupdates
+    const secondBefore = second.seen.getupdates
+    await settle(300)
+    assert.equal(seen.getupdates, firstBefore, 'a paused account must stop polling immediately')
+    assert.ok(second.seen.getupdates > secondBefore, 'pausing bot1 must not touch bot2')
+  })
+})
+
+test('a paused account gets no loop on bring-up; resuming brings it back without a reload', async () => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl }) => {
+    const { setAccountPaused } = await import(path.join(PROJECT_ROOT, 'src', 'account-registry.js'))
+    seedAccount(root, { baseUrl })
+    setAccountPaused(ACCOUNT_ID, true)
+
+    // The plugin applied before the account existed; re-arm through the same
+    // bring-up path a load takes, and resolveAccounts must see the paused
+    // flag and refuse — deliberately, and loudly enough to tell apart from a
+    // broken loop.
+    loginService(provided).onAccountBound(ACCOUNT_ID)
+    await waitFor(
+      () => lines.some((line) => line.includes(`account "${ACCOUNT_ID}" is paused; not starting its loop`)),
+      'the deliberate silence to be distinguishable from breakage in the log',
+    )
+    await settle()
+    assert.equal(seen.getupdates, 0, 'a paused account must not poll')
+
+    setAccountPaused(ACCOUNT_ID, false)
+    loginService(provided).onAccountControlChange(ACCOUNT_ID)
+    await waitFor(() => seen.getupdates > 0, 'resuming to bring the loop back')
+    assert.ok(
+      lines.some((line) => line.includes(`listening as account ${ACCOUNT_ID}`)),
+      'the resume must be reported like any other bring-up',
+    )
+  })
+})

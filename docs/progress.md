@@ -1480,3 +1480,59 @@ DSH GUI 的插件「来源信息」面板读的是 **profile 的依赖声明**
 
 全量 **295 pass / 0 fail**（293 → 295）。既有两条裸 `onAccountBound()` 测试
 （rebind swap、same credential）在单账号场景下语义不变，无需改动。
+
+## 2026-10-18：多账号阶段 2 —— 账号登记表与设置页的账号管理
+
+### 改动
+
+- 新增 `src/account-registry.js`：`accounts-registry.json`（state 根目录下）登记每个
+  账号的 `label` / `paused` / `pausedAt` / `lastSeenAt` / `createdAt`。纯元数据——
+  任何读写失败只警告，绝不阻塞消息收发。坏 JSON 走 `process.emitWarning`
+  （`dsh-weixin: ignoring malformed …`），因为 caller 的 warn 收不到模块级通道。
+- `src/index.js`：`resolveAccounts` 跳过 paused 账号并明确打日志（「刻意静音」必须
+  和「坏掉」区分开）；`onAccountControlChange(accountId)` 让设置页的暂停立即生效
+  （pause → 该账号 transport 停止，resume → 立即重新 bring-up，不等重载）；
+  dedupe 接受消息后 `touchAccount` 记录 `lastSeenAt`。
+- `src/login-remote.js`：`status()` 每个账号合并登记表条目；新增 `pause` / `resume`
+  / `label` 三个 Remote 方法。
+- `src/client.js`：登录卡的账号行——每个账号显示 label（或 raw id）、最近活跃时间
+  （「刚刚 / N 分钟前 / N 小时前 / N 天前」）、paused 标记，及 Rename / Pause|Resume
+  / Log out 三个操作；操作失败显示在卡片上的 notice 区。
+
+### 过程中抓到的真缺陷
+
+`resolveAccounts` 的 paused 守卫最初调用了 `log(...)`——但 `log` 只存在于 `apply`
+闭包里，这个模块级函数从没有过它。ReferenceError 会被调用方的逐账号 catch 吞成
+`could not start the loop`，把「操作者刻意暂停」伪装成「坏凭证」。改为 warn
+（本就是该函数的参数），并用一条专门的测试钉住：暂停的账号 bring-up 时必须打出
+`account "<id>" is paused; not starting its loop`。
+
+### 新测试
+
+- `test/account-registry.test.js`（4 条）：fresh entry、pause/resume 往返、
+  lastSeenAt 触达 + 坏文件不抛、label 设置/清除/re-bind 保留。
+- `test/inbound-loop-start.test.js` +2（共 8 条）：
+  - 「pausing an account stops its polling now, without touching other accounts」
+    —— 双账号，暂停 bot1 后它的轮询立即归零、bot2 继续轮询。
+  - 「a paused account gets no loop on bring-up; resuming brings it back without a reload」
+    —— 暂停后 bring-up 必须打出「刻意静音」日志且不轮询；resume 后立即恢复。
+
+### 辨别力
+
+`git stash push -- src/index.js src/client.js src/login-remote.js
+test/client-remote.test.js` 退回阶段 1 → 两条新行为测试恰好 **2 红**；
+恢复后全绿。
+
+### 验证
+
+全量 **301 pass / 0 fail**（295 → 301）。测试发现的重要行为语义：`seedAccount`
+写死单元素 `accounts.json` 索引，所以「双账号」测试必须用 `onAccountBound('bot2')`
+走真实登录完成路径带起第二个账号——这本身就是被测代码的真实入口。
+
+### 教训
+
+- harness 的 `ctx.logger` 只透传字符串行； Cordis record 形状（`{args:[…]}`）的
+  logger 在探针里会静默丢行——断言日志前先确认 logger 形状与被测代码写日志的
+  方式一致。
+- emitWarning 是模块级 process 通道，caller warn 收不到；断言它必须先 await 一个
+  tick（setImmediate）。
