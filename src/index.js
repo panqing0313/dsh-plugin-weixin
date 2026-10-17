@@ -240,17 +240,26 @@ export function apply(ctx, config) {
 
   ctx.effect(() => {
     let cancelled = false
-    /** @type {ILinkTransport | undefined} */
-    let transport
+    /**
+     * One transport per bound account, keyed by accountId. Multi-account is
+     * the steady state now: each account owns a long poll, its own deduper and
+     * its own backoff, so one account's stall never blocks another's traffic.
+     * The map replaces the single `transport` variable that assumed exactly
+     * one account could be bound.
+     * @type {Map<string, ILinkTransport>}
+     */
+    const transports = new Map()
     /** @type {AgentBridge | undefined} */
     let bridge
     /** @type {AsrBridge | undefined} */
     let asrBridge
     /** @type {string} */
     let cwd
-    // Serializes loop hand-offs. A login can complete while the previous
-    // transport is still tearing down, and two live loops deliver every inbound
-    // message twice — the server hands it to whichever poll arrives first.
+    // Serializes loop hand-offs across ALL accounts. A login can complete while
+    // a previous hand-off is still tearing a transport down, and two live loops
+    // on one credential deliver every inbound message twice — the server hands
+    // it to whichever poll arrives first. One chain keeps the whole effect's
+    // bring-up/tear-down operations strictly ordered.
     let handoff = Promise.resolve()
 
     // Working directory, agent bridge and voice bridge do not depend on which
@@ -282,19 +291,24 @@ export function apply(ctx, config) {
       if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)
     })()
 
-    // Bring the loop up for the account that is on disk right now, replacing a
-    // transport that is already running. Called once when the plugin loads, and
-    // again every time the settings card completes a login: a fresh install has
-    // no credential at load time (the operator scans afterwards), and a re-bind
-    // replaces the previous token. Without the second call the loop stays down
-    // until the next reload — the "the phone says bound, but WeChat says it
-    // cannot reach openclaw" symptom.
-    const bringUpLoop = async () => {
+    // Bring the loop up for one account (or every account on disk), replacing a
+    // transport that is already running for it. Called for every account when
+    // the plugin loads, and again for just the account whose login completed on
+    // the settings card: a fresh install has no credential at load time (the
+    // operator scans afterwards), and a re-bind replaces the previous token.
+    // Without the second call the loop stays down until the next reload — the
+    // "the phone says bound, but WeChat says it cannot reach openclaw" symptom.
+    //
+    // `wantedAccountId` selects the account; undefined means "every account
+    // currently saved". One call touching one account must never blink another
+    // account's live transport — that is why the map lookup happens per call
+    // and why a per-account failure only skips that account.
+    const bringUpLoop = async (wantedAccountId) => {
       await setup
       if (cancelled) return
 
-      const account = await resolveAccount(config, warn)
-      if (account === undefined) {
+      const accounts = await resolveAccounts(config, wantedAccountId, warn)
+      if (accounts.length === 0) {
         // Say so rather than returning in silence. "Loaded, but nothing is
         // listening because no credential is saved yet" is the first thing an
         // operator needs when messages do not arrive, and an unlogged return
@@ -302,7 +316,31 @@ export function apply(ctx, config) {
         if (!cancelled) log('no saved Weixin credential yet; nothing is being listened to')
         return
       }
-      if (cancelled) return
+
+      for (const account of accounts) {
+        if (cancelled) return
+        try {
+          await bringUpAccount(account)
+        } catch (error) {
+          // One bad credential (corrupt file, unreachable CDN, rejected ticket)
+          // must not stop the accounts after it from being served.
+          warn(`could not start the loop for ${account.accountId}: ${String(error)}`)
+        }
+      }
+    }
+
+    /**
+     * Arm (or re-arm) the long poll for exactly one account.
+     */
+    const bringUpAccount = async (account) => {
+      const running = transports.get(account.accountId)
+      // Nothing to do when the running loop already holds this credential: a
+      // repeat call must not blink the connection, and the first call after a
+      // login is the only one that has work to do.
+      if (running !== undefined && running.token === account.token) {
+        log(`account ${account.accountId} is already being listened to; keeping the running loop`)
+        return
+      }
 
       const next = new ILinkTransport({
         accountId: account.accountId,
@@ -345,14 +383,6 @@ export function apply(ctx, config) {
           )
         },
       })
-      // Nothing to do when the running loop already holds this credential: a
-      // repeat call must not blink the connection, and the first call after a
-      // login is the only one that has work to do.
-      if (transport !== undefined && transport.accountId === account.accountId && transport.token === account.token) {
-        log(`account ${account.accountId} is already being listened to; keeping the running loop`)
-        return
-      }
-
       // The typing ticket doubles as the fallback context token for replies
       // that arrive without one; refreshing it once per loop start is enough.
       await next.refreshConfig()
@@ -380,8 +410,8 @@ export function apply(ctx, config) {
         agentCwd: cwd,
       })
 
-      const previous = transport
-      transport = next
+      const previous = transports.get(account.accountId)
+      transports.set(account.accountId, next)
       if (previous !== undefined) {
         // Stop before start, never the other way round. The server hands each
         // message to whichever poll asks first, so two live long-polls on one
@@ -399,8 +429,8 @@ export function apply(ctx, config) {
     // One hand-off at a time. A login can complete while the previous hand-off
     // is still tearing its transport down, and interleaving them would leave two
     // loops running or none.
-    const startLoop = () => {
-      const run = handoff.then(bringUpLoop, bringUpLoop)
+    const startLoop = (wantedAccountId) => {
+      const run = handoff.then(() => bringUpLoop(wantedAccountId), () => bringUpLoop(wantedAccountId))
       handoff = run.then(
         () => {},
         () => {},
@@ -411,8 +441,10 @@ export function apply(ctx, config) {
     // A completed login writes a credential this loop has not read yet. Coming
     // up now is the whole difference between "scan, then reload DSH" and
     // "scan" — the operator has already been told the phone shows bound, and
-    // WeChat is still saying it cannot reach openclaw.
-    const onAccountBound = () => {
+    // WeChat is still saying it cannot reach openclaw. Only the account that
+    // just bound is (re-)armed: the other accounts' live transports must not
+    // blink because somebody logged into a second WeChat bot.
+    const onAccountBound = (accountId) => {
       // A disabled plugin must not begin listening even if a scan completes:
       // `enabled` is the operator's switch, and a login is not a re-enabling
       // action. The credential is still saved, so turning the plugin back on
@@ -421,7 +453,7 @@ export function apply(ctx, config) {
         log('a login completed while the plugin is disabled; not starting the loop')
         return
       }
-      startLoop().catch((error) => warn(`restart after login failed: ${String(error)}`))
+      startLoop(accountId).catch((error) => warn(`restart after login failed: ${String(error)}`))
     }
     if (loginController !== undefined) loginController.onAccountBound = onAccountBound
 
@@ -436,7 +468,13 @@ export function apply(ctx, config) {
       }
       await started.catch((error) => warn(`startup failed: ${String(error)}`))
       await handoff.catch(() => {})
-      await transport?.stop().catch((error) => warn(`transport stop failed: ${String(error)}`))
+      // Every account gets its own stop, and one failure must not skip the
+      // rest — a teardown that dies on the first account would leave every
+      // later account's long poll running past the plugin unload.
+      for (const [id, t] of transports) {
+        transports.delete(id)
+        await t.stop().catch((error) => warn(`transport stop failed for ${id}: ${String(error)}`))
+      }
       // Before the agent bridge: a transcription in flight is failed through the
       // ASR disposer, so the inbound handler stops waiting on it promptly.
       await asrBridge?.dispose().catch((error) => warn(`asr teardown failed: ${String(error)}`))
@@ -485,61 +523,68 @@ async function resolveCwd(ctx, config, warn) {
 }
 
 /**
- * Load the configured account's credentials from the local state directory.
+ * Load credentials for the accounts this bring-up pass should serve.
  *
- * Returns undefined (and logs) when nothing is saved yet: the user must run the
- * login command first. Never throws for a missing file, so a fresh install logs
- * one actionable line instead of failing plugin load.
+ * `wantedAccountId` names one account (a completed login on the card); the
+ * wildcard undefined means "every account on disk". The old single-account
+ * rule — refuse to serve when several accounts exist but none is configured —
+ * is gone: multi-account is the steady state, so every saved credential gets
+ * its own loop unless a specific account was asked for.
+ *
+ * Returns [] (and logs) when nothing usable is saved; never throws for a
+ * missing file, so a fresh install logs one actionable line instead of failing
+ * plugin load.
  *
  * @param {{ accountId?: string }} config
+ * @param {string | undefined} wantedAccountId
  * @param {(line: string) => void} warn
+ * @returns {Promise<Array<{accountId: string, baseUrl: string, cdnBaseUrl: string | undefined, token: string, userId: string | undefined}>>}
  */
-async function resolveAccount(config, warn) {
+async function resolveAccounts(config, wantedAccountId, warn) {
   const { DEFAULT_BASE_URL, listWeixinAccountIds, loadWeixinAccount, resolveWeixinAccount } =
     await import('../vendor/openclaw-weixin/auth/accounts.js')
 
-  const configured = config.accountId?.trim()
-  let accountId = configured
-  if (accountId === undefined || accountId === '') {
-    const ids = listWeixinAccountIds({})
-    if (ids.length === 0) {
-      warn(`no Weixin account is saved (expected under ${accountsDir()}); run the login command first`)
-      return undefined
-    }
-    if (ids.length > 1) {
-      warn(`${ids.length} Weixin accounts are saved; set config.accountId to pick one: ${ids.join(', ')}`)
-      return undefined
-    }
-    accountId = ids[0]
+  // A configured account id still wins: the operator asked for exactly that
+  // one. wantedAccountId (a just-completed login) narrows the pass to that
+  // account too — other accounts' transports must not blink.
+  const configured = config.accountId?.trim() || wantedAccountId?.trim() || ''
+  const ids = configured !== '' ? [configured] : listWeixinAccountIds({})
+  if (ids.length === 0) {
+    warn(`no Weixin account is saved (expected under ${accountsDir()}); run the login command first`)
+    return []
   }
 
-  const data = loadWeixinAccount(accountId)
-  if (data === null || !data.token) {
-    warn(`account "${accountId}" has no saved token (expected ${accountsDir()}/${accountId}.json); run the login command`)
-    return undefined
-  }
+  const accounts = []
+  for (const accountId of ids) {
+    const data = loadWeixinAccount(accountId)
+    if (data === null || !data.token) {
+      warn(`account "${accountId}" has no saved token (expected ${accountsDir()}/${accountId}.json); run the login command`)
+      continue
+    }
 
-  // resolveWeixinAccount applies the upstream defaults and config overrides
-  // (baseUrl, cdnBaseUrl, enabled) that the transport expects.
-  let resolved
-  try {
-    resolved = resolveWeixinAccount({ channels: { 'openclaw-weixin': { accounts: { [accountId]: {} } } } }, accountId)
-  } catch {
-    resolved = undefined
+    // resolveWeixinAccount applies the upstream defaults and config overrides
+    // (baseUrl, cdnBaseUrl, enabled) that the transport expects.
+    let resolved
+    try {
+      resolved = resolveWeixinAccount({ channels: { 'openclaw-weixin': { accounts: { [accountId]: {} } } } }, accountId)
+    } catch {
+      resolved = undefined
+    }
+    accounts.push({
+      accountId,
+      baseUrl: data.baseUrl ?? resolved?.baseUrl ?? DEFAULT_BASE_URL,
+      // The record's OWN CDN root, not a default. Deliberately only the saved
+      // value: `resolveWeixinAccount` always fills in the upstream production
+      // root, so consulting it here would make the caller's chain unable to tell
+      // "the account chose this" from "nobody chose anything" — and would make
+      // the caller's final fallback unreachable. Empty and whitespace-only values
+      // mean "not set", hence `trim() ||` rather than `??`.
+      cdnBaseUrl: data.cdnBaseUrl?.trim() || undefined,
+      token: data.token,
+      userId: data.userId,
+    })
   }
-  return {
-    accountId,
-    baseUrl: data.baseUrl ?? resolved?.baseUrl ?? DEFAULT_BASE_URL,
-    // The record's OWN CDN root, not a default. Deliberately only the saved
-    // value: `resolveWeixinAccount` always fills in the upstream production
-    // root, so consulting it here would make the caller's chain unable to tell
-    // "the account chose this" from "nobody chose anything" — and would make
-    // the caller's final fallback unreachable. Empty and whitespace-only values
-    // mean "not set", hence `trim() ||` rather than `??`.
-    cdnBaseUrl: data.cdnBaseUrl?.trim() || undefined,
-    token: data.token,
-    userId: data.userId,
-  }
+  return accounts
 }
 
 /**

@@ -220,7 +220,11 @@ export class WeixinLoginController extends TypertRemoteService {
                 // this the operator binds successfully and WeChat still says it
                 // cannot reach openclaw until the next reload.
                 try {
-                    this.onAccountBound?.();
+                    // The bound account travels with the callback: the host keeps
+                    // one transport per account, and only the one whose credential
+                    // just changed may be re-armed. Calling it bare would force
+                    // the host to guess which account to bring up.
+                    this.onAccountBound?.(status.ilink_bot_id);
                 } catch (error) {
                     logger.warn(`weixin login: onAccountBound failed: ${String(error)}`);
                 }

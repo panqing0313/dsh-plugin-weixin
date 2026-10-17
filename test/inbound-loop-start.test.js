@@ -363,3 +363,64 @@ test('the transport carries the operator id, so getConfig returns a typing ticke
     else process.env.DSH_WEIXIN_STATE_DIR = previousStateDir
   }
 })
+
+test('two saved accounts are both listened to, on their own servers', async () => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl, registerServer }) => {
+    // Account 1 was seeded before load and is already polling when account 2
+    // appears. The second account gets its own fake server, so "both are being
+    // served" is observable per account, not just as a global request count.
+    seedAccount(root, { baseUrl })
+    await waitFor(() => seen.getupdates > 0, 'the first account loop to start')
+
+    const second = await startFakeILink()
+    registerServer(second.server)
+    seedAccount(root, { accountId: 'bot2', token: 'tok-2', baseUrl: second.baseUrl })
+    seedAccount(root, { baseUrl }) // reseed so accounts.json lists both, in order
+
+    // A login completing on the card reports the account it bound; only that
+    // account's loop may be (re-)armed.
+    loginService(provided).onAccountBound('bot2')
+
+    await waitFor(() => second.seen.getupdates > 0, 'the second account loop to start')
+    assert.ok(
+      lines.some((line) => line.includes('listening as account bot2')),
+      'the second account must be reported as listening',
+    )
+    const firstBefore = seen.getupdates
+    await settle()
+    assert.ok(seen.getupdates > firstBefore, 'the first account must keep polling after the second came up')
+    assert.ok(
+      !lines.some((line) => /could not start the loop/.test(line)),
+      'one account coming up must not be reported as a failure',
+    )
+  })
+})
+
+test('a completed login re-arms only the account that bound', async () => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl, registerServer }) => {
+    seedAccount(root, { baseUrl })
+    await waitFor(() => seen.getupdates > 0, 'the first account loop to start')
+
+    const second = await startFakeILink()
+    registerServer(second.server)
+    seedAccount(root, { accountId: 'bot2', token: 'tok-2', baseUrl: second.baseUrl })
+    seedAccount(root, { baseUrl })
+
+    loginService(provided).onAccountBound('bot2')
+    await waitFor(() => second.seen.getupdates > 0, 'the second account loop to start')
+
+    // The regression this pins: a bare onAccountBound() (no account) would
+    // resolve *every* saved account and tear bot1's live transport down and
+    // back up — a blink the operator experiences as the bot going unreachable.
+    const firstBefore = seen.getupdates
+    const secondBefore = second.seen.getupdates
+    await settle(300)
+    assert.ok(seen.getupdates > firstBefore, 'bot1 must still be polling')
+    assert.ok(second.seen.getupdates > secondBefore, 'bot2 must still be polling')
+    assert.equal(
+      lines.filter((line) => line.includes('listening as account bot1')).length,
+      1,
+      'bot1 must not be torn down and rebuilt by a login that did not touch it',
+    )
+  })
+})

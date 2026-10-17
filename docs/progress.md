@@ -1445,3 +1445,38 @@ DSH GUI 的插件「来源信息」面板读的是 **profile 的依赖声明**
   ——`/tmp` 会被系统清理，清掉后宿主 npm install 会失败。用户拍板前不动。
 - `release.mjs` 第 8 步更新 profile 依赖声明并重跑 npm install（消除每次发布后
   「来源显示旧版」），同样等用户确认后再动。
+
+## 2026-10-18：多账号阶段 1 —— 每个账号一条自己的入站循环
+
+### 改动
+
+入站循环从「单个 `transport` 变量」改为「`transports: Map<accountId, ILinkTransport>`」：
+
+- `resolveAccounts(config, wantedAccountId, warn)` 取代 `resolveAccount`：`wantedAccountId`
+  指定单个账号（卡片登录完成回调传入），undefined 表示「盘上所有账号」。旧的
+  「存了多个账号又没配置 accountId 就拒绝服务」分支删除——多账号是稳态，每个
+  已存凭证都该有自己的循环。
+- `bringUpLoop(wantedAccountId)` 逐账号 `bringUpAccount`，单账号失败只 warn 不拖垮其余。
+- `bringUpAccount` 的去重守卫（同凭证已在跑 → `is already being listened to`）、
+  先 `previous.stop()` 再 `next.start()` 的顺序、`startLoop` 的 handoff 串行链全部保留，
+  只是作用域从全局收窄到单个账号。
+- `onAccountBound(accountId)`：登录完成只重挂**那个**账号，其余账号的活连接不许眨眼。
+  `login-remote.js` 的 confirmed 分支随之改为 `onAccountBound?.(status.ilink_bot_id)`。
+- disposer 逐账号 stop 且 delete 后继续——一个 teardown 失败不再跳过其余账号。
+
+### 辨别力
+
+`git stash push -- src/index.js src/login-remote.js` 退回单 transport 实现 →
+`test/inbound-loop-start.test.js` 恰好 **2 红**（两条新测试），既有 4 条绿；恢复后全绿。
+新测试：
+
+- 「two saved accounts are both listened to, on their own servers」——双 fake server，
+  断言两个账号各自轮询自己的服务器、第一个账号在第二个起来后继续轮询。
+- 「a completed login re-arms only the account that bound」——断言 bot1 的
+  `listening as account bot1` 恰好 1 次：裸 `onAccountBound()` 会把 bot1 的活连接
+  拆掉重建，操作者体感就是「机器人掉线了一下」。
+
+### 验证
+
+全量 **295 pass / 0 fail**（293 → 295）。既有两条裸 `onAccountBound()` 测试
+（rebind swap、same credential）在单账号场景下语义不变，无需改动。
