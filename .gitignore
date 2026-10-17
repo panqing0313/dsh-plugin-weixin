@@ -32,3 +32,6 @@ asr-server.py
 # Python bytecode from bin/asr-bridge.py (never shipped)
 __pycache__/
 *.pyc
+
+# Agent learnings (self-improving-agent)
+.learnings/
