@@ -1418,3 +1418,28 @@ turn/end               reason.kind='error'，code='RATE_LIMIT'
 - 全量 **293 pass / 0 fail**（292 → 293）。
 - 部署 `node bin/install.mjs --profile desktop`；`src/session-reader.js`
   `ce61d88e…`、`src/agent-bridge.js` `e75e30bd…` 两侧 SHA-256 肉眼比对一致。
+
+## 2026-10-18：发布后「代码来源」显示旧 tarball 的机制与处置
+
+### 机制
+
+DSH GUI 的插件「来源信息」面板读的是 **profile 的依赖声明**
+（`~/.dsh/profiles/desktop/package.json` 的 `dependencies['dsh-plugin-weixin']`），
+不是 `node_modules` 里实际装的内容。`bin/release.mjs` 的第 8 步只跑
+`bin/install.mjs`（把仓库构建产物拷进 node_modules），**不改依赖声明**——所以每次
+发布后 GUI 都显示上一个版本的 `file:/tmp/dsh-plugin-weixin-<旧>.tgz`，而装的内容
+其实是新的。0.5.0 时代更严重：宿主的 npm install 会按声明从旧 tarball 把插件
+**重新物化回旧版**，出现「修好又变旧」的回退。
+
+### 处置（本次）
+
+手动把声明指到 `/tmp/dsh-plugin-weixin-0.6.0.tgz`（release 构建的 tarball 副本），
+`npm install --legacy-peer-deps` 重物化；lock 与 node_modules 均为 0.6.0，三个核心
+文件 SHA-256 与仓库逐字节一致。
+
+### 待办（需用户拍板）
+
+- 长期解法是把 profile 依赖改成 registry 版本号（`"dsh-plugin-weixin": "^0.6.0"`），
+  摆脱对 `/tmp` tarball 的依赖（系统会清理 /tmp，清掉后宿主 npm install 会失败）。
+- `release.mjs` 第 8 步应当同时更新 profile 依赖声明并重跑 npm install，否则每次
+  发布都会再现「来源显示旧版」。两项都改宿主管理方式，等用户确认后再动。
