@@ -1,5 +1,7 @@
 # dsh-plugin-weixin
 
+[![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)](https://dsh.market/)
+
 <img src="assets/icon-128.png" width="72" alt="dsh-plugin-weixin 图标" />
 
 把**个人微信**变成 DeepSeek Harness（DSH）的远程控制面：在微信里发一句话，DSH Agent 在本地开一个会话执行，把结果回给你。
