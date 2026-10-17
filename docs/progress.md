@@ -1437,9 +1437,11 @@ DSH GUI 的插件「来源信息」面板读的是 **profile 的依赖声明**
 `npm install --legacy-peer-deps` 重物化；lock 与 node_modules 均为 0.6.0，三个核心
 文件 SHA-256 与仓库逐字节一致。
 
-### 待办（需用户拍板）
+### 待办（用户已拍板，2026-10-18）
 
-- 长期解法是把 profile 依赖改成 registry 版本号（`"dsh-plugin-weixin": "^0.6.0"`），
-  摆脱对 `/tmp` tarball 的依赖（系统会清理 /tmp，清掉后宿主 npm install 会失败）。
-- `release.mjs` 第 8 步应当同时更新 profile 依赖声明并重跑 npm install，否则每次
-  发布都会再现「来源显示旧版」。两项都改宿主管理方式，等用户确认后再动。
+- **profile 依赖暂留 `/tmp` tarball**（用户决策，同步记录于 `.learnings/LEARNINGS.md`）：
+  用户仍在开发期，每次发布由 release 脚本装 + 手动重指 tarball 即可。**开发结束或
+  准备长期稳定运行时，提醒改成 registry 版本号（`"dsh-plugin-weixin": "^0.6.0"`）**
+  ——`/tmp` 会被系统清理，清掉后宿主 npm install 会失败。用户拍板前不动。
+- `release.mjs` 第 8 步更新 profile 依赖声明并重跑 npm install（消除每次发布后
+  「来源显示旧版」），同样等用户确认后再动。
