@@ -179,14 +179,17 @@ export class AgentBridge {
    * @param {string} conversationId
    * @param {string} [accountId] owning bot account; bare key when absent
    * @param {string} text
+   * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
+   *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] } }} [statusContext]
+   *   account-level facts for `/status`, threaded from the inbound handler
    * @returns {string | undefined}
    */
-  handleCommand(conversationId, text, accountId) {
+  handleCommand(conversationId, text, accountId, statusContext) {
     // Capture the target BEFORE the command runs: `/clear` replaces the line,
     // and the id to orphan is the one that was active up to now.
     const key = scopedLineKey(accountId, conversationId)
     const previouslyActive = this.conversationTargets.get(key)
-    const reply = runSessionCommand(this.lines, conversationId, text, accountId)
+    const reply = runSessionCommand(this.lines, conversationId, text, accountId, statusContext)
     if (reply === undefined) return undefined
     // `/clear` orphans the line that was active: its session id is no longer
     // in the list and the fresh line has a different id, so the old in-memory

@@ -764,7 +764,19 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
     //    list the plugin already knows, and `/new` would run in the very session
     //    it is meant to leave. Placed after the allowlist and dedupe so a
     //    refused or replayed message still cannot steer a conversation.
-    const commandReply = bridge.handleCommand(message.conversationId, message.text, accountId)
+    //    `/status` additionally gets account-level facts read fresh here (the
+    //    registry entry may have changed since this handler was built).
+    const registryEntry = accountId ? readRegistry()[accountId] : undefined
+    const commandReply = bridge.handleCommand(message.conversationId, message.text, accountId, {
+      accountId,
+      accountLabel: registryEntry?.label ?? null,
+      paused: accountId ? isAccountPaused(accountId) : false,
+      lastSeenAt: typeof registryEntry?.lastSeenAt === 'string' ? registryEntry.lastSeenAt : undefined,
+      allowlist: {
+        source: Array.isArray(registryEntry?.allowedSenders) && registryEntry.allowedSenders.length > 0 ? 'account' : 'global',
+        senders: effectiveConfig.current.allowedSenders ?? [],
+      },
+    })
     if (commandReply !== undefined) {
       await sendChunked(transport, config, {
         conversationId: message.conversationId,

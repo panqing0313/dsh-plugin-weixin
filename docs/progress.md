@@ -1864,3 +1864,33 @@ allowlist`。这是设计行为，但暴露一个真缺口——扫码时服务�
 **教训**：`git stash push` 对 intent-to-add（`git add -N`）的新文件会报
 `Entry ... not uptodate. Cannot merge.`——辨别力改用「备份 → checkout 原文件 →
 删除新文件 → 跑 → 还原」的文件级操作更稳。
+
+## （十一）/status 会话命令（2026-10-18）
+
+**为什么**：之前每次「为什么没回复」都要翻宿主日志；手机微信里没有一条命令能自己看
+账号活不活着、白名单收了谁、当前在用哪条会话线。
+
+**做法**：`/status` 加入会话命令族（`/new` `/list` `/use` `/clear` 同一路径）。
+
+- `src/sessions.js`：`parseSessionCommand` 加 `/status`（与 `/clear` 一样不带参数，
+  带参数就不算命令，整条消息落到 agent）；`runSessionCommand` 加可选第 5 参
+  `context`——账号级事实由调用方组装，无 `context` 时（裸调用、测试）降级为只报
+  会话线信息，不虚构账号数据。
+- `src/index.js` 入站 handler 在 `bridge.handleCommand` 调用点现场读 registry
+  （entry 可能自 handler 构建后已变）：label、`isAccountPaused`、`lastSeenAt`、
+  白名单来源（entry 有 override → 「本账号专属名单」，否则「全局名单」）与生效
+  名单（`effectiveConfig.current.allowedSenders`，首联系人登记热换后的名单）。
+- `src/agent-bridge.js` `handleCommand` 加第 4 参透传。
+- 回复形态：`账号：panqing（<id>）`/`状态：正常收发|已暂停`/`最近收发：…`/
+  `发信人白名单：N 人（来源）`/`本微信会话共 N 条会话线，当前使用第 X 条：标题`。
+
+**测试**（新 5 条）：sessions.test.js 4 条（无 context 降级、带 context 全字段、
+paused+全局名单、解析精确性——`/status extra` 与 `/statistics` 都不算命令）；
+session-commands.test.js 1 条（真 handler 链路：白名单行、会话线行、
+`sessionsOpened` 保持空 = 不花模型轮次）。
+
+**辨别力**：把三个源文件还原到 HEAD 再跑受影响两个测试文件 → 恰好 5 红（全部
+/status 用例），恢复后 44 全绿、全量 329 pass。教训：对**已 staged 的文件**用
+`git stash push --staged` 再跑，红测试在 stash 期间反而 pass——staged 状态下
+`--staged` 只撤 index 不撤工作树的场景使「无修复」基线不可信；可靠的辨别力
+做法是 `git show HEAD:<file> > <file>` 还原三件源文件、跑完立即从 /tmp 备份恢复。

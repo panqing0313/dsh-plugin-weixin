@@ -544,3 +544,59 @@ test('remove drops one line, keeps the others, and never strands the active line
   lines.remove(conversationId, 1, accountA)
   assert.ok(lines.list(conversationId, accountB).length >= bCount - 0, 'B keeps its own lines')
 })
+
+test('/status reports session lines alone when no account context rides in', () => {
+  const lines = freshLines()
+  const conversationId = 'room-status'
+  lines.title(conversationId, lines.active(conversationId), '构建报错排查')
+
+  const reply = runSessionCommand(lines, conversationId, '/status')
+  assert.match(reply, /1 条会话线/)
+  assert.match(reply, /构建报错排查/)
+  assert.doesNotMatch(reply, /白名单/, 'without context there are no account facts to show — none must be invented')
+})
+
+test('/status with account context reports label, pause, lastSeen, and allowlist source', () => {
+  const lines = freshLines()
+  const conversationId = 'room-status-ctx'
+  const accountId = 'aaaaaaaaaaaa@im.bot'
+
+  const reply = runSessionCommand(lines, conversationId, '/status', accountId, {
+    accountId,
+    accountLabel: 'panqing',
+    paused: false,
+    lastSeenAt: '2026-10-18T10:00:00.000Z',
+    allowlist: { source: 'account', senders: ['o9cq804qN9Kjha_YsRWQwG8hWo3I@im.wechat'] },
+  })
+
+  assert.match(reply, /panqing（aaaaaaaaaaaa@im\.bot）/, 'a labelled account shows both the label and the raw id')
+  assert.match(reply, /正常收发/)
+  assert.match(reply, /2026-10-18T10:00:00\.000Z/)
+  assert.match(reply, /1 人（本账号专属名单）/)
+  assert.match(reply, /1 条会话线/)
+})
+
+test('/status says paused when the account is paused, and global when no override exists', () => {
+  const lines = freshLines()
+  const conversationId = 'room-status-paused'
+  const accountId = 'bbbbbbbbbbbb@im.bot'
+
+  const paused = runSessionCommand(lines, conversationId, '/status', accountId, {
+    accountId,
+    paused: true,
+    allowlist: { source: 'global', senders: ['one@im.wechat', 'two@im.wechat'] },
+  })
+  assert.match(paused, /已暂停/)
+  assert.match(paused, /2 人（全局名单）/, 'no account override means the status names the global list')
+
+  // And the bare-key path (no accountId in the context at all) shows neither.
+  const bare = runSessionCommand(lines, conversationId, '/status')
+  assert.doesNotMatch(bare, /已暂停|正常收发/)
+})
+
+test('/status is parsed exactly — no arguments, no prefix collisions', () => {
+  assert.deepEqual(parseSessionCommand('/status'), { command: 'status' })
+  assert.deepEqual(parseSessionCommand('  /STATUS '), { command: 'status' }, 'commands are case-insensitive like the rest')
+  assert.equal(parseSessionCommand('/status extra'), undefined, 'an argument makes it not a command, so it reaches the agent')
+  assert.equal(parseSessionCommand('/statistics'), undefined, 'a longer word sharing the prefix is not /status')
+})

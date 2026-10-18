@@ -292,3 +292,17 @@ test('/clear clears the context and the next message opens a fresh session', asy
     await waitFor(() => fake.outbound.length > 0, 'the fresh reply')
   })
 })
+
+test('/status answers with account facts and no agent turn', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/status', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the status reply')
+    const reply = fake.outbound[0].text
+    // The inbound handler assembles the context from the registry: the seeded
+    // account has no label and no override, so the status names the raw id and
+    // the global list (which this harness seeds with ALLOWED).
+    assert.match(reply, /发信人白名单：1 人（全局名单）/)
+    assert.match(reply, /1 条会话线/)
+    assert.deepEqual(sessionsOpened, [], '/status must cost no model turn, like every session command')
+  })
+})

@@ -512,6 +512,8 @@ export function parseSessionCommand(text) {
   }
   const clearMatch = /^\/clear$/i.exec(trimmed)
   if (clearMatch !== null) return { command: 'clear' }
+  const statusMatch = /^\/status$/i.exec(trimmed)
+  if (statusMatch !== null) return { command: 'status' }
   return undefined
 }
 
@@ -525,6 +527,7 @@ export const SESSION_COMMANDS_HELP = [
   '/list 查看这个微信会话下的所有会话',
   '/use <序号> 切换到第几条',
   '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
+  '/status 查看当前账号和会话的状态（白名单、会话线等）',
 ].join('\n')
 
 /**
@@ -537,9 +540,14 @@ export const SESSION_COMMANDS_HELP = [
  * @param {SessionLines} lines
  * @param {string} conversationId
  * @param {string} text
+ * @param {string} [accountId] owning bot account; bare key when absent
+ * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
+ *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] } }} [context]
+ *   account-level facts for `/status`, assembled by the inbound handler;
+ *   optional so the command works for bare callers too
  * @returns {string | undefined}
  */
-export function runSessionCommand(lines, conversationId, text, accountId) {
+export function runSessionCommand(lines, conversationId, text, accountId, context) {
   const command = parseSessionCommand(text)
   if (command === undefined) return undefined
   if (command.command === 'new') {
@@ -560,6 +568,27 @@ export function runSessionCommand(lines, conversationId, text, accountId) {
     // safer surface is the one that cannot be aimed at the wrong line.
     lines.clear(conversationId, accountId)
     return `已清空当前会话，接下来是一条全新的会话。\n之前的上下文不再使用，也没有别的影响。`
+  }
+  if (command.command === 'status') {
+    // Session-line facts are always available (the store owns them); the
+    // account-level facts ride in `context` — undefined when a caller without
+    // an inbound handler (some tests, some tools) runs a bare command, in
+    // which case /status still works but says only what the lines know.
+    const statusLines = lines.list(conversationId, accountId)
+    const active = lines.active(conversationId, accountId)
+    const activeLine = statusLines.find((candidate) => candidate.sessionId === active)
+    const parts = []
+    if (context?.accountId !== undefined) {
+      parts.push(`账号：${context.accountLabel ? `${context.accountLabel}（${context.accountId}）` : context.accountId}`)
+      if (typeof context.paused === 'boolean') parts.push(`状态：${context.paused ? '已暂停（不收发消息）' : '正常收发'}`)
+      if (context.lastSeenAt) parts.push(`最近收发：${context.lastSeenAt}`)
+      if (context.allowlist) {
+        const source = context.allowlist.source === 'account' ? '本账号专属名单' : '全局名单'
+        parts.push(`发信人白名单：${context.allowlist.senders.length} 人（${source}）`)
+      }
+    }
+    parts.push(`本微信会话共 ${statusLines.length} 条会话线，当前使用第 ${statusLines.findIndex((candidate) => candidate.sessionId === active) + 1 || '?'} 条：${activeLine?.title ?? '(尚无对话)'}`)
+    return parts.join('\n')
   }
   if (command.index === undefined) {
     return `${USE_USAGE}\n\n${lines.render(conversationId, accountId)}`
