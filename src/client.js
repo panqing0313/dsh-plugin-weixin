@@ -2111,6 +2111,70 @@ window.__ModuleLoader__.load({
 			return typeof sessionId === "string" && sessionId.startsWith(SESSION_ID_PREFIX);
 		}
 
+		// Which account a session line belongs to, for the faint ownership hint
+		// on the sidebar row. Only `sessions()` knows the line→account mapping
+		// (the session id's slug is the CONVERSATION's, not the account's, so it
+		// cannot be derived from the id), and the row seat renders for every
+		// session on screen, so the mapping is fetched once per mount and cached
+		// module-wide: the seat must stay cheap, and a failed fetch must never
+		// break the row — the hint is a hint, not a feature the row depends on.
+		let sessionOwnerMap = null; // Map<sessionId, {accountId, accountLabel}>
+		let sessionOwnerFetched = false;
+		// The seat's occupant receives only the row's Session identity — no
+		// injection context — so registerUi parks its ctx here for the fetch.
+		let sessionOwnerCtx = null;
+
+		async function loadSessionOwners(ctx) {
+			if (sessionOwnerFetched) return sessionOwnerMap;
+			sessionOwnerFetched = true;
+			try {
+				const data = await callRemote(() => ctx.remote.weixin.sessions());
+				const map = new Map();
+				for (const conversation of data?.conversations ?? []) {
+					if (typeof conversation?.accountId !== "string" || conversation.accountId === "") continue;
+					for (const line of conversation.lines ?? []) {
+						if (typeof line?.sessionId === "string") {
+							map.set(line.sessionId, { accountId: conversation.accountId, accountLabel: conversation.accountLabel ?? null });
+						}
+					}
+				}
+				console.error("MAP BUILT size=" + map.size);
+							sessionOwnerMap = map;
+			} catch {
+				// Remote not mounted yet, or the host refused: render no hint.
+				sessionOwnerMap = null;
+			}
+			return sessionOwnerMap;
+		}
+
+		/** At most 6 visible characters, then an ellipsis, per the card's spec. */
+		function ownerHintText(text) {
+			const chars = Array.from(typeof text === "string" ? text : "");
+			return chars.length <= 6 ? text : chars.slice(0, 6).join("") + "…";
+		}
+
+		/**
+		 * The faint account hint beside the WeChat mark. Reads the cached
+		 * session→owner map; sessions it cannot attribute (pre-multi-account
+		 * history, a mapping not loaded yet) render no hint at all. The seat
+		 * passes no ctx, so the hook falls back to the one registerUi parked.
+		 */
+		function useSessionOwner(sessionId) {
+			const [owner, setOwner] = react.useState(() => sessionOwnerMap?.get(sessionId) ?? null);
+			react.useEffect(() => {
+				if (!sessionOwnerCtx) return undefined;
+				let alive = true;
+				loadSessionOwners(sessionOwnerCtx).then((map) => {
+					console.error("THEN alive=" + alive + " hit=" + !!map?.get(sessionId));
+								if (alive) setOwner(map?.get(sessionId) ?? null);
+				}).catch(() => {});
+				return () => {
+					alive = false;
+				};
+			}, [sessionId]);
+			return owner;
+		}
+
 		/**
 		 * The row mark for one of this plugin's Sessions.
 		 *
@@ -2125,10 +2189,11 @@ window.__ModuleLoader__.load({
 		 */
 		function SessionRowMark({ sessionId }) {
 			if (!isWeixinSession(sessionId)) return null;
+			const owner = useSessionOwner(sessionId);
 			return createElement("span", {
 					className: "weixin-session-row-mark",
 					"aria-hidden": "true",
-					style: { display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" },
+					style: { display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", gap: 4 },
 				},
 				createElement("svg", {
 					width: 14,
@@ -2137,7 +2202,23 @@ window.__ModuleLoader__.load({
 					fill: WECHAT_GREEN,
 					focusable: "false",
 					"aria-hidden": "true",
-				}, createElement("path", { d: WECHAT_GLYPH })));
+				}, createElement("path", { d: WECHAT_GLYPH })),
+				// The faint ownership hint: which WeChat account this row belongs
+				// to, capped at 6 characters. Decorative like the glyph itself, and
+				// absent when the line cannot be attributed.
+				owner
+					? createElement("span", {
+						style: {
+							fontSize: 11,
+							lineHeight: "14px",
+							color: C.labelTertiary ?? "var(--dsw-alias-label-tertiary, #9aa0a6)",
+							maxWidth: 84,
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
+						},
+					}, ownerHintText(typeof owner.accountLabel === "string" && owner.accountLabel !== "" ? owner.accountLabel : owner.accountId))
+					: null);
 		}
 
 		// This list must NOT name the namespaces: `remote.weixin` only comes into
@@ -2151,6 +2232,10 @@ window.__ModuleLoader__.load({
 
 		function registerUi(ctx) {
 			const { t } = useLocaleText(ctx);
+			// Park the ui context for the row-mark's owner fetch: the seat hands
+			// its occupant the Session identity only, so the hint hook has no ctx
+			// of its own to read remote.weixin.sessions() through.
+			sessionOwnerCtx = ctx;
 			const actions = {
 				noop: async () => {},
 			};

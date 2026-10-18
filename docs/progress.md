@@ -1711,3 +1711,35 @@ Electron 可用，不受影响。
 - 踩坑：辨别力必须只 stash src——把 test 一起 stash 等于把断言也回退，全绿毫无意义。
   `list()` 对缺失 key 会重新合成 base 线（既有回退语义），删光后断言要查落盘文件
   而不是 `list()`。
+
+## 2026-10-18（五）：侧栏会话行的账号弱提醒
+
+### 需求
+
+用户截图圈出侧栏会话行的微信图标旁：多账号下分不清这行会话属于哪个账号，希望加一段
+「微弱的提醒」，只显示 6 个字符、超出带省略号。
+
+### 实现（src/client.js）
+
+- 模块级 `sessionOwnerMap`（`Map<sessionId, {accountId, accountLabel}>`，由
+  `sessions()` 的 `lines[].sessionId` 建映射——sessionId 里的 slug 是会话的不是账号的，
+  不可从 id 推导）+ `sessionOwnerFetched` + `sessionOwnerCtx`（`registerUi` 开头停靠，
+  因为 seat 只传 sessionId 不传 ctx）。
+- `loadSessionOwners(ctx)` fetch once 失败静默；`ownerHintText` 按 code point 截
+  6 字加 `…`；`useSessionOwner(sessionId)` hook（惰性初值 + effect fetch，按 sessionId
+  依赖，卸载置 `alive=false`）。`SessionRowMark` 在 svg 后渲染淡色 span（fontSize 11、
+  maxWidth 84、ellipsis），无归属渲染不出。
+- 归属与卡片同源（`/api/weixin/sessions`），历史裸 key 会话对不上号 → 只有图标。
+
+### 测试（test/client-session-row-mark.test.js，8 条）
+
+- `mountRowSeat({conversations})` / `markFor(sessionId, {conversations})` 增参；
+  新 helper `stringChildren(tree)`；新测试 2 条（6 字截断提示、无归属无提示但图标在）。
+- **两个教训**：(1) vm sandbox 里没有 `console`——src 里插桩 `console.error` 静默不打印，
+  测试 harness 的 sandbox 必须注入 `console`；(2) walk 树的类型守卫顺序——
+  `typeof tree !== 'object'` 放在字符串分支**之前**会把所有文本子节点丢弃，
+  `stringChildren` 的正确顺序是 array → string → object。
+- 调试弯路：用 `node -e` 字符串替换做插桩，TAB 缩进不匹配时**静默不生效**，
+  得出「loadSessionOwners 没跑」的错误结论；可靠插桩必须用 edit 工具。
+  诊断插桩绝不能用 `git checkout -- <file>` 还原——会把整天的测试改动一起清掉。
+- 辨别力：stash src/client.js → 恰好 1 红（faint account hint 测试）；全量 313 pass。

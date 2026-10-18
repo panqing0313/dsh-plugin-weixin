@@ -173,7 +173,7 @@ function createHooks() {
  * plugin cannot silently hand this test a different component than the one the
  * host would render in a Session row.
  */
-async function mountRowSeat() {
+async function mountRowSeat({ conversations } = {}) {
   const source = fs.readFileSync(CLIENT_PATH, 'utf8')
   const hooks = createHooks()
   const registrations = new Map()
@@ -189,7 +189,7 @@ async function mountRowSeat() {
       },
       async cancel() {},
       async sessions() {
-        return { conversations: [] }
+        return { conversations: conversations ?? [] }
       },
     },
     weixinAsr: {
@@ -245,7 +245,7 @@ async function mountRowSeat() {
     throw new Error(`client.js required an unseeded module: ${spec}`)
   }
 
-  const sandbox = { window: { __ModuleLoader__: { load: (r) => { registration = r } } } }
+  const sandbox = { console, window: { __ModuleLoader__: { load: (r) => { registration = r } } } }
   let registration
   vm.createContext(sandbox)
   new vm.Script(source, { filename: CLIENT_PATH }).runInContext(sandbox)
@@ -257,13 +257,29 @@ async function mountRowSeat() {
 }
 
 /** Render the row seat for one Session id, exactly as the host's row does. */
-async function markFor(sessionId) {
-  const { hooks, entry } = await mountRowSeat()
+async function markFor(sessionId, { conversations } = {}) {
+  const { hooks, entry } = await mountRowSeat({ conversations })
   // `renderSlot(seat, { sessionId })` hands the occupant the row's Session
   // identity and nothing else — no status, no title. The root is the element
   // the seat renders, so the boot flush already carries the prop.
   hooks.setRoot({ type: entry.component, props: { sessionId } })
   return { tree: await hooks.flush(), hooks }
+}
+
+/** Every string child in the tree, so the owner hint can be read back. */
+function stringChildren(tree, into = []) {
+  if (tree === null || tree === undefined) return into
+  if (Array.isArray(tree)) {
+    tree.forEach((child) => stringChildren(child, into))
+    return into
+  }
+  // The harness createElement keeps string children on the children array
+  // verbatim, so strings arrive as leaves in their own right; the object
+  // guard must come after this branch, never before it.
+  if (typeof tree === 'string') { into.push(tree); return into }
+  if (typeof tree !== 'object') return into
+  ;(tree.children ?? []).forEach((child) => stringChildren(child, into))
+  return into
 }
 
 /** Every `path` element's `d`, so a glyph can be compared by shape. */
@@ -360,4 +376,41 @@ test('the mark claims the seat without shadowing the host\'s own occupant', asyn
   // this mark from displacing ui-schedule's clock on a row that has both.
   assert.equal(entry.options.name, ROW_SEAT)
   assert.ok(entry.options.id && entry.options.id !== 'schedule-mark', 'must occupy its own cell')
+})
+
+test('the row shows a faint account hint for a session line the mapping knows', async () => {
+  // The hint is the multi-account ownership whisper: which WeChat account a
+  // session row belongs to, sourced from the same sessions() the card reads.
+  // The harness flush() drains effects for real, so the owner fetch runs; the
+  // re-render it schedules settles on the scheduled microtask chain, which
+  // needs a macrotask yield before a second flush can paint the hint.
+  const sessionId = 'weixin-room-1--abc123'
+  const marked = await markFor(sessionId, {
+    conversations: [{
+      conversationId: 'aaaaaaaaaaaa-im-bot:room-1',
+      accountId: 'aaaaaaaaaaaa@im.bot',
+      accountLabel: '工作号备注名很长很长',
+      active: sessionId,
+      lines: [{ sessionId, title: 't', createdAt: 1 }],
+    }],
+  })
+  for (let i=0;i<6;i++) { await new Promise(r=>setTimeout(r,5)); }
+  const tree = await marked.hooks.flush()
+    .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    .then(() => marked.hooks.flush())
+    const text = stringChildren(tree)
+      const hint = text.find((s) => s.includes('…'))
+  assert.ok(hint, `a labelled line must show the account hint, saw ${JSON.stringify(text)}`)
+  // Six characters, then the ellipsis — the spec's cap.
+  assert.equal(Array.from(hint).length, 7, 'six characters plus the ellipsis')
+  assert.ok(hint.startsWith('工作号备注名'.slice(0, 6)), 'the label is truncated at six characters')
+})
+
+test('an unattributed session shows no hint and still shows the glyph', async () => {
+  // Pre-multi-account lines have no owner the mapping knows; the hint must be
+  // silent there rather than guessing — but the WeChat mark stays.
+  const { tree } = await markFor('weixin-room-1--no-owner')
+  const svg = types(tree).find((t) => t === 'svg')
+  assert.ok(svg, 'the glyph must survive without an owner')
+  assert.deepEqual(stringChildren(tree).filter((s) => s.includes('…')), [], 'no hint without attribution')
 })
