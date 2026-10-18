@@ -76,3 +76,16 @@ test('the card reads the language from the service DSH actually provides', () =>
   assert.match(hook[0], /typeof ctx\.locale\?\.current === "function"/)
   assert.match(hook[0], /startsWith\("zh"\)/, 'the zh test must be explicit')
 })
+test('the About section never passes a style object as an element type', () => {
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const about = client.match(/function AboutSection\(\{ ctx, t \}\) \{[\s\S]*?\n\t\t\}/)
+  assert.ok(about, 'AboutSection must stay findable')
+  // The white screen: createElement(panelStyle, ...) — the STYLE OBJECT was
+  // passed as the element TYPE, which throws "object is not a valid React
+  // element type" the moment the tab renders, blanking the whole panel.
+  // Every createElement call in the section must start with a string type or
+  // a component reference, never with one of the style constants.
+  const badCalls = about[0].match(/createElement\((?:panelStyle|panelTitleStyle|hintStyle|versionPill|linkStyle|captionStyle|buttonStyle)\b/g) ?? []
+  assert.deepEqual(badCalls, [], 'a style object is not an element type: pass it on the style prop instead')
+  assert.match(about[0], /createElement\("div", \{ style: panelStyle \}/, 'the panel rows must carry panelStyle on props')
+})

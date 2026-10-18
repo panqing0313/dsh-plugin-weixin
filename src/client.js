@@ -1174,7 +1174,11 @@ window.__ModuleLoader__.load({
 				fontSize: 12,
 				lineHeight: "18px",
 			};
-			const row = (title, body) => createElement(panelStyle, null,
+			// createElement's first argument is the element TYPE, not its style:
+			// passing the panelStyle OBJECT as the type is exactly the white
+			// screen the user saw ("object is not a valid React element type"
+			// thrown the moment this tab rendered). The style rides on props.
+			const row = (title, body) => createElement("div", { style: panelStyle },
 				createElement("p", { style: panelTitleStyle }, title),
 				body);
 			// A numbered step line for the usage guide. The number sits in a
