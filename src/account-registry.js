@@ -112,3 +112,54 @@ export function setAccountLabel(accountId, label, warn = () => {}) {
   else entry.label = trimmed
   writeRegistry(registry, warn)
 }
+
+/**
+ * Per-account sender allowlist override.
+ *
+ * The global allowlist in config.json applies to every account; an entry here
+ * narrows (or replaces) it for ONE account. Stored in the registry — not in
+ * the credential file — because the vendored credential writer rewrites that
+ * file on every re-login and would silently drop the override.
+ *
+ * An empty/undefined senders list means "no override": the global list rules.
+ * This cannot be confused with "deny all" — deny-all is what the GLOBAL list
+ * being empty does, and an account-level override that denied everything
+ * would make the account unreachable with no way back except editing JSON.
+ * Operators who want an account silent pause it instead.
+ *
+ * @param {string} accountId
+ * @param {string[] | undefined} senders sender ids to allow for this account only
+ * @param {string[] | undefined} [chats] optional conversation ids for this account
+ */
+export function setAccountAllowlist(accountId, senders, chats, warn = () => {}) {
+  const registry = readRegistry()
+  const entry = ensureAccountEntry(registry, accountId)
+  const clean = (list) => (Array.isArray(list) ? list.map((item) => String(item).trim()).filter((item) => item !== '') : [])
+  const sendersClean = clean(senders)
+  const chatsClean = clean(chats)
+  if (sendersClean.length === 0) delete entry.allowedSenders
+  else entry.allowedSenders = sendersClean
+  if (chatsClean.length === 0) delete entry.allowedChats
+  else entry.allowedChats = chatsClean
+  writeRegistry(registry, warn)
+}
+
+/**
+ * The effective allowlist for one account: the account's own override when it
+ * has one, the global config otherwise. Returned shape matches what
+ * {@link import('./security/allowlist.js').isAllowedSender} consumes.
+ *
+ * @param {string} accountId
+ * @param {{ allowedSenders?: string[], allowedChats?: string[] }} config the global plugin config
+ * @returns {{ allowedSenders: string[], allowedChats: string[] }}
+ */
+export function allowlistForAccount(accountId, config) {
+  const entry = typeof accountId === 'string' && accountId !== '' ? readRegistry()[accountId] : undefined
+  const senders = Array.isArray(entry?.allowedSenders) && entry.allowedSenders.length > 0
+    ? entry.allowedSenders
+    : (config.allowedSenders ?? [])
+  const chats = Array.isArray(entry?.allowedChats) && entry.allowedChats.length > 0
+    ? entry.allowedChats
+    : (config.allowedChats ?? [])
+  return { allowedSenders: senders, allowedChats: chats }
+}

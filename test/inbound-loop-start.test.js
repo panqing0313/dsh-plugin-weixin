@@ -480,3 +480,103 @@ test('a paused account gets no loop on bring-up; resuming brings it back without
     )
   })
 })
+
+/**
+ * A fake iLink endpoint that hands out ONE queued inbound message, then polls
+ * empty — the minimal shape for proving what the allowlist does to a real
+ * message travelling the real dispatch path (normalizeInbound → handler).
+ */
+async function startOneMessageServer() {
+  const seen = { getupdates: 0, refusals: 0 }
+  const server = http.createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      const url = new URL(req.url, 'http://x')
+      res.setHeader('content-type', 'application/json')
+      if (url.pathname === '/ilink/bot/getconfig') {
+        const parsed = body ? JSON.parse(body) : {}
+        if (!parsed.ilink_user_id) return res.end(JSON.stringify({ ret: -2, errmsg: 'ilink_user_id required' }))
+        return res.end(JSON.stringify({ ret: 0, typing_ticket: 'TT' }))
+      }
+      if (url.pathname === '/ilink/bot/getupdates') {
+        seen.getupdates += 1
+        // Every poll hands out a FRESH message (unique id), because the test
+        // consumes one message before the override is set and still needs one
+        // after the forced re-arm to observe the refusal.
+        const msgs = [{
+          message_id: `mid-${seen.getupdates}`,
+          message_state: 0,
+          from_user_id: ALLOWED,
+          group_id: '',
+          context_token: 'ctx-1',
+          item_list: [{ type: 1, text_item: { text: 'hello' } }],
+        }]
+        return res.end(JSON.stringify({ ret: 0, get_updates_buf: 'buf', longpolling_timeout_ms: 50, msgs }))
+      }
+      res.end(JSON.stringify({ ret: 0 }))
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, seen }
+}
+
+test('an account-level allowlist override narrows only that account', async () => {
+  await withPlugin(async ({ root, lines, provided, seen, baseUrl, registerServer }) => {
+    const { setAccountAllowlist } = await import(path.join(PROJECT_ROOT, 'src', 'account-registry.js'))
+
+    seedAccount(root, { baseUrl })
+    await waitFor(() => seen.getupdates > 0, 'bot1 to start polling')
+
+    // Both accounts get a one-message server of their own: the refusal and the
+    // acceptance both have to be observable per account, so the message has to
+    // actually arrive at each. Redirecting an account's record at a new fake
+    // server is the same shape a re-bind produces.
+    const first = await startOneMessageServer()
+    const second = await startOneMessageServer()
+    registerServer(first.server)
+    registerServer(second.server)
+    seedAccount(root, { baseUrl: first.baseUrl, token: 'tok-1b' })
+    seedAccount(root, { accountId: 'bot2', token: 'tok-2', baseUrl: second.baseUrl })
+    seedAccount(root, { baseUrl: first.baseUrl, token: 'tok-1b' })
+    loginService(provided).onAccountControlChange(ACCOUNT_ID)
+    await waitFor(() => first.seen.getupdates > 0, 'bot1 to come up on the one-message server')
+    loginService(provided).onAccountBound('bot2')
+    await waitFor(() => second.seen.getupdates > 0, 'bot2 to come up on its one-message server')
+
+    // bot1's override omits the globally-allowed sender entirely.
+    setAccountAllowlist('bot1', ['someone-else'], undefined)
+    loginService(provided).onAccountControlChange(ACCOUNT_ID)
+    await waitFor(
+      () => lines.some((line) => line.includes(`refused message from ${ALLOWED}`)),
+      'bot1 to refuse the globally-allowed sender by override',
+    )
+    await settle(300)
+    // The warn line (what reaches the host log) carries the denial reason; the
+    // full effective list goes to the vendor file log, redirected here to a
+    // private directory — read it back to prove the override (not the global
+    // list) ruled.
+    assert.ok(
+      lines.some((line) => line.includes(`refused message from ${ALLOWED}`) && line.includes('is not on the allowlist')),
+      'the refusal must be reported with the reason',
+    )
+    // The vendor logger knows its own resolved path (MAIN_LOG_DIR is captured
+    // at module load, after this file set DSH_WEIXIN_LOG_DIR) — never rebuild
+    // the path here: the file name uses the LOCAL date, which differs from
+    // toISOString() under a UTC+8 offset.
+    const { logger: vendorLogger } = await import('../vendor/openclaw-weixin/util/logger.js')
+    const fileLogText = fs.readFileSync(vendorLogger.getLogFilePath(), 'utf8')
+    // JSON-line encoding escapes the inner quotes, so match the escaped shape
+    // the file actually holds: allowedSenders=[\"someone-else\"].
+    assert.ok(
+      fileLogText.includes('allowedSenders=[' + JSON.stringify('someone-else').slice(1, -1).replace(/"/g, '\\"') + ']')
+        || fileLogText.includes('\\"someone-else\\"'),
+      'the file log must show the EFFECTIVE list, so the operator can see exactly what ruled',
+    )
+    assert.ok(second.seen.getupdates > 1, 'bot2 must keep polling after its message was accepted, not refused')
+    assert.ok(
+      !lines.some((line) => line.includes('refused message') && line.includes('bot2')),
+      'the override on bot1 must not reach bot2',
+    )
+  })
+})

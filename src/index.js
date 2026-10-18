@@ -32,7 +32,7 @@ import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/a
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
-import { isAccountPaused, touchAccount } from './account-registry.js'
+import { isAccountPaused, touchAccount, allowlistForAccount } from './account-registry.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -304,7 +304,7 @@ export function apply(ctx, config) {
     // currently saved". One call touching one account must never blink another
     // account's live transport — that is why the map lookup happens per call
     // and why a per-account failure only skips that account.
-    const bringUpLoop = async (wantedAccountId) => {
+    const bringUpLoop = async (wantedAccountId, { force = false } = {}) => {
       await setup
       if (cancelled) return
 
@@ -321,7 +321,7 @@ export function apply(ctx, config) {
       for (const account of accounts) {
         if (cancelled) return
         try {
-          await bringUpAccount(account)
+          await bringUpAccount(account, { force })
         } catch (error) {
           // One bad credential (corrupt file, unreachable CDN, rejected ticket)
           // must not stop the accounts after it from being served.
@@ -332,13 +332,19 @@ export function apply(ctx, config) {
 
     /**
      * Arm (or re-arm) the long poll for exactly one account.
+     *
+     * `force` skips the same-credential dedup guard: the handler resolves the
+     * account's allowlist once per bring-up, so a settings-card allowlist
+     * change must re-arm even though the token is unchanged — otherwise the
+     * override sits in the registry while the running handler keeps ruling
+     * with the list it read when it came up.
      */
-    const bringUpAccount = async (account) => {
+    const bringUpAccount = async (account, { force = false } = {}) => {
       const running = transports.get(account.accountId)
       // Nothing to do when the running loop already holds this credential: a
       // repeat call must not blink the connection, and the first call after a
       // login is the only one that has work to do.
-      if (running !== undefined && running.token === account.token) {
+      if (!force && running !== undefined && running.token === account.token) {
         log(`account ${account.accountId} is already being listened to; keeping the running loop`)
         return
       }
@@ -431,8 +437,11 @@ export function apply(ctx, config) {
     // One hand-off at a time. A login can complete while the previous hand-off
     // is still tearing its transport down, and interleaving them would leave two
     // loops running or none.
-    const startLoop = (wantedAccountId) => {
-      const run = handoff.then(() => bringUpLoop(wantedAccountId), () => bringUpLoop(wantedAccountId))
+    const startLoop = (wantedAccountId, { force = false } = {}) => {
+      const run = handoff.then(
+        () => bringUpLoop(wantedAccountId, { force }),
+        () => bringUpLoop(wantedAccountId, { force }),
+      )
       handoff = run.then(
         () => {},
         () => {},
@@ -474,7 +483,10 @@ export function apply(ctx, config) {
         running.stop().catch((error) => warn(`pause stop failed for ${id}: ${String(error)}`))
         log(`account ${id} paused; its inbound loop is stopped`)
       } else if (!disabled) {
-        startLoop(id).catch((error) => warn(`resume after unpause failed: ${String(error)}`))
+        // Forced: the resume may also follow an allowlist change (the card's
+        // allowlist method lands here), and the handler resolves that list once
+        // per bring-up — a same-credential resume must still rebuild it.
+        startLoop(id, { force: true }).catch((error) => warn(`resume after unpause failed: ${String(error)}`))
       }
     }
     if (loginController !== undefined) loginController.onAccountControlChange = onAccountControlChange
@@ -660,6 +672,12 @@ export function weixinSourceBlock(message) {
 }
 
 function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd }) {
+  // The effective allowlist is per account: an account-level override in the
+  // registry narrows (or replaces) the global list. Resolved once per handler
+  // — the same "deployment property, not message property" rule as mediaDirs.
+  // `accountId` is always set here (bringUpAccount passes it), but the
+  // fallback keeps the helper's contract honest.
+  const accountConfig = { ...config, ...allowlistForAccount(accountId, config) }
   return async (message) => {
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
@@ -678,17 +696,17 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
     //    critically — before any download. An unauthorized sender must not be
     //    able to make this host issue requests to Tencent's CDN, so nothing
     //    below this point may run for a denied message.
-    if (!isAllowedSender(config, message.senderId, message.conversationId)) {
+    if (!isAllowedSender(accountConfig, message.senderId, message.conversationId)) {
       // Log the refusal to the file logger too, with the full allowlist: the
       // rebind flow generates a fresh sender id per bot, so the most common
       // refusal is a stale allowedSenders entry, and this line is both the
       // diagnosis and the exact value the operator needs to paste into config.
       fileLog.info(
         `refused message from ${message.senderId} (conversation ${message.conversationId}): ` +
-          `${denialReason(config, message.senderId, message.conversationId)}; ` +
-          `allowedSenders=${JSON.stringify(config.allowedSenders ?? [])}`,
+          `${denialReason(accountConfig, message.senderId, message.conversationId)}; ` +
+          `allowedSenders=${JSON.stringify(accountConfig.allowedSenders ?? [])}`,
       )
-      warn(`refused message from ${message.senderId}: ${denialReason(config, message.senderId, message.conversationId)}`)
+      warn(`refused message from ${message.senderId}: ${denialReason(accountConfig, message.senderId, message.conversationId)}`)
       return
     }
 

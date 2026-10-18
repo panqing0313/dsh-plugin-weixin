@@ -18,7 +18,7 @@ import test, { after } from 'node:test'
 process.env.DSH_WEIXIN_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-registry-'))
 after(() => fs.rmSync(process.env.DSH_WEIXIN_STATE_DIR, { recursive: true, force: true }))
 
-const { registryFile, readRegistry, writeRegistry, ensureAccountEntry, touchAccount, setAccountPaused, isAccountPaused, setAccountLabel } =
+const { registryFile, readRegistry, writeRegistry, ensureAccountEntry, touchAccount, setAccountPaused, isAccountPaused, setAccountLabel, setAccountAllowlist, allowlistForAccount } =
   await import('../src/account-registry.js')
 
 const warnings = []
@@ -95,4 +95,37 @@ test('label set, label cleared, and re-binding an account keeps both', () => {
   const entry = readRegistry().bot1
   assert.equal(entry.label, '妈妈的微信')
   assert.equal(entry.paused, false)
+})
+
+test('allowlist override set, effective, cleared, and kept across a re-touch', () => {
+  // (destructured at top-level import)
+
+  // An override lands on the entry; an empty chats list is a non-override.
+  setAccountAllowlist('bot1', ['friend-a'], undefined, warn)
+  const entry = readRegistry().bot1
+  assert.deepEqual(entry.allowedSenders, ['friend-a'])
+  assert.equal(entry.allowedChats, undefined, 'no chats override must not become an empty list')
+
+  // Effective value: the override wins, others fall back to the global config.
+  assert.deepEqual(
+    allowlistForAccount('bot1', { allowedSenders: ['global-1'] }),
+    { allowedSenders: ['friend-a'], allowedChats: [] },
+  )
+  assert.deepEqual(
+    allowlistForAccount('bot2', { allowedSenders: ['global-1'], allowedChats: ['room-9'] }),
+    { allowedSenders: ['global-1'], allowedChats: ['room-9'] },
+    'an account without an override reads the global config',
+  )
+  assert.deepEqual(allowlistForAccount('never-seen', {}), { allowedSenders: [], allowedChats: [] })
+
+  // Empty senders is a CLEAR: the global list rules again (never deny-all).
+  setAccountAllowlist('bot1', [], undefined, warn)
+  assert.equal(readRegistry().bot1.allowedSenders, undefined)
+  assert.deepEqual(allowlistForAccount('bot1', { allowedSenders: ['global-1'] }), { allowedSenders: ['global-1'], allowedChats: [] })
+
+  // Re-touch (a re-bind or a seen message) must not wipe the override.
+  setAccountAllowlist('bot1', ['friend-a'], ['room-1'], warn)
+  touchAccount('bot1', warn)
+  assert.deepEqual(readRegistry().bot1.allowedSenders, ['friend-a'])
+  assert.deepEqual(readRegistry().bot1.allowedChats, ['room-1'])
 })

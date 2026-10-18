@@ -211,6 +211,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
     assert.deepEqual(
       [...methods].sort(),
       [
+        'weixin/allowlist',
         'weixin/cancel',
         'weixin/label',
         'weixin/logout',

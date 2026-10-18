@@ -19,7 +19,8 @@ import {
 import { logger } from "../vendor/openclaw-weixin/util/logger.js";
 import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { stateDir } from "./state.js";
-import { isAccountPaused, readRegistry, setAccountLabel, setAccountPaused } from "./account-registry.js";
+import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist, setAccountLabel, setAccountPaused } from "./account-registry.js";
+import { readSavedConfig } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
 import { SessionLines } from "./sessions.js";
@@ -304,12 +305,18 @@ export class WeixinLoginController extends TypertRemoteService {
                     // outside the credential on purpose (see account-registry.js).
                     // A missing entry means "never touched" — defaults, not an error.
                     const entry = readRegistry()[id] ?? {};
+                    // The EFFECTIVE allowlist for this account (account override
+                    // over the global config), so the card shows what actually
+                    // rules this account rather than one layer of it.
+                    const effective = allowlistForAccount(id, readSavedConfig());
                     accounts.push({
                         accountId: id,
                         userId: acct.userId ?? null,
                         label: typeof entry.label === "string" ? entry.label : null,
                         paused: isAccountPaused(id),
                         lastSeenAt: typeof entry.lastSeenAt === "string" ? entry.lastSeenAt : null,
+                        allowedSenders: effective.allowedSenders,
+                        allowedChats: effective.allowedChats,
                     });
                 }
             } catch {
@@ -360,6 +367,30 @@ export class WeixinLoginController extends TypertRemoteService {
         const id = String(accountId ?? "").trim();
         if (!id) throw new RemoteError("account id is required");
         setAccountLabel(id, typeof text === "string" ? text : "", (m) => logger.warn(m));
+        return { accountId: id };
+    }
+
+    /**
+     * Set one account's sender allowlist override.
+     *
+     * Empty senders clear the override (the global config rules again) — an
+     * account-level deny-all would strand the account with no path back, so
+     * operators who want silence pause the account instead. Setting values
+     * takes effect on the account's NEXT message (the handler resolves the
+     * list per bring-up); no reload needed.
+     */
+    async allowlist(accountId, senders, chats) {
+        const id = String(accountId ?? "").trim();
+        if (!id) throw new RemoteError("account id is required");
+        // The card sends one comma/newline-separated string per list (its
+        // codec layer only has string codecs); arrays are accepted too.
+        const split = (value) => (Array.isArray(value) ? value : String(value ?? "").split(/[\n,]/));
+        setAccountAllowlist(id, split(senders), split(chats), (m) => logger.warn(m));
+        // The inbound handler reads the allowlist once per bring-up, so saving
+        // alone would leave the running loop ruling with the old list. Re-arm
+        // now — with the dedup guard forced — so the change acts on the very
+        // next message, like pause/resume does.
+        this.onAccountControlChange?.(id);
         return { accountId: id };
     }
 
@@ -459,4 +490,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "pause", "resume", "label"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "pause", "resume", "label", "allowlist"]);

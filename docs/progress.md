@@ -1580,3 +1580,51 @@ test/client-remote.test.js` 退回阶段 1 → 两条新行为测试恰好 **2 �
 - 测试里断言「另一个账号有 key」前先想清楚它是否真的发生过写入：`list()` 刻意
   不落盘（首条线按需合成），只读不写的账号在文件里没有 key 是预期行为。
 - heredoc 追加测试时撇号（`account's`）会闭合单引号字符串——`node --check` 先行。
+
+## 2026-10-18：多账号阶段 4 —— 白名单按账号分层，改动立即生效
+
+### 需求与设计
+
+全局 `allowedSenders`/`allowedChats`（config.json）对每个账号一视同仁；多账号后需要
+**按账号收窄**：某个账号只允许特定发送者，另一个账号仍走全局白名单。
+
+- 覆盖存**账号登记表**（`accounts-registry.json`），不存凭证文件——vendor 的凭证
+  写入器每次重登都会重写该文件，存那里会被静默抹掉。
+- **空覆盖 = 清除**（回退全局），不做账号级 deny-all：想让一个账号安静用 Pause，
+  deny-all 会把账号锁死到只能手改 JSON。
+- 生效规则：账号覆盖 > 全局 config；入站 handler 在**每次 bring-up** 时解析一次
+  生效列表（部署属性，不是消息属性）。
+
+### 真缺陷：改了白名单不生效
+
+测试抓出来的：`startLoop` 的去重守卫「同凭证已在跑就跳过」把白名单变更也挡住了——
+registry 里的覆盖落了盘，但运行中的 handler 还拿着它起来时读到的旧列表。修复：
+`startLoop`/`bringUpLoop`/`bringUpAccount` 加 `{force}`（停旧再起新，只影响目标账
+号），`allowlist()` 远程方法落盘后强制重挂该账号；resume 路径同样强制（resume 也
+可能跟在白名单变更后面）。
+
+### 交付
+
+- `src/account-registry.js`：`setAccountAllowlist`（clean 规整、空删字段）、
+  `allowlistForAccount`（覆盖优先，否则全局）。
+- `src/index.js`：`createInboundHandler` 开头合成 `accountConfig`，白名单检查与
+  拒绝日志全部走生效列表；拒绝的文件日志带完整 `allowedSenders`（重登后 sender id
+  会变，这行既是诊断也是要粘贴的值）。
+- `src/login-remote.js`：`status()` 每账号返回生效白名单（卡片显示「实际管辖」的
+  列表，不是其中一层）；新增 `weixin/allowlist` 远程方法（卡片只发逗号/换行分隔
+  字符串，codec 层没有数组构造器，方法内 split 归一）。
+- `src/client.js`：账号行加 **Allowlist** 按钮（prompt 预填当前生效发送者，留空即
+  清除覆盖回退全局）。
+- 测试：`test/account-registry.test.js` +1（覆盖设置/生效/清除/重触保留），
+  `test/inbound-loop-start.test.js` +1（双账号各接一台可注入消息的 fake server，
+  bot1 覆盖收窄后拒绝全局允许的 sender、bot2 照常接受——钉住强制重挂链）。
+- 辨别力：stash 产品修复后恰好 1 条 handler 测试红（正是新链路），恢复全绿；
+  全量 309 pass。
+
+### 教训
+
+- vendor 文件日志是 JSON-line：内层引号被转义（`[\"someone-else\"]`），文本断言
+  要匹配转义后的形状；文件名用**本地日期**，别用 `toISOString()` 拼路径——直接问
+  vendor logger 的 `getLogFilePath()`。
+- `list()` 刻意不落盘的教训在本阶段再次应验：断言「账号 B 有 key/条目」前先确认
+  B 真的写过。

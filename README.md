@@ -159,6 +159,9 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 
 - **Rename** —— 给账号起个备注名（如「工作号」），只影响显示，存本机
   `~/.dsh/weixin/accounts-registry.json`；
+- **Allowlist** —— 给这一个账号单独设置允许的发送者（逗号分隔，预填当前生效
+  列表）。留空 = 清除覆盖、回退全局白名单；改动**立即生效**，不需要重载。生效
+  规则是账号覆盖优先于全局 `allowedSenders`；
 - **Pause / Resume** —— 暂停一个账号的收信（凭证保留，手机上仍是绑定状态）。
   暂停**立即生效**，不需要重载；被暂停的账号在日志里有明确一行
   （`account "<id>" is paused; not starting its loop`），刻意静音不会被误读成故障；

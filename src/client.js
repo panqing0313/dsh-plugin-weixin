@@ -153,6 +153,19 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/label:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/allowlist`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "allowlist",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "accountId", wire: "accountId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/allowlist:p0`, create: _str } },
+						{ name: "senders", wire: "senders", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/allowlist:p1`, create: _str } },
+						{ name: "chats", wire: "chats", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/allowlist:p2`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/allowlist:result`, create: _statusResult },
+				},
 				// weixinAsr namespace (AsrController)
 				{
 					id: `${PKG}#weixinAsr/listModels`,
@@ -815,6 +828,28 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			const editAllowlist = async (account) => {
+				const current = (account.allowedSenders ?? []).join(", ");
+				const next = globalThis.prompt?.(
+					t(
+						`Allowed senders for ${account.label || account.accountId} (comma-separated; empty = use the global list)`,
+						`给 ${account.label || account.accountId} 设置允许的发送者（逗号分隔；留空 = 用全局白名单）`,
+					),
+					current,
+				);
+				if (typeof next !== "string") return;
+				setBusyAccount(account.accountId);
+				setAccountNotice("");
+				try {
+					await callRemote(() => ctx.remote.weixin.allowlist(account.accountId, next, ""));
+					await refreshStatus();
+				} catch (err) {
+					setAccountNotice(String(err?.message ?? err));
+				} finally {
+					setBusyAccount(null);
+				}
+			};
+
 			const logoutOne = async (account) => {
 				const ok = globalThis.confirm?.(
 					t(
@@ -893,6 +928,10 @@ window.__ModuleLoader__.load({
 									onClick: () => renameAccount(account),
 									style: buttonStyleFor(false),
 								}, t("Rename", "改名称")),
+								createElement("button", {
+									onClick: () => editAllowlist(account),
+									style: buttonStyleFor(false),
+								}, t("Allowlist", "白名单")),
 								createElement("button", {
 									onClick: () => setPausedFor(account, !account.paused),
 									disabled: busy,
