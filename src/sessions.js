@@ -417,6 +417,10 @@ export class SessionLines {
    * @param {string} sessionId
    * @param {string} text
    * @param {string} [accountId] owning bot account; bare key when absent
+   * @returns {string | undefined} the title this call SET (first message
+   *   only), or undefined when the line was already named / not found — the
+   *   caller mirrors a fresh title into the host session so the GUI sidebar
+   *   shows the same text (`titleHostSync` in agent-bridge.js)
    */
   title(conversationId, sessionId, text, accountId) {
     // A conversation whose first message has just arrived has no entry on disk
@@ -429,15 +433,16 @@ export class SessionLines {
       ? existing.lines
       : this.list(conversationId, accountId).slice()
     const line = lines.find((candidate) => candidate.sessionId === sessionId)
-    if (line === undefined) return
+    if (line === undefined) return undefined
     // Only the first message names a line: re-titling on every message would
     // make `/list` show whatever was said most recently.
-    if (typeof line.title === 'string' && line.title !== '') return
+    if (typeof line.title === 'string' && line.title !== '') return undefined
     const now = new Date().toISOString()
     if (line.createdAt === undefined) line.createdAt = now
     line.lastUsedAt = now
     line.title = titledWithAccount(text, accountId)
     this.#set(key, { lines, active: existing?.active ?? sessionId })
+    return line.title
   }
 
   /**

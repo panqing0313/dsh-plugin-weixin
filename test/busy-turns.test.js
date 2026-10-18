@@ -311,3 +311,107 @@ test('a failed model turn is answered immediately instead of blocking the queue'
   const next = await second
   assert.equal(next.text, 'done', 'the next message must run normally after a failure')
 })
+
+test('the first message mirrors its fresh line title into the host sessionTitle', async () => {
+  // The GUI sidebar renders the HOST's title, not the store's, so a fresh
+  // `label: message` title must be mirrored through sessionTitle.rename —
+  // the same call the host's own rename dialog makes. The store title stays
+  // the source of truth: a mirror failure is logged, never fatal.
+  fs.rmSync(path.join(process.env.DSH_WEIXIN_STATE_DIR ?? '', 'sessions.json'), { force: true })
+  const fake = fakeAgent()
+  const renames = []
+  const agents = {
+    get: () => undefined,
+    async create() { return { agent: fake.agent, dispose: async () => {} } },
+  }
+  const ctx = {
+    get: (n) => {
+      if (n === 'agents') return agents
+      if (n === 'sessionTitle') return { rename: (session, title) => { renames.push({ id: session.id, title }) } }
+      return undefined
+    },
+  }
+  const { AgentBridge } = await import('../src/agent-bridge.js')
+  const { SessionLines } = await import('../src/sessions.js')
+  const bridge = new AgentBridge({
+    ctx,
+    cwd: '/tmp/busy-test',
+    pollMs: 20,
+    maxWaitMs: 3000,
+    lines: new SessionLines({ warn: () => {} }),
+  })
+
+  const first = bridge.deliver({ conversationId: 'mirror-room', text: 'first' })
+  setTimeout(() => fake.release('done'), 300)
+  const receipt = await first
+  assert.equal(receipt.text, 'done')
+
+  // Exactly one mirror, carrying the store's prefixed title to the same
+  // session the message ran in.
+  assert.equal(renames.length, 1, 'only the first message mirrors a title')
+  // The mirror forwards the LIVE agent's session (the fakeAgent fixture id),
+  // not a recomputed base id — the same session the message runs in.
+  assert.equal(renames[0].id, 'weixin-room-1')
+  assert.equal(renames[0].title, 'first', 'no label is set, so the bare-key line has no prefix')
+
+  // A second message must NOT rename again — the store already named the
+  // line, and the host title must stay pinned to the first message.
+  const second = bridge.deliver({ conversationId: 'mirror-room', text: 'second' })
+  setTimeout(() => fake.release('done 2'), 300)
+  await second
+  assert.equal(renames.length, 1, 'a later message never renames')
+
+  // A mirror failure (host service absent) must not break the turn.
+  fs.rmSync(path.join(process.env.DSH_WEIXIN_STATE_DIR ?? '', 'sessions.json'), { force: true })
+  const fake2 = fakeAgent()
+  const agents2 = {
+    get: () => undefined,
+    async create() { return { agent: fake2.agent, dispose: async () => {} } },
+  }
+  const ctx2 = { get: (n) => (n === 'agents' ? agents2 : undefined) }
+  const bridge2 = new AgentBridge({
+    ctx: ctx2,
+    cwd: '/tmp/busy-test',
+    pollMs: 20,
+    maxWaitMs: 3000,
+    lines: new SessionLines({ warn: () => {} }),
+  })
+  const only = bridge2.deliver({ conversationId: 'mirror-room-2', text: 'only' })
+  setTimeout(() => fake2.release('done'), 300)
+  const receipt2 = await only
+  assert.equal(receipt2.text, 'done', 'a missing sessionTitle service must not fail delivery')
+})
+
+test('the store title carries the account prefix the host mirror receives', async () => {
+  // Scoped lines are titled `label: message`; the mirror must forward THAT
+  // text, so the sidebar shows the same attribution /list does.
+  fs.rmSync(path.join(process.env.DSH_WEIXIN_STATE_DIR ?? '', 'sessions.json'), { force: true })
+  const fake = fakeAgent()
+  const renames = []
+  const agents = {
+    get: () => undefined,
+    async create() { return { agent: fake.agent, dispose: async () => {} } },
+  }
+  const ctx = {
+    get: (n) => {
+      if (n === 'agents') return agents
+      if (n === 'sessionTitle') return { rename: (session, title) => { renames.push(title) } }
+      return undefined
+    },
+  }
+  const { AgentBridge } = await import('../src/agent-bridge.js')
+  const { SessionLines } = await import('../src/sessions.js')
+  const bridge = new AgentBridge({
+    ctx,
+    cwd: '/tmp/busy-test',
+    pollMs: 20,
+    maxWaitMs: 3000,
+    lines: new SessionLines({ warn: () => {} }),
+  })
+  const account = 'c0ffee000000@im.bot'
+
+  const turn = bridge.deliver({ conversationId: 'mirror-cn', text: '你好', accountId: account })
+  setTimeout(() => fake.release('done'), 300)
+  await turn
+  assert.deepEqual(renames, ['c0ffee000000: 你好'])
+})

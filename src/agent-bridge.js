@@ -481,7 +481,17 @@ export class AgentBridge {
     // Name the line after the first message that runs in it. Done before the
     // turn so `/list` shows what the topic is even while the first reply is
     // still being written; a later message never renames it.
-    if (sessionId !== undefined) this.lines.title(conversationId, sessionId, text, accountId)
+    // A freshly set title is ALSO mirrored into the host session
+    // (sessionTitle.rename): the GUI sidebar renders the HOST's title, not
+    // this store's, so without the mirror the sidebar shows its own
+    // AI-generated name while /list and the card show `label: message`.
+    // Best-effort: the store title is the source of truth; a failed host
+    // rename (service absent, session not live, title rejected) only costs
+    // the sidebar echo, never the message.
+    if (sessionId !== undefined) {
+      const storeTitle = this.lines.title(conversationId, sessionId, text, accountId)
+      if (storeTitle !== undefined) void this.#mirrorTitle(record.agent, storeTitle)
+    }
     const mode = busyMessageMode === 'steer' ? 'steer' : 'queue'
 
     if (record.busy) {
@@ -594,6 +604,40 @@ export class AgentBridge {
       if (typeof event?.seq === 'number' && event.seq > seq) seq = event.seq
     }
     return seq
+  }
+
+  /**
+   * Mirror a freshly set line title into the host session, so the GUI
+   * sidebar (which renders the HOST's title, not this store's) shows the
+   * same `label: message` text /list does.
+   *
+   * The host renames through its `sessionTitle` service: rename(session,
+   * title) appends a `session/title` event with source `user`, which pins the
+   * title — the host's own automatic title generation is superseded and later
+   * messages schedule none. That pinning is exactly what we want: the first
+   * WeChat message names the sidebar row and nothing overwrites it.
+   *
+   * Never throws: the store title already stands; this only echoes it to the
+   * sidebar. A missing service (bare CLI), a session not live in the host
+   * store, or a title the host rejects are all logged and dropped.
+   *
+   * @param {any} agent live agent handle from attach()
+   * @param {string} title the title the store just set
+   */
+  #mirrorTitle(agent, title) {
+    try {
+      const session = agent?.session
+      if (session === undefined || typeof session.id !== 'string' || session.id === '') return
+      const titles = this.ctx.get('sessionTitle')
+      if (titles === undefined || typeof titles.rename !== 'function') return
+      titles.rename(session, title)
+      this.log?.(`session title mirrored: ${title}`)
+    } catch (error) {
+      // The host rejects a rename when the session is not live in its store
+      // (cold-start races) or the title normalizes to empty — both leave the
+      // sidebar with its own title, which is cosmetic, so warn and move on.
+      this.errLog?.(`sessionTitle.rename failed (sidebar keeps its own title): ${String(error)}`)
+    }
   }
 
   async #awaitReply({ record, before, onProgress, signal, onLateReply }) {

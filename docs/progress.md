@@ -1762,3 +1762,29 @@ hint 元素，把账号标识写进标题本体**（`备注名: 第一条消息`
 - 辨别力：stash src 三文件 → 恰好 2 红（两条新断言）；全量 313 pass。
 - 教训：往宿主槽位塞第二元素会被挤压两次证明，**文本并入既有字段是最挤不坏的载体**；
   更新既有测试断言时先跑一次看实际形状再改期望，别凭记忆写。
+
+## （七）首条消息把标题镜像进宿主会话（2026-10-18）
+
+（六）落地后用户反馈「新会话没看见改变」：实测确认插件侧已生效（sessions.json 标题
+`panqing: …`），但**侧栏渲染的是宿主的会话标题**（宿主自己用 LLM 起名），不经插件的
+sessions.json。要让侧栏也显示 `备注名: 消息`，必须写宿主的标题。
+
+- **宿主机制**（asar 反汇编确认）：`sessionTitle` 是宿主根 context 的 Cordis 服务
+  （`SessionTitleService`，inject `["sessions","sessionProjections"]`）；
+  `rename(session, title)` 校验 session 在宿主 store 内活跃后
+  `session.append("session/title", { title, source: { kind: "user" } })` —— user 来源
+  **钉住标题**：自动生成被取代、后续消息不再起名。这正是我们要的语义：第一条微信消息
+  定名，宿主不再覆盖。
+- **实现**：`src/sessions.js` `title()` 返回本次**新设**的标题（已有标题/找不到行返回
+  undefined，调用方据此只在首条消息时镜像）；`src/agent-bridge.js` deliver 在
+  `lines.title(...)` 返回新标题时调 `#mirrorTitle(agent, title)`：
+  `ctx.get('sessionTitle').rename(agent.session, title)`。best-effort——服务缺失
+  （纯 CLI）、session 不在宿主 store（冷启动竞态）、标题被拒都只 warn 不抛，store 标题
+  才是事实源；第二条消息永不改名，宿主标题也保持钉在第一条。
+- **测试**（test/busy-turns.test.js +2）：镜像恰一次、携带 store 的前缀标题
+  （`c0ffee000000: 你好`）、第二条消息不再镜像、无 sessionTitle 服务不致投递失败。
+  教训两条：夹具 session.id 是写死的 `weixin-room-1`，断言镜像目标要按夹具值；
+  守卫只应查 `session.id` 是非空字符串——查 `session.append` 会把一切假 agent 挡在门外，
+  而宿主的 rename 并不需要 append 在调用方手上。
+- 辨别力：stash src/agent-bridge.js + src/sessions.js → 恰好 2 红（两条镜像测试）；
+  全量 315 pass。
