@@ -2202,20 +2202,25 @@ window.__ModuleLoader__.load({
 					fill: WECHAT_GREEN,
 					focusable: "false",
 					"aria-hidden": "true",
+					style: { flex: "none" },
 				}, createElement("path", { d: WECHAT_GLYPH })),
 				// The faint ownership hint: which WeChat account this row belongs
 				// to, capped at 6 characters. Decorative like the glyph itself, and
-				// absent when the line cannot be attributed.
+				// absent when the line cannot be attributed. The hint may shrink
+				// (its own ellipsis takes over) under a narrow row; the glyph never
+				// does, so the mark reads as icon-first even when space runs out.
 				owner
 					? createElement("span", {
 						style: {
 							fontSize: 11,
 							lineHeight: "14px",
 							color: C.labelTertiary ?? "var(--dsw-alias-label-tertiary, #9aa0a6)",
-							maxWidth: 84,
+							maxWidth: 64,
 							overflow: "hidden",
 							textOverflow: "ellipsis",
 							whiteSpace: "nowrap",
+							flexShrink: 1,
+							minWidth: 0,
 						},
 					}, ownerHintText(typeof owner.accountLabel === "string" && owner.accountLabel !== "" ? owner.accountLabel : owner.accountId))
 					: null);
