@@ -378,12 +378,10 @@ test('the mark claims the seat without shadowing the host\'s own occupant', asyn
   assert.ok(entry.options.id && entry.options.id !== 'schedule-mark', 'must occupy its own cell')
 })
 
-test('the row shows a faint account hint for a session line the mapping knows', async () => {
-  // The hint is the multi-account ownership whisper: which WeChat account a
-  // session row belongs to, sourced from the same sessions() the card reads.
-  // The harness flush() drains effects for real, so the owner fetch runs; the
-  // re-render it schedules settles on the scheduled microtask chain, which
-  // needs a macrotask yield before a second flush can paint the hint.
+test('the row mark is the plain glyph: the hint moved into the title', async () => {
+  // Two hint-element attempts were squeezed by the host's row, so ownership
+  // moved INTO the title text itself (`备注名: 标题`, sessions.js). The mark
+  // renders the glyph only — a hint span here would restart the squeeze.
   const sessionId = 'weixin-room-1--abc123'
   const marked = await markFor(sessionId, {
     conversations: [{
@@ -398,12 +396,9 @@ test('the row shows a faint account hint for a session line the mapping knows', 
   const tree = await marked.hooks.flush()
     .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
     .then(() => marked.hooks.flush())
-    const text = stringChildren(tree)
-      const hint = text.find((s) => s.includes('…'))
-  assert.ok(hint, `a labelled line must show the account hint, saw ${JSON.stringify(text)}`)
-  // Six characters, then the ellipsis — the spec's cap.
-  assert.equal(Array.from(hint).length, 7, 'six characters plus the ellipsis')
-  assert.ok(hint.startsWith('工作号备注名'.slice(0, 6)), 'the label is truncated at six characters')
+  const text = stringChildren(tree)
+  assert.deepEqual(text.filter((s) => s.includes('…')), [], 'no hint element may come back')
+  assert.ok(types(tree).includes('svg'), 'the glyph stays')
 })
 
 test('an unattributed session shows no hint and still shows the glyph', async () => {

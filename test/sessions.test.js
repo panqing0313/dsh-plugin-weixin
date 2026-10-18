@@ -430,14 +430,17 @@ test('two accounts with the same conversation id keep separate line lists', () =
   assert.ok(!Object.keys(persisted).includes('room-shared'), 'no bare key may exist once accounts are in play')
   // Once B actually mutates (a title of its own), its key appears separately.
   // Note A's active line is its SECOND line (/new made it active), so titles
-  // are matched by active id, not by position.
+  // are matched by active id, not by position. Titles now carry the account
+  // marker in the text itself (`name: title`) — the squeeze-proof replacement
+  // for the hint element — so the assertions read the prefixed shape; there is
+  // no registry label here, so the account id's short form prefixes.
   lines.title(conversationId, lines.active(conversationId, accountB), 'B 的第一条消息', accountB)
   const afterB = readLines()
   assert.ok(Object.keys(afterB).some((key) => key === 'bbbbbbbbbbbb-im-bot:room-shared'), 'account B must have its own key')
-  assert.equal(afterB['bbbbbbbbbbbb-im-bot:room-shared'].lines[0].title, 'B 的第一条消息')
+  assert.equal(afterB['bbbbbbbbbbbb-im-bot:room-shared'].lines[0].title, 'bbbbbbbbbbbb: B 的第一条消息')
   const aEntry = afterB['aaaaaaaaaaaa-im-bot:room-shared']
   const aActive = afterB['aaaaaaaaaaaa-im-bot:room-shared'].active
-  assert.equal(aEntry.lines.find((line) => line.sessionId === aActive)?.title, 'A 的第一条消息', 'A and B titles live under separate keys')
+  assert.equal(aEntry.lines.find((line) => line.sessionId === aActive)?.title, 'aaaaaaaaaaaa: A 的第一条消息', 'A and B titles live under separate keys')
 })
 
 test('/use under one account cannot reach another account\'s lines', () => {

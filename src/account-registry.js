@@ -114,6 +114,26 @@ export function setAccountLabel(accountId, label, warn = () => {}) {
 }
 
 /**
+ * Read one account's label back, for callers that render or prefix with it.
+ *
+ * Read-only and failure-tolerant per the registry's own rule: a missing or
+ * malformed registry must never block messaging, so any problem reads as "no
+ * label" and the caller falls back to the account id.
+ *
+ * @param {string} accountId
+ * @returns {string} the stored label, or '' when there is none
+ */
+export function labelForAccount(accountId) {
+  try {
+    const entry = readRegistry()[String(accountId ?? '').trim()]
+    const label = entry?.label
+    return typeof label === 'string' ? label : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
  * Per-account sender allowlist override.
  *
  * The global allowlist in config.json applies to every account; an entry here

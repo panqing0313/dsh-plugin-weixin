@@ -35,6 +35,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { stateDir } from './state.js'
+import { labelForAccount } from './account-registry.js'
 
 /** Filename under the state root holding every conversation's line list. */
 const LINES_FILE = 'sessions.json'
@@ -202,6 +203,38 @@ export function titleFrom(text, limit = 24) {
   const points = [...flat]
   if (points.length <= limit) return flat
   return `${points.slice(0, limit).join('')}…`
+}
+
+/**
+ * Title for one line, prefixed with the owning account when it has one.
+ *
+ * Multi-account users could not tell which WeChat account a sidebar row
+ * belongs to. A separate hint element beside the row glyph was tried twice
+ * and the host's row squeezed the glyph both times, so the marker now lives
+ * IN the title itself (`备注名: 标题`) — text flows, nothing can be squeezed.
+ * Bare-key lines (pre-multi-account history) stay unprefixed.
+ *
+ * Registry reads are failure-tolerant by its own rule; a missing label falls
+ * back to the short form of the account id, and any problem reads as no
+ * prefix at all rather than blocking the title.
+ *
+ * @param {string} text first user message of the line
+ * @param {string | undefined} accountId owning bot account
+ * @returns {string}
+ */
+export function titledWithAccount(text, accountId) {
+  const title = titleFrom(text)
+  const who = String(accountId ?? '').trim()
+  if (who === '') return title
+  let label = ''
+  try {
+    label = labelForAccount(who)
+  } catch {
+    label = ''
+  }
+  const name = label !== '' ? label : who.split('@')[0]
+  if (name === '') return title
+  return `${name}: ${title}`
 }
 
 /**
@@ -403,7 +436,7 @@ export class SessionLines {
     const now = new Date().toISOString()
     if (line.createdAt === undefined) line.createdAt = now
     line.lastUsedAt = now
-    line.title = titleFrom(text)
+    line.title = titledWithAccount(text, accountId)
     this.#set(key, { lines, active: existing?.active ?? sessionId })
   }
 

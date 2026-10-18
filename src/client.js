@@ -2189,7 +2189,12 @@ window.__ModuleLoader__.load({
 		 */
 		function SessionRowMark({ sessionId }) {
 			if (!isWeixinSession(sessionId)) return null;
-			const owner = useSessionOwner(sessionId);
+			// Ownership moved INTO the title (`备注名: 标题`, see titledWithAccount
+			// in sessions.js) after two hint-element attempts were squeezed by the
+			// host's row — text inside the title flows, nothing competes for
+			// width. The mark is the plain glyph again; useSessionOwner and the
+			// owner fetch stay (the card still reads attribution), only the row
+			// hint element is gone.
 			return createElement("span", {
 					className: "weixin-session-row-mark",
 					"aria-hidden": "true",
@@ -2203,28 +2208,7 @@ window.__ModuleLoader__.load({
 					focusable: "false",
 					"aria-hidden": "true",
 					style: { flex: "none" },
-				}, createElement("path", { d: WECHAT_GLYPH })),
-				// The faint ownership hint: which WeChat account this row belongs
-				// to, capped at 6 characters. Decorative like the glyph itself, and
-				// absent when the line cannot be attributed. Both children are
-				// FIXED-SIZE (the glyph 14px, the hint a 44px cell) so no row width
-				// can ever make them compete: a flex/maxWidth budget still let the
-				// host's row squeeze the glyph (user screenshot, twice). Overflow
-				// inside the fixed cell falls to its own ellipsis.
-				owner
-					? createElement("span", {
-						style: {
-							fontSize: 11,
-							lineHeight: "14px",
-							color: C.labelTertiary ?? "var(--dsw-alias-label-tertiary, #9aa0a6)",
-							width: 44,
-							flex: "none",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-							whiteSpace: "nowrap",
-						},
-					}, ownerHintText(typeof owner.accountLabel === "string" && owner.accountLabel !== "" ? owner.accountLabel : owner.accountId))
-					: null);
+				}, createElement("path", { d: WECHAT_GLYPH })));
 		}
 
 		// This list must NOT name the namespaces: `remote.weixin` only comes into

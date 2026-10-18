@@ -1743,3 +1743,22 @@ Electron 可用，不受影响。
   得出「loadSessionOwners 没跑」的错误结论；可靠插桩必须用 edit 工具。
   诊断插桩绝不能用 `git checkout -- <file>` 还原——会把整天的测试改动一起清掉。
 - 辨别力：stash src/client.js → 恰好 1 红（faint account hint 测试）；全量 313 pass。
+
+## （六）账号标识并进会话标题（2026-10-18）
+
+用户两轮实机反馈侧栏行内的「弱提醒」元素被宿主挤压（fixed 44px 单元格也没能幸免），
+且本地源码 grep 不到宿主对该槽位的布局约束，无法在插件侧修。采纳用户提议：**放弃独立
+hint 元素，把账号标识写进标题本体**（`备注名: 第一条消息`，用户原话
+「panqing:会话标题 这样」）。
+
+- `src/account-registry.js` 新增 `labelForAccount(accountId)`（只读、容错，失败读作 ''）。
+- `src/sessions.js` 新增 `titledWithAccount(text, accountId)`：账号作用域线标题 =
+  `<label 或账号 id 短形式>: <titleFrom(text)>`；裸 key 线（升级前历史）不加前缀。
+  `title()` 改走它。registry 读取包 try/catch，绝不阻塞命名。
+- `src/client.js` SessionRowMark 撤掉 hint span，回归纯图标；`useSessionOwner`/
+  `loadSessionOwners` 保留（卡片仍读归属）。
+- 测试：`two accounts…` 断言改为读前缀形状；row-mark 的 hint 测试改断言
+  「不再渲染任何带 … 的 hint、svg 仍在」。
+- 辨别力：stash src 三文件 → 恰好 2 红（两条新断言）；全量 313 pass。
+- 教训：往宿主槽位塞第二元素会被挤压两次证明，**文本并入既有字段是最挤不坏的载体**；
+  更新既有测试断言时先跑一次看实际形状再改期望，别凭记忆写。
