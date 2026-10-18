@@ -1628,3 +1628,34 @@ registry 里的覆盖落了盘，但运行中的 handler 还拿着它起来时�
   vendor logger 的 `getLogFilePath()`。
 - `list()` 刻意不落盘的教训在本阶段再次应验：断言「账号 B 有 key/条目」前先确认
   B 真的写过。
+
+## 2026-10-18（二）：改名称/白名单点了没反应 —— Electron 没有 window.prompt
+
+### 现场
+
+用户重启 DSH 后反馈：「改名称和白名单点不了」。按钮与远程方法都在位（404 已随
+重启消除），但 handler 第一步走 `globalThis.prompt?.(...)` → Electron 渲染进程
+**不实现 window.prompt**（返回 undefined）→ `typeof next !== "string"` 处静默
+return。registry 里 label 字段从未写入，日志无任何报错——静默失败最迷惑的一点。
+
+### 修复
+
+编辑改为**卡片内联行**：点「改名称」/「白名单」后账号行下方出现输入行（预填当前
+值），**保存**提交、**取消**放弃；提交走原远程方法（`weixin.label` /
+`weixin.allowlist`），成功后关闭编辑行并刷新状态。退出登录的 `confirm()` 在
+Electron 可用，不受影响。
+
+### 验证
+
+- 新测试「the account editors are inline rows, never window.prompt」（文本断言
+  惯例）：禁 `globalThis.prompt` 回归、三 handler 形状、draft 传参、成功关编辑行；
+  stash 修复后恰好 1 红，恢复全绿；全量 310 pass。
+- 会话标题核查：sessions.json 已出现账号作用域 key
+  `b1b2d0b10d66-im-bot:o9cq…@im.wechat`（标题「在不」）——**标题功能实际已生效**，
+  用户看到的「没变」是升级前的旧裸 key 历史线（按拍板方案不迁移）。
+
+### 教训
+
+- Electron 渲染进程没有 `window.prompt`；`globalThis.prompt?.()` 的可选链把
+  「环境不支持」变成「静默什么都不做」。凡是依赖浏览器全局的输入路径，先确认
+  宿主环境真的提供它——卡片内联编辑行才是桌面壳的形状。

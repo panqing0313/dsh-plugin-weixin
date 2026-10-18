@@ -717,3 +717,28 @@ test('the log out button is offered only when bound, and stays non-primary', () 
   // Guarded by `bound` in the same conditional the login button uses.
   assert.match(client, /bound\s*\n?\s*\?\s*createElement\("button", \{\s*\n\s*onClick: leaveAccount,/)
 })
+
+test('the account editors are inline rows, never window.prompt', () => {
+  // The desktop shell is an Electron renderer, and Electron does not
+  // implement window.prompt: it returns undefined, so a prompt-based
+  // rename/allowlist editor silently did nothing — the button "worked",
+  // the handler returned at `typeof next !== "string"`, no error anywhere.
+  // The editors must therefore be inline rows committed by a button.
+  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+
+  assert.doesNotMatch(client, /globalThis\.prompt/, 'window.prompt is unusable in Electron; the editors must be inline rows')
+
+  const rename = client.match(/const renameAccount = \(account\) => \{[\s\S]*?\n\t\t\t\};/)
+  assert.ok(rename, 'renameAccount must stay a findable handler')
+  assert.match(rename[0], /setEditing\(\{ accountId: account\.accountId, kind: "label"/, 'rename must open the inline editor, not a modal')
+
+  const allowlist = client.match(/const editAllowlist = \(account\) => \{[\s\S]*?\n\t\t\t\};/)
+  assert.ok(allowlist, 'editAllowlist must stay a findable handler')
+  assert.match(allowlist[0], /setEditing\(\{ accountId: account\.accountId, kind: "allowlist"/, 'allowlist must open the inline editor, not a modal')
+
+  const submit = client.match(/const submitEditing = async \(\) => \{[\s\S]*?\n\t\t\t\};/)
+  assert.ok(submit, 'submitEditing must exist as the commit path')
+  assert.match(submit[0], /ctx\.remote\.weixin\.label\(accountId, draft\)/, 'the label path must send the draft')
+  assert.match(submit[0], /ctx\.remote\.weixin\.allowlist\(accountId, draft, ""\)/, 'the allowlist path must send the draft and an empty chat list')
+  assert.match(submit[0], /setEditing\(null\)/, 'a successful commit must close the editor')
+})

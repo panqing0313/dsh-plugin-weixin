@@ -795,6 +795,12 @@ window.__ModuleLoader__.load({
 			// second bound account is not dragged down with the first.
 			const [busyAccount, setBusyAccount] = react.useState(null);
 			const [accountNotice, setAccountNotice] = react.useState("");
+			// Inline edit row state. The desktop shell is an Electron renderer,
+			// and Electron does not implement window.prompt — it returns
+			// undefined, so a prompt-based editor silently did nothing. The
+			// editor therefore lives in the card: an input row under the
+			// account being edited, committed by a button instead of a modal.
+			const [editing, setEditing] = react.useState(null); // { accountId, kind: "label"|"allowlist", draft }
 
 			const setPausedFor = async (account, paused) => {
 				setBusyAccount(account.accountId);
@@ -814,34 +820,27 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const renameAccount = async (account) => {
-				const next = globalThis.prompt?.(
-					t(`Label for ${account.label || account.accountId}`, `给 ${account.label || account.accountId} 起个名字`),
-					account.label ?? "",
-				);
-				if (typeof next !== "string") return;
-				try {
-					await callRemote(() => ctx.remote.weixin.label(account.accountId, next));
-					await refreshStatus();
-				} catch (err) {
-					setAccountNotice(String(err?.message ?? err));
-				}
+			const renameAccount = (account) => {
+				setEditing({ accountId: account.accountId, kind: "label", draft: account.label ?? "" });
 			};
 
-			const editAllowlist = async (account) => {
+			const editAllowlist = (account) => {
 				const current = (account.allowedSenders ?? []).join(", ");
-				const next = globalThis.prompt?.(
-					t(
-						`Allowed senders for ${account.label || account.accountId} (comma-separated; empty = use the global list)`,
-						`给 ${account.label || account.accountId} 设置允许的发送者（逗号分隔；留空 = 用全局白名单）`,
-					),
-					current,
-				);
-				if (typeof next !== "string") return;
-				setBusyAccount(account.accountId);
+				setEditing({ accountId: account.accountId, kind: "allowlist", draft: current });
+			};
+
+			const submitEditing = async () => {
+				if (!editing) return;
+				const { accountId, kind, draft } = editing;
+				setBusyAccount(accountId);
 				setAccountNotice("");
 				try {
-					await callRemote(() => ctx.remote.weixin.allowlist(account.accountId, next, ""));
+					if (kind === "label") {
+						await callRemote(() => ctx.remote.weixin.label(accountId, draft));
+					} else {
+						await callRemote(() => ctx.remote.weixin.allowlist(accountId, draft, ""));
+					}
+					setEditing(null);
 					await refreshStatus();
 				} catch (err) {
 					setAccountNotice(String(err?.message ?? err));
@@ -943,7 +942,30 @@ window.__ModuleLoader__.load({
 									onClick: () => logoutOne(account),
 									disabled: busy,
 									style: buttonStyleFor(busy),
-								}, busy ? t("Logging out…", "正在退出…") : t("Log out", "退出登录")));
+								}, busy ? t("Logging out…", "正在退出…") : t("Log out", "退出登录")),
+								editing?.accountId === account.accountId
+									? createElement("div", {
+											style: { display: "flex", alignItems: "center", gap: 6, flexBasis: "100%" },
+										},
+										createElement("input", {
+											value: editing.draft,
+											onChange: (event) => setEditing({ ...editing, draft: event.target.value }),
+											placeholder: editing.kind === "allowlist"
+												? t("comma-separated sender ids; empty = global list", "逗号分隔的发送者 id；留空 = 用全局白名单")
+												: t("e.g. work account", "例如：工作号"),
+											style: inputStyle,
+										}),
+										createElement("button", {
+											onClick: () => void submitEditing(),
+											disabled: busy,
+											style: buttonStyleFor(busy),
+										}, t("Save", "保存")),
+										createElement("button", {
+											onClick: () => setEditing(null),
+											disabled: busy,
+											style: buttonStyleFor(busy),
+										}, t("Cancel", "取消")))
+									: null);
 						}))
 				: null;
 
