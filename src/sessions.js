@@ -322,21 +322,30 @@ export class SessionLines {
    * remaining one, because `active()` would otherwise return a deleted id and
    * `attach` would open a brand-new empty session under it.
    *
-   * Refusing to remove the last line keeps every conversation reachable: a
-   * conversation with no lines is not an empty state the card renders, it is
-   * an entry `sessions()` skips and the user cannot see or fix from the card.
+   * Refusing to remove the last line was tried and reverted: a conversation
+   * that only ever had one line then had no Delete button at all. Removing the
+   * LAST line now removes the whole conversation entry — the next inbound
+   * message re-creates a fresh line under the same key, so nothing becomes
+   * unreachable.
    *
    * @param {string} conversationId
    * @param {number} index 1-based position as shown by `/list`
    * @param {string} [accountId] owning bot account; bare key when absent
-   * @returns {string | undefined} the session id still active after the removal
+   * @returns {string | '' | undefined} the session id still active after the
+   *   removal, '' when the whole entry was removed, undefined on a bad index
    */
   remove(conversationId, index, accountId) {
     const key = scopedLineKey(accountId, conversationId)
     const existing = this.store[key]
     const lines = Array.isArray(existing?.lines) ? existing.lines.slice() : this.list(conversationId, accountId).slice()
     if (!Number.isInteger(index) || index < 1 || index > lines.length) return undefined
-    if (lines.length === 1) return undefined
+    if (lines.length === 1) {
+      // Last line: the entry goes with it. The distinct '' return (not
+      // undefined, which means "bad index") lets the caller report success.
+      delete this.store[key]
+      this.#write()
+      return ''
+    }
     const [removed] = lines.splice(index - 1, 1)
     const active = existing?.active === removed.sessionId ? lines[0].sessionId : existing.active
     this.#set(key, { lines, active })

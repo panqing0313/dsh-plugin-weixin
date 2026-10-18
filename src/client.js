@@ -1167,13 +1167,18 @@ window.__ModuleLoader__.load({
 
 			const removeOne = async (conversationId, index, lineCount) => {
 				// The card's only destructive session action, so it asks first —
-				// same shape as logout. Deleting the line in use is not offered
-				// (the row shows no button), and the host refuses the last
-				// remaining line, so the confirm never guards a reachable loss.
+				// same shape as logout. Deleting the line in use is allowed: the
+				// store falls back to the first surviving line, and deleting the
+				// last line removes the whole conversation entry (the next
+				// message re-creates a fresh line), so the confirm never guards
+				// an unreachable state.
+				const last = lineCount <= 1;
 				const ok = globalThis.confirm?.(
 					t(
 						"Delete this session line? Its context is dropped from the list; the conversation keeps its other lines.",
-						"确定删除这条会话？它的上下文将从列表移除；该微信会话的其他会话线不受影响。",
+						last
+							? "确定删除这条会话？这是最后一条会话线，删除后整个会话条目会移除，下一条消息会自动新建会话。"
+							: "确定删除这条会话？它的上下文将从列表移除；该微信会话的其他会话线不受影响。",
 					),
 				);
 				if (ok === false) return;
@@ -1218,7 +1223,17 @@ window.__ModuleLoader__.load({
 						key: conversation.conversationId,
 						style: panelStyle,
 					},
-					createElement("p", { style: panelTitleStyle }, conversation.conversationId),
+					createElement("p", { style: { ...panelTitleStyle, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+						// Tell accounts apart: the registry label (or the raw id)
+						// when the conversation is scoped to an account, nothing for
+						// a bare key left over from before multi-account support.
+						typeof conversation.accountId === "string" && conversation.accountId !== ""
+							? createElement("span", { style: pillStyle("ok") },
+								typeof conversation.accountLabel === "string" && conversation.accountLabel !== ""
+									? conversation.accountLabel
+									: conversation.accountId)
+							: null,
+						createElement("span", null, conversation.conversationId)),
 					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
 						...conversation.lines.map((line, index) => {
 							const isActive = line.sessionId === conversation.active;
@@ -1243,21 +1258,22 @@ window.__ModuleLoader__.load({
 									`${index + 1}. ${line.title || t("(no messages yet)", "（尚无对话）")}`),
 								isActive
 									? createElement("span", { style: { flex: "0 0 auto", fontSize: 12, color: C.brand } }, t("in use", "使用中"))
-									: createElement("span", { style: { flex: "0 0 auto", display: "flex", gap: 6 } },
+									: createElement("span", { style: { flex: "0 0 auto" } },
 										createElement("button", {
 											onClick: () => pick(conversation.conversationId, index),
 											disabled: busy,
 											style: buttonStyleFor(busy),
-										}, t("Use", "切换")),
-										// Deleting a line never touches the active one: the
-										// store falls back rather than orphaning live
-										// context, and the last remaining line is refused,
-										// so a conversation can never go unreachable.
-										createElement("button", {
-											onClick: () => void removeOne(conversation.conversationId, index, conversation.lines.length),
-											disabled: busy,
-											style: buttonStyleFor(busy),
-										}, t("Delete", "删除"))));
+										}, t("Use", "切换"))),
+								// Delete is offered on EVERY row, including the one in use:
+								// the store falls back to the first surviving line, and
+								// deleting the last line removes the whole entry (the
+								// next message re-creates one), so no confirm can orphan
+								// the conversation.
+								createElement("button", {
+									onClick: () => void removeOne(conversation.conversationId, index, conversation.lines.length),
+									disabled: busy,
+									style: buttonStyleFor(busy),
+								}, t("Delete", "删除")));
 						})),
 					createElement("p", { style: captionStyle },
 						t("Send /new in WeChat to start another, /list to see them all.",

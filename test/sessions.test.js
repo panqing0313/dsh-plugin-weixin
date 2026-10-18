@@ -519,15 +519,21 @@ test('remove drops one line, keeps the others, and never strands the active line
   assert.equal(afterActive, idsAfterActive[0], 'a removed active line falls back to the first survivor')
   assert.equal(lines.active(conversationId, accountA), idsAfterActive[0])
 
-  // Keep removing until one line is left, then the refusal: a conversation
-  // with no lines would be skipped by the card's data and unreachable from it.
+  // Keep removing until the last one: removing it now deletes the WHOLE
+  // conversation entry (the distinct '' return) instead of refusing. The next
+  // inbound message re-creates a fresh line under the same key, so nothing is
+  // unreachable — and the card finally offers Delete on a one-line
+  // conversation, which refusing made pointless.
   let remaining = idsAfterActive.length
   while (remaining > 1) {
     assert.notEqual(lines.remove(conversationId, 1, accountA), undefined, 'removals above the last line succeed')
     remaining = lines.list(conversationId, accountA).length
   }
-  assert.equal(lines.remove(conversationId, 1, accountA), undefined, 'the last line is refused')
-  assert.equal(lines.list(conversationId, accountA).length, 1)
+  assert.equal(lines.remove(conversationId, 1, accountA), '', 'the last line removes the whole entry')
+  // list() re-synthesizes a line for a missing key on purpose (the
+  // empty-store fallback), so the entry's removal is checked on the store.
+  const persisted = JSON.parse(fs.readFileSync(linesFile(), 'utf8'))
+  assert.ok(!Object.keys(persisted).includes('aaaaaaaaaaaa-im-bot:room-remove'), 'no entry survives the last removal')
 
   // Per-account scoping holds for removal too: A's removal never touches B.
   lines.create(conversationId, accountB)

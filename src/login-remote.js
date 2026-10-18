@@ -23,7 +23,7 @@ import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist
 import { readSavedConfig } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
-import { SessionLines } from "./sessions.js";
+import { SessionLines, conversationSlug } from "./sessions.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -428,12 +428,30 @@ export class WeixinLoginController extends TypertRemoteService {
         } catch {
             // An unreadable index must not take the settings page down.
         }
+        // The card must be able to tell accounts apart, so resolve each store
+        // key's account prefix back to a label. Keys are either
+        // `<accountSlug>:<conversationId>` (scoped) or a bare conversationId
+        // (pre-multi-account history). Matching by slug, not by prefix string,
+        // keeps the mapping honest even if an account id contains a colon.
+        const registry = readRegistry();
+        const accountBySlug = new Map(
+            Object.keys(registry).map((id) => [
+                conversationSlug(id),
+                { id, label: typeof registry[id]?.label === "string" ? registry[id].label : null },
+            ]),
+        );
         const conversations = [];
         for (const [conversationId, entry] of Object.entries(store)) {
             const lines = Array.isArray(entry?.lines) ? entry.lines : [];
             if (lines.length === 0) continue;
+            const sep = conversationId.indexOf(":");
+            const account = sep > 0 ? accountBySlug.get(conversationId.slice(0, sep)) ?? null : null;
             conversations.push({
                 conversationId,
+                // Both null for a pre-multi-account bare key; the card shows no
+                // account chip for those.
+                accountId: account?.id ?? null,
+                accountLabel: account?.label ?? null,
                 active: typeof entry.active === "string" ? entry.active : lines[0].sessionId,
                 lines: lines.map((line) => ({
                     sessionId: String(line.sessionId ?? ""),
@@ -476,8 +494,9 @@ export class WeixinLoginController extends TypertRemoteService {
     /**
      * Remove one session line from a conversation, mirroring the card's
      * delete button. Same store the inbound handler reads, so the removal is
-     * live without a reload; removing the last line is refused (see
-     * SessionLines.remove for why a conversation may not go line-less).
+     * live without a reload; removing the last line removes the whole
+     * conversation entry (the next message re-creates a line — see
+     * SessionLines.remove).
      *
      * @param {string} conversationId
      * @param {number} index 1-based position as shown by /list and the card

@@ -1685,3 +1685,29 @@ Electron 可用，不受影响。
 - 宿主/卡片接线：期望方法清单加 `weixin/removeSession`（字典序在 pause/poll 后）。
 - 辨别力：stash 三文件后恰好 2 红（descriptor 清单 + 新 remove 测试）；全量
   311 pass。
+
+## 2026-10-18（四）：删除放开 + 卡片按账号区分会话
+
+### 实机反馈
+
+多账号会话隔离上线后用户截图：三个会话条目全部「使用中」且各只有一条线 → 全都没有
+删除按钮（v1 设计拒绝），且看不出哪条会话属于哪个账号。
+
+### 两处调整
+
+- **删除放开**（`src/sessions.js` `remove()`）：删使用中线照旧回退剩余第一条；
+  **最后一条不再拒绝**——整个会话条目移除（返回 `''` 与坏序号的 `undefined` 区分），
+  下一条入站消息会按 scoped key 自动新建干净会话线，没有不可达状态。
+  `src/client.js` `removeOne` 的确认文案区分两种情况，使用中行也渲染 Delete。
+- **账号标识**（`src/login-remote.js` `sessions()`）：每个会话条目新增
+  `accountId`/`accountLabel`（registry 备注名），按 store key 的账号 slug 反查；
+  裸 key（升级前历史）两者为 null，卡片不显示标识。卡片在标题行渲染
+  备注名（或账号 id）chip。
+
+### 验证
+
+- `test/sessions.test.js` 删除断言反转（最后一条可删、条目消失）；store 层 33 条全绿；
+  全量 311 pass。辨别力：stash src 三文件 → 恰好 1 红（remove 放开测试）。
+- 踩坑：辨别力必须只 stash src——把 test 一起 stash 等于把断言也回退，全绿毫无意义。
+  `list()` 对缺失 key 会重新合成 base 线（既有回退语义），删光后断言要查落盘文件
+  而不是 `list()`。
