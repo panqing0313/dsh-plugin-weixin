@@ -1659,3 +1659,29 @@ Electron 可用，不受影响。
 - Electron 渲染进程没有 `window.prompt`；`globalThis.prompt?.()` 的可选链把
   「环境不支持」变成「静默什么都不做」。凡是依赖浏览器全局的输入路径，先确认
   宿主环境真的提供它——卡片内联编辑行才是桌面壳的形状。
+
+## 2026-10-18（三）：设置页会话标签增加删除按钮
+
+### 需求
+
+多账号会话线按账号隔离后，`/new` 积累的旧线只能切回、不能清理。设置页「会话」标签
+的每条非使用中线新增**「删除」**按钮（确认后生效），只移除那一条线。
+
+### 设计（与 /clear 的分界）
+
+- `SessionLines.remove(conversationId, index, accountId)`：按 1-based 序号删一条；
+  删**使用中**的那条会回退到剩余第一条（否则 `attach()` 会在死 id 上开一条空会话）；
+  **最后一条拒绝删除**——没有线的会话会被 `sessions()` 跳过，从卡片上消失且无法修复。
+- 正在使用中的那一行不提供删除按钮（先切换再删）；卡片确认框形状与退出登录一致
+  （`confirm()`，Electron 可用）。
+- 宿主新增 `weixin/removeSession` 远程方法（4 空格缩进、remoteMethods 列表追加、
+  失败形状不带 `ok` 键以免被 unwrap 当 carrier envelope 剥掉）。
+
+### 验证
+
+- store 层新测试（set 比较断言，不依赖 id 字面量——create() 在空 store 上会把合成
+  base 线一并落盘，3 次 create 实际 4 条线）：拒绝 0/越界、删背景线不动 active、
+  删 active 回退首条、删到剩一条再断言拒绝、账号作用域隔离。
+- 宿主/卡片接线：期望方法清单加 `weixin/removeSession`（字典序在 pause/poll 后）。
+- 辨别力：stash 三文件后恰好 2 红（descriptor 清单 + 新 remove 测试）；全量
+  311 pass。

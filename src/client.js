@@ -124,6 +124,18 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/removeSession`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "removeSession",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "conversationId", wire: "conversationId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/removeSession:p0`, create: _str } },
+						{ name: "index", wire: "index", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/removeSession:p1`, create: _num } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/removeSession:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/pause`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1153,6 +1165,35 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			const removeOne = async (conversationId, index, lineCount) => {
+				// The card's only destructive session action, so it asks first —
+				// same shape as logout. Deleting the line in use is not offered
+				// (the row shows no button), and the host refuses the last
+				// remaining line, so the confirm never guards a reachable loss.
+				const ok = globalThis.confirm?.(
+					t(
+						"Delete this session line? Its context is dropped from the list; the conversation keeps its other lines.",
+						"确定删除这条会话？它的上下文将从列表移除；该微信会话的其他会话线不受影响。",
+					),
+				);
+				if (ok === false) return;
+				setBusy(true);
+				setNotice("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.removeSession(conversationId, index + 1));
+					if (r?.removed === false) {
+						setNotice(r.error || t("Could not delete", "删除失败"));
+					} else {
+						setNotice(t("Deleted.", "已删除。"));
+					}
+					await load();
+				} catch (e) {
+					setNotice(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
 			if (error) {
 				return createElement("div", { style: panelStyle },
 					createElement("p", { style: panelTitleStyle }, t("Sessions", "会话")),
@@ -1202,11 +1243,21 @@ window.__ModuleLoader__.load({
 									`${index + 1}. ${line.title || t("(no messages yet)", "（尚无对话）")}`),
 								isActive
 									? createElement("span", { style: { flex: "0 0 auto", fontSize: 12, color: C.brand } }, t("in use", "使用中"))
-									: createElement("button", {
+									: createElement("span", { style: { flex: "0 0 auto", display: "flex", gap: 6 } },
+										createElement("button", {
 											onClick: () => pick(conversation.conversationId, index),
 											disabled: busy,
 											style: buttonStyleFor(busy),
-										}, t("Use", "切换")));
+										}, t("Use", "切换")),
+										// Deleting a line never touches the active one: the
+										// store falls back rather than orphaning live
+										// context, and the last remaining line is refused,
+										// so a conversation can never go unreachable.
+										createElement("button", {
+											onClick: () => void removeOne(conversation.conversationId, index, conversation.lines.length),
+											disabled: busy,
+											style: buttonStyleFor(busy),
+										}, t("Delete", "删除"))));
 						})),
 					createElement("p", { style: captionStyle },
 						t("Send /new in WeChat to start another, /list to see them all.",

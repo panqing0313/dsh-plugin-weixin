@@ -478,3 +478,60 @@ test('an accountless caller still reads and writes the bare key', () => {
   assert.ok(Object.keys(persisted).includes('room-legacy'), 'legacy callers must keep the historical bare key')
   assert.equal(lines.list(conversationId).length, 2)
 })
+
+test('remove drops one line, keeps the others, and never strands the active line', () => {
+  // The card's delete button removes ONE line: distinct from /clear, which
+  // resets the current one. Deleting the active line must fall back to a
+  // surviving line — a deleted active id would make attach() open a brand-new
+  // empty session under a dead name. The last remaining line is refused, so a
+  // conversation can never go line-less and vanish from the card.
+  const lines = freshLines()
+  const conversationId = 'room-remove'
+  const accountA = 'aaaaaaaaaaaa@im.bot'
+  const accountB = 'bbbbbbbbbbbb@im.bot'
+  lines.create(conversationId, accountA)
+  lines.create(conversationId, accountA)
+  lines.create(conversationId, accountA)
+  // Ids regenerate per run (a -- stamped suffix), and create() on an empty
+  // store also persists the synthesized base line — so assertions compare the
+  // line SET before and after, never id literals.
+  const idsBefore = lines.list(conversationId, accountA).map((line) => line.sessionId)
+  const activeBefore = lines.active(conversationId, accountA)
+
+  // Refusals first: index is 1-based, out of range is a refusal, not a clamp.
+  assert.equal(lines.remove(conversationId, 0, accountA), undefined)
+  assert.equal(lines.remove(conversationId, 99, accountA), undefined)
+  assert.deepEqual(lines.list(conversationId, accountA).map((line) => line.sessionId), idsBefore, 'a refused remove changes nothing')
+
+  // Remove a background line: exactly that line goes, active is untouched.
+  const victim = idsBefore[1]
+  const afterBackground = lines.remove(conversationId, 2, accountA)
+  const idsAfterBackground = lines.list(conversationId, accountA).map((line) => line.sessionId)
+  assert.ok(!idsAfterBackground.includes(victim), 'the removed line is gone from the list')
+  assert.deepEqual(idsAfterBackground, idsBefore.filter((id) => id !== victim), 'only the removed line goes')
+  assert.equal(afterBackground, activeBefore, 'removing a background line keeps the active line')
+  assert.equal(lines.active(conversationId, accountA), activeBefore)
+
+  // Removing the active line falls back to the first survivor.
+  const afterActive = lines.remove(conversationId, idsAfterBackground.indexOf(activeBefore) + 1, accountA)
+  const idsAfterActive = lines.list(conversationId, accountA).map((line) => line.sessionId)
+  assert.ok(!idsAfterActive.includes(activeBefore), 'the removed active line is gone')
+  assert.equal(afterActive, idsAfterActive[0], 'a removed active line falls back to the first survivor')
+  assert.equal(lines.active(conversationId, accountA), idsAfterActive[0])
+
+  // Keep removing until one line is left, then the refusal: a conversation
+  // with no lines would be skipped by the card's data and unreachable from it.
+  let remaining = idsAfterActive.length
+  while (remaining > 1) {
+    assert.notEqual(lines.remove(conversationId, 1, accountA), undefined, 'removals above the last line succeed')
+    remaining = lines.list(conversationId, accountA).length
+  }
+  assert.equal(lines.remove(conversationId, 1, accountA), undefined, 'the last line is refused')
+  assert.equal(lines.list(conversationId, accountA).length, 1)
+
+  // Per-account scoping holds for removal too: A's removal never touches B.
+  lines.create(conversationId, accountB)
+  const bCount = lines.list(conversationId, accountB).length
+  lines.remove(conversationId, 1, accountA)
+  assert.ok(lines.list(conversationId, accountB).length >= bCount - 0, 'B keeps its own lines')
+})

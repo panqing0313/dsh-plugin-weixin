@@ -313,6 +313,37 @@ export class SessionLines {
   }
 
   /**
+   * Remove one line from a conversation's list.
+   *
+   * The card's answer to "this line is dead weight" — distinct from `/clear`,
+   * which resets the CURRENT line: remove takes an index and never moves the
+   * conversation off the line it is on, so deleting an old line cannot throw
+   * away live context. Removing the active line falls back to the first
+   * remaining one, because `active()` would otherwise return a deleted id and
+   * `attach` would open a brand-new empty session under it.
+   *
+   * Refusing to remove the last line keeps every conversation reachable: a
+   * conversation with no lines is not an empty state the card renders, it is
+   * an entry `sessions()` skips and the user cannot see or fix from the card.
+   *
+   * @param {string} conversationId
+   * @param {number} index 1-based position as shown by `/list`
+   * @param {string} [accountId] owning bot account; bare key when absent
+   * @returns {string | undefined} the session id still active after the removal
+   */
+  remove(conversationId, index, accountId) {
+    const key = scopedLineKey(accountId, conversationId)
+    const existing = this.store[key]
+    const lines = Array.isArray(existing?.lines) ? existing.lines.slice() : this.list(conversationId, accountId).slice()
+    if (!Number.isInteger(index) || index < 1 || index > lines.length) return undefined
+    if (lines.length === 1) return undefined
+    const [removed] = lines.splice(index - 1, 1)
+    const active = existing?.active === removed.sessionId ? lines[0].sessionId : existing.active
+    this.#set(key, { lines, active })
+    return active
+  }
+
+  /**
    * Point a conversation at an existing line.
    *
    * The index is 1-based because `/use 2` is what a user reads off `/list`;

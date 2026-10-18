@@ -472,6 +472,26 @@ export class WeixinLoginController extends TypertRemoteService {
         }
         return { switched: true, sessionId };
     }
+
+    /**
+     * Remove one session line from a conversation, mirroring the card's
+     * delete button. Same store the inbound handler reads, so the removal is
+     * live without a reload; removing the last line is refused (see
+     * SessionLines.remove for why a conversation may not go line-less).
+     *
+     * @param {string} conversationId
+     * @param {number} index 1-based position as shown by /list and the card
+     * @returns {Promise<{removed: true} | {removed: false, error: string}>}
+     */
+    async removeSession(conversationId, index) {
+        const lines = new SessionLines({ warn: () => {} });
+        const active = lines.remove(String(conversationId ?? ""), Number(index));
+        if (active === undefined) {
+            // Same envelope rule as useSession: no `ok` key on the failure shape.
+            return { removed: false, error: `cannot remove session line at position ${index}` };
+        }
+        return { removed: true };
+    }
 }
 
 /** Latest `lastUsedAt` in a line entry, for sorting conversations. */
@@ -490,4 +510,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "pause", "resume", "label", "allowlist"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist"]);
