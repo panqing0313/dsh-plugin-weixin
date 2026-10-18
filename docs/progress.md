@@ -1834,3 +1834,33 @@ allowlist`。这是设计行为，但暴露一个真缺口——扫码时服务�
 
 **教训**：改「陌生人的第一件事」这类安全前置路径时，先把每个依赖「陌生人一律拒」假设的测试翻出来
 （e2e、session-commands），契约一起改，否则全量回归要来回几轮。
+
+## （十）出站限速与失败冷却（2026-10-18）
+
+**为什么**：发送封锁的实测教训——约 20 条/几分钟会触发账号级发送封锁（≥30 分钟）。
+一条分片回复 + 附件在热闹会话里就能逼近这条线，而服务端开始拒绝后继续猛发，只会把
+临时拒绝升级成封锁。此前这两件事都没有保护。
+
+**做法**（不丢消息，只延迟）：
+
+- `src/message/rate-limit.js` 新建 `OutboundPacer`：`acquire()` 等到距上次发送
+  ≥ `minIntervalMs`（默认 1200ms）才放行；`noteSuccess()` 清零失败计数；
+  `noteFailure()` 连续 3 次失败后进入 `cooldownMs`（默认 30s）冷却。`now`/`sleep`
+  是测试缝，虚拟时钟下零真实等待。首条消息永不延迟（`lastSendAt` 初始 `-Infinity`，
+  默认 0 在 t=0 的时钟下会算出 gap=0 触发整段等待——测试抓出来的真缺陷）。
+- `src/transport/ilink.js`：`send()` 与 `sendMedia()`（文本分片和附件的唯一共同缝隙）
+  均改为 acquire → try → noteSuccess / catch noteFailure + throw；pacer 挂在
+  `this.pacer` 普通属性上（构造参数 `sendIntervalMs`/`sendCooldownMs` 可注入覆盖）。
+- `src/index.js`：Config schema 加 `sendIntervalMs`(1200)、`sendCooldownMs`(30000)，
+  传入 ILinkTransport 构造；`src/config-remote.js` 设置页配置项标签页同步两字段
+  （中英标签/提示/范围），否则「每个 schema 字段必须在表单可达」的一致性测试红。
+
+**测试**：`test/rate-limit.test.js` 8 条（虚拟时钟 fakeClock/fakeSleep）：首发不等待、
+间隔补足、间隔已过不等待、3 次失败武装冷却、成功清零计数、冷却与间隔的组合等待
+（pacer 在间隔 sleep 后重测冷却剩余）、默认值与封锁线的关系、非法配置回退默认。
+**辨别力**：移除全部 5 个改动文件后 8 条全红 + config-remote 一致性测试红；恢复后
+324 pass / 0 fail。
+
+**教训**：`git stash push` 对 intent-to-add（`git add -N`）的新文件会报
+`Entry ... not uptodate. Cannot merge.`——辨别力改用「备份 → checkout 原文件 →
+删除新文件 → 跑 → 还原」的文件级操作更稳。

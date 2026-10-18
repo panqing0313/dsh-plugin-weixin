@@ -204,6 +204,8 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `allowedSenders` | `[]` | 允许驱动 Agent 的微信用户 id |
 | `allowedChats` | `[]` | 会话白名单；空 = 不限制会话 |
 | `maxMessageLength` | `1500` | 单条出站消息字符上限 |
+| `sendIntervalMs` | `1200` | 两条外发消息（文本分片和附件都算）之间的最小间隔，毫秒。实测约 20 条/几分钟会触发账号级发送封锁（≥30 分钟），该间隔让分片回复保持在线以下 |
+| `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
