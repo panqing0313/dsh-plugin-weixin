@@ -2206,21 +2206,22 @@ window.__ModuleLoader__.load({
 				}, createElement("path", { d: WECHAT_GLYPH })),
 				// The faint ownership hint: which WeChat account this row belongs
 				// to, capped at 6 characters. Decorative like the glyph itself, and
-				// absent when the line cannot be attributed. The hint may shrink
-				// (its own ellipsis takes over) under a narrow row; the glyph never
-				// does, so the mark reads as icon-first even when space runs out.
+				// absent when the line cannot be attributed. Both children are
+				// FIXED-SIZE (the glyph 14px, the hint a 44px cell) so no row width
+				// can ever make them compete: a flex/maxWidth budget still let the
+				// host's row squeeze the glyph (user screenshot, twice). Overflow
+				// inside the fixed cell falls to its own ellipsis.
 				owner
 					? createElement("span", {
 						style: {
 							fontSize: 11,
 							lineHeight: "14px",
 							color: C.labelTertiary ?? "var(--dsw-alias-label-tertiary, #9aa0a6)",
-							maxWidth: 64,
+							width: 44,
+							flex: "none",
 							overflow: "hidden",
 							textOverflow: "ellipsis",
 							whiteSpace: "nowrap",
-							flexShrink: 1,
-							minWidth: 0,
 						},
 					}, ownerHintText(typeof owner.accountLabel === "string" && owner.accountLabel !== "" ? owner.accountLabel : owner.accountId))
 					: null);
