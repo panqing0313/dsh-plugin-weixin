@@ -20,8 +20,10 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
   // Both sections exist as tabs.
   assert.match(card[0], /id: "account"/)
   assert.match(card[0], /id: "voice"/)
+  assert.match(card[0], /id: "about"/, 'the About tab must exist beside the other tabs')
   assert.match(card[0], /createElement\(LoginSection, \{ ctx, t \}\)/)
   assert.match(card[0], /createElement\(AsrSection, \{ ctx, t \}\)/)
+  assert.match(card[0], /createElement\(AboutSection, \{ ctx, t \}\)/, 'the About tab must render its own section')
   // Keyboard navigation: the bar must respond to arrow keys.
   assert.match(card[0], /onKeyDown: onTabKey/)
   assert.match(card[0], /ArrowRight/)

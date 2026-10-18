@@ -35,6 +35,9 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		const PKG = "dsh-plugin-weixin";
+		// Kept in step with package.json by bin/release.mjs bumpVersion() — the card
+		// cannot import package.json, so the release script rewrites this line.
+		const PLUGIN_VERSION = "0.7.0";
 		const NS = "dshPluginWeixin";
 
 		const TYPERT_REMOTE = {
@@ -1114,6 +1117,68 @@ window.__ModuleLoader__.load({
 					? createElement("div", { style: captionStyle }, message)
 					: null,
 			);
+		}
+
+		/**
+		 * The About tab: version, update check, project links, where the data
+		 * lives. The update check is browser-side on purpose — the card already
+		 * runs in a renderer with `fetch`, and one GET against the npm registry
+		 * needs no host round-trip or new Remote method. Registry misses are a
+		 * normal outcome (GitHub may be unreachable in-network), so the failure
+		 * text says so instead of implying the plugin is broken.
+		 */
+		function AboutSection({ ctx, t }) {
+			const [checkState, setCheckState] = react.useState("idle");
+			const [notice, setNotice] = react.useState("");
+
+			const checkUpdate = async () => {
+				setCheckState("busy");
+				setNotice("");
+				try {
+					const response = await fetch(`https://registry.npmjs.org/${PKG}/latest`);
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					const meta = await response.json();
+					const latest = typeof meta?.version === "string" ? meta.version : "";
+					if (!latest) throw new Error("no version in registry answer");
+					if (latest === PLUGIN_VERSION) {
+						setCheckState("latest");
+						setNotice(t(`Already on the latest version (${PLUGIN_VERSION}).`, `已是最新版本（${PLUGIN_VERSION}）。`));
+					} else {
+						setCheckState("outdated");
+						setNotice(t(
+							`A newer version is out: ${latest} (installed ${PLUGIN_VERSION}). Update with "npm install dsh-plugin-weixin@${latest}" or the plugin market.`,
+							`有新版本：${latest}（当前 ${PLUGIN_VERSION}）。可用「npm install dsh-plugin-weixin@${latest}」或在插件市场更新。`,
+						));
+					}
+				} catch (e) {
+					setCheckState("error");
+					setNotice(t(
+						`Could not reach the npm registry (${String(e?.message ?? e)}). The network may be blocking it; the plugin itself is fine.`,
+						`无法访问 npm registry（${String(e?.message ?? e)}）。可能是网络拦截，插件本身没有问题。`,
+					));
+				}
+			};
+
+			const linkStyle = { color: C.stateOk, textDecoration: "none" };
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+				createElement("div", null,
+					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Version", "版本")),
+					createElement("div", { style: captionStyle }, `${PKG} v${PLUGIN_VERSION} (installed)`),
+					createElement("button", { onClick: checkUpdate, disabled: checkState === "busy", style: buttonStyle },
+						checkState === "busy" ? t("Checking…", "检查中…") : t("Check for updates", "检查更新")),
+					notice ? createElement("div", { style: captionStyle }, notice) : null),
+				createElement("div", null,
+					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Project", "项目")),
+					createElement("a", { href: "https://github.com/panqing0313/dsh-plugin-weixin", target: "_blank", rel: "noreferrer", style: linkStyle },
+						"github.com/panqing0313/dsh-plugin-weixin"),
+					createElement("div", { style: captionStyle },
+						t("Scan a QR code to bind a personal WeChat as a bot, chat with multiple accounts, per-account allowlists, session lines, voice replies.",
+							"扫码把个人微信绑成机器人：多账号、按账号白名单、会话线、语音回复。"))),
+				createElement("div", null,
+					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Data location", "数据位置")),
+					createElement("div", { style: captionStyle },
+						t("State lives in ~/.dsh/weixin (accounts, registry, sessions, logs). Uninstalling the plugin does not delete it; removing that folder clears everything.",
+							"本地状态都在 ~/.dsh/weixin（账号、登记表、会话、日志）。卸载插件不会删除它们；删除该目录即清空全部状态。"))));
 		}
 
 		/**
@@ -2252,6 +2317,7 @@ window.__ModuleLoader__.load({
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
+					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);
 				// Arrow keys move between tabs: the bar is a real tablist,

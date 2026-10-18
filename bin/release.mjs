@@ -280,6 +280,22 @@ function bumpVersion(previousVersion) {
 	fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
 	ok(`package.json ${previousVersion} → ${version}`)
 
+	// The settings card shows the installed version from a constant it cannot
+	// import out of package.json; the release script is what keeps them in
+	// step, so a stale card version is this script's bug, not the user's.
+	const clientPath = path.join(ROOT, 'src', 'client.js')
+	const client = fs.readFileSync(clientPath, 'utf8')
+	const pluginVersionLine = /const PLUGIN_VERSION = "([\d.]+)";/
+	const clientSeen = pluginVersionLine.exec(client)
+	if (clientSeen === null) {
+		die('src/client.js has no "const PLUGIN_VERSION = ..." line to update', 'the About tab needs the installed version as a literal')
+	} else if (clientSeen[1] === version) {
+		ok('client.js already names this version')
+	} else {
+		fs.writeFileSync(clientPath, client.replace(pluginVersionLine, `const PLUGIN_VERSION = "${version}";`))
+		ok(`client.js PLUGIN_VERSION ${clientSeen[1]} → ${version}`)
+	}
+
 	// The README names the published version and lists what shipped in each
 	// one; leaving them stale is how the README ended up claiming 0.1.0 while
 	// 0.2.0 was live.

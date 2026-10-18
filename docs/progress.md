@@ -1788,3 +1788,17 @@ sessions.json。要让侧栏也显示 `备注名: 消息`，必须写宿主的�
   而宿主的 rename 并不需要 append 在调用方手上。
 - 辨别力：stash src/agent-bridge.js + src/sessions.js → 恰好 2 红（两条镜像测试）；
   全量 315 pass。
+
+## （八）关于页签：版本、检查更新、项目链接
+
+**需求**（2026-10-18，截图参照 DSH 内置 web-login 设置页）：设置卡加「关于」页签——当前版本、检查更新、项目 GitHub 链接、介绍与数据位置。
+
+**实现**：
+- `src/client.js` 新增 `AboutSection`（TABS 第五项 `id: "about"`）。检查更新走**浏览器侧 `fetch("https://registry.npmjs.org/<pkg>/latest")`**——卡片本就运行在宿主渲染进程、拿得到全局 fetch，一次 GET 不值得加宿主 Remote 方法与 round-trip。
+- 版本号来自 `src/client.js` 顶部常量 `PLUGIN_VERSION`（`const PLUGIN_VERSION = "0.7.0";`）：卡片不能 import package.json，所以 release 脚本负责同步——`bin/release.mjs` 的 `bumpVersion()` 新增 client.js 的 `PLUGIN_VERSION` 行替换（缺行即 `die`，防止静默漂移）。
+- 检查失败文案明确「可能是网络拦截，插件本身没有问题」（GitHub/npm 在部分网络下不可达是常态，不能让用户以为插件坏了）。
+- 三块内容：版本+检查更新按钮+结果行；项目链接（github.com/panqing0313/dsh-plugin-weixin）+一句介绍；数据位置（`~/.dsh/weixin`，卸载不删、删目录即清空）。
+
+**测试**：`test/client-settings-tabs.test.js` tablist 断言加 `id: "about"` 与 `createElement(AboutSection, { ctx, t })`。辨别力：stash `src/client.js` + `bin/release.mjs` → 恰好 1 红；全量 315 pass。
+
+**教训**：react stub 测试只能做源码文本断言，`AboutSection` 的 fetch 状态机无法在测试里驱动——首渲染 `checkState="idle"` 无副作用，因此文本断言足够钉住接线；真正的网络分支靠文案形状断言。
