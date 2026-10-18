@@ -206,6 +206,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `maxMessageLength` | `1500` | 单条出站消息字符上限 |
 | `sendIntervalMs` | `1200` | 两条外发消息（文本分片和附件都算）之间的最小间隔，毫秒。实测约 20 条/几分钟会触发账号级发送封锁（≥30 分钟），该间隔让分片回复保持在线以下 |
 | `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
+| `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
@@ -364,6 +365,14 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 
 失败**不静默**：下载失败会把具体原因回给用户（如 `CDN returned 403`、`30.0MB，超过 20.0MB 上限`），
 而不是笼统的「暂不支持」。真正未知的 item 类型（如 `TOOL_CALL_*`）才保留「暂不支持」提示。
+
+### 消息里的链接（readLinks）
+
+`readLinks` 开着时（默认开），消息里出现 http(s) 链接会自动抓取网页正文、剥掉 HTML 后拼进交给 Agent
+的 prompt（最多 3 条，每条正文上限 20000 字符，原始响应上限 512KB）。于是「这篇文章说了什么」能被
+直接回答，而不是「我打不开链接」。抓取是尽力而为：只碰 http(s)；二进制内容（图片/音视频）不当作文本
+硬读；抓不到的链接只给 Agent 一行原因（`HTTP 500`、`请求失败：…`），消息本身照常走完一轮。
+`test/links.test.js` 与 `test/e2e.test.js` 的 readLinks 用例守着这些行为。
 
 语音是微信 SILK 格式。插件会尝试用上游的 `silkToWav` 转成 WAV；`silk-wasm` 现在是
 `optionalDependencies` 里的一项（已装则可用；卸载或安装失败不影响插件加载，会走降级路径）。

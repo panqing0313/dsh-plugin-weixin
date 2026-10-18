@@ -81,6 +81,15 @@ export const FIELDS = [
         hint: "在提示词前加上来源信息，让 Agent 知道消息来自微信以及发送者是谁。",
         hintEn: "Prepend a source block so the agent knows the message came from WeChat and who sent it.",
       },
+      {
+        path: "readLinks",
+        type: T.boolean,
+        default: true,
+        label: "读取消息中的链接",
+        labelEn: "Read links in messages",
+        hint: "消息里含 http(s) 链接时自动抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息本身。",
+        hintEn: "Fetch the readable text of http(s) links in a message for the agent; a failed link is reported as one line, never as a failed message.",
+      },
     ],
   },
   {

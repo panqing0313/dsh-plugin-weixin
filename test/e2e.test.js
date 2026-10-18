@@ -398,6 +398,73 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
   }
 })
 
+test('readLinks on: a pasted URL is fetched and its text reaches the agent; a dead link becomes one line; off: nothing is fetched', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  for (const readLinks of [true, false]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-links-${readLinks}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    // The "web" the link points at: a page the fake HTTP server serves.
+    const pageRequests = []
+    const web = http.createServer((req, res) => {
+      pageRequests.push(req.url)
+      if (req.url === '/dead') {
+        res.writeHead(500, { 'content-type': 'text/plain' })
+        return res.end('boom')
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end('<html><head><title>测试页面</title></head><body><p>页面正文内容甲。</p><script>evil()</script></body></html>')
+    })
+    await new Promise((resolve) => web.listen(0, '127.0.0.1', resolve))
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 4001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ctl', create_time_ms: 11, item_list: [{ type: 1, text_item: { text: `帮我看看 http://127.0.0.1:${web.address().port}/page 讲了什么` } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, readLinks })
+
+      const disposers = []
+      const warnings = []
+      const ctx = {
+        logger: { info: () => {}, warn: (l) => warnings.push(l) },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      assert.ok(sent.length >= 1, `expected a reply (readLinks=${readLinks})`)
+      const prompt = sent[0].msg.item_list[0].text_item.text
+      if (readLinks) {
+        // The fetch happened, the page text is fenced into the prompt, the
+        // user's own words survive, and script bodies never reach the agent.
+        assert.match(prompt, /【链接内容：测试页面】/)
+        assert.match(prompt, /页面正文内容甲。/)
+        assert.doesNotMatch(prompt, /evil\(\)/)
+        assert.match(prompt, /帮我看看 /)
+      } else {
+        assert.equal(pageRequests.length, 0, 'readLinks off must not fetch anything')
+        assert.ok(!prompt.includes('【链接内容'), prompt)
+      }
+    } finally {
+      await new Promise((resolve) => web.close(resolve))
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
+  }
+})
+
 test('a CDN root saved in the account record is used when config does not set one', async () => {
   // Regression: the schema used to default `cdnBaseUrl` to the production root,
   // which made the account-record fallback dead code — an operator who set the

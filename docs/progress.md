@@ -1894,3 +1894,31 @@ session-commands.test.js 1 条（真 handler 链路：白名单行、会话线�
 `git stash push --staged` 再跑，红测试在 stash 期间反而 pass——staged 状态下
 `--staged` 只撤 index 不撤工作树的场景使「无修复」基线不可信；可靠的辨别力
 做法是 `git show HEAD:<file> > <file>` 还原三件源文件、跑完立即从 /tmp 备份恢复。
+
+## （十二）消息里的链接自动抓取（readLinks）（2026-10-18）
+
+**为什么**：用户把文章、GitHub issue、文档页链接粘进微信问「这讲了什么」，Agent 之前只能回
+「我打不开链接」——prompt 里只有 URL 字符串，没有页面内容。
+
+**做法**：入站消息含 http(s) 链接时自动抓取正文拼进 prompt（`config.readLinks`，默认开）。
+
+- `src/message/links.js`（新）：`extractUrls`（lookahead 正则剥尾部中文标点——`。！？；，、`
+  粘在 URL 尾部会被剥掉，query string 里的 `?a=b` 不受影响；去重保序）、`fetchLinkText`
+  （http(s) only；二进制 content-type 拒读并报「内容是 image/png，不是可读文本」；正文上限
+  20000 字符截断标记、原始响应上限 512KB；**任何失败都返回 `{ok:false,reason}` 不抛错**）、
+  `htmlToText`（去 script/style/head、块标签转行、常见实体解码——刻意不是完整 DOM 解析器，
+  目标是「够 Agent 回答」的文本）、`describeLinkResults`（成功=【链接内容：title】+三引号围栏
+  正文；失败=【链接无法读取】url：原因 一行）。
+- `src/index.js`：prompt 组装处（媒体下载之后）最多取 3 条链接逐个 fetch，成功正文围栏进
+  prompt，失败一行原因——**死链绝不吞掉用户的其它问题**。
+- `src/config-remote.js`：表单加 `readLinks`（boolean，默认 true，权限组之后）。
+
+**测试**：`test/links.test.js` 7 条（提取唯一性+中文标点、HTML 剥取带 title、截断标记、
+四种失败形状不抛错、htmlToText 实体解码、describeLinkResults 围栏形状）；
+`test/e2e.test.js` 新增 readLinks e2e（on：页面正文进 prompt、script 体不进、用户原话保留；
+off：零网络请求、prompt 无链接块）。
+
+**辨别力**：三个源文件还原 HEAD → 恰好 1 红（readLinks e2e）；恢复后全量 337 pass / 0 fail。
+**教训**：裸 `node --test test/e2e.test.js` 不加载 `test/isolate-host-state.mjs`，
+`DSH_WEIXIN_LOG_DIR` 未重定向会让两条既有断言（vendor log dir redirected、readDurableLog）
+假红——辨别力和全量都必须走 `npm test` 的 script 入口。

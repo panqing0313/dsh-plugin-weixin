@@ -27,6 +27,7 @@ import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
+import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
@@ -88,6 +89,7 @@ export const Config = z.object({
     .default('queue')
     .description('What happens to a message that arrives while a reply is still being written: "queue" waits and delivers it as the next turn, "steer" injects it into the running turn. "/steer <instruction>" always injects.'),
   sourceContext: z.boolean().default(false).description('Prepend a <weixin_source …> block to each prompt so the agent knows the message came from WeChat and who sent it.'),
+  readLinks: z.boolean().default(true).description('When an inbound message contains http(s) links, fetch each one and fold the readable text into the prompt, so the agent can answer questions about the page. A link that fails to fetch is reported to the agent as one line, never as a failed message.'),
   progressAfterMs: z.number().default(45_000).description('Send one progress note to the user after this many milliseconds.'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
@@ -787,10 +789,22 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
       return
     }
 
-    // 5. Media: authorized and de-duplicated, so it is now safe to fetch the
-    //    attachments. A failure here is reported and the turn continues with
-    //    whatever text remains, rather than dropping the message.
+    // 4.5 Link enrichment: if the message carries URLs, fetch each one and
+    //    fold the readable text into the prompt. A failed link NEVER fails the
+    //    message — the agent gets a one-line reason instead, and the user's
+    //    question still reaches the model. Best-effort by design: a dead host
+    //    costs a bounded fetch, not the turn.
     let prompt = message.text
+    const linkUrls = config.readLinks === true ? extractUrls(message.text) : []
+    if (linkUrls.length > 0) {
+      log(`fetching ${linkUrls.length} link(s) from inbound message ${message.id}`)
+      const linkResults = []
+      for (const url of linkUrls.slice(0, 3)) {
+        linkResults.push(await fetchLinkText(url))
+      }
+      const linkBlock = describeLinkResults(linkResults)
+      if (linkBlock !== undefined) prompt = `${message.text}\n\n${linkBlock}`
+    }
     if (Array.isArray(message.media) && message.media.length > 0) {
       // `transport.cdnBaseUrl` is already normalized at construction, so only
       // the config value needs trimming here (see the transport options above).
