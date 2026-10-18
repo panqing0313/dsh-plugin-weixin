@@ -465,6 +465,66 @@ test('readLinks on: a pasted URL is fetched and its text reaches the agent; a de
   }
 })
 
+test('reminders card path: a /remind from WeChat is visible through the controller API and cancelable', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-reminders-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 6001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ctr', create_time_ms: 17, item_list: [{ type: 1, text_item: { text: '/remind 90m 卡片里的提醒' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
+
+    const disposers = []
+    const warnings = []
+    const provided = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      // The login/config/ASR controllers self-register through reflect.provide
+      // (Cordis Service ctor); without it their construction throws and the
+      // card API is unavailable.
+      reflect: { provide(name, self) { provided.push({ name, self }); return () => {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    // Wait for the confirmation reply.
+    const deadline = Date.now() + 10_000
+    while (sent.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.ok(sent.length >= 1, 'expected the /remind confirmation reply')
+    assert.match(sent[0].msg.item_list[0].text_item.text, /我会提醒你/)
+
+    // The card API sees the pending reminder through the wired provider.
+    const loginController = provided.find((p) => p.name === 'weixinLoginController')?.self
+    assert.ok(loginController, 'expected the login controller to be mounted')
+    const listed = await loginController.reminders()
+    assert.equal(listed.available, true)
+    assert.equal(listed.entries.length, 1)
+    assert.equal(listed.entries[0].text, '卡片里的提醒')
+
+    // Cancel from the card, exactly as the button does.
+    const cancelled = await loginController.remindCancel(listed.entries[0].id)
+    assert.equal(cancelled.removed, true)
+    assert.equal((await loginController.reminders()).entries.length, 0)
+
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
 test('messageJournal on: in and out traffic both land in the journal; off: nothing is recorded', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 

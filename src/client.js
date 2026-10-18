@@ -127,6 +127,26 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/reminders`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "reminders",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/reminders:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/remindCancel`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "remindCancel",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "id", wire: "id", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/remindCancel:p0`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/remindCancel:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/journal`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1433,6 +1453,93 @@ window.__ModuleLoader__.load({
 		 * type — and the host coerces them, so this component never has to know
 		 * whether "1500" is a number, a list, or a JSON blob.
 		 */
+		/** Timed reminders: pending /remind entries with a cancel button. */
+		function RemindersSection({ ctx, t }) {
+			const [entries, setEntries] = react.useState(null);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+			const [notice, setNotice] = react.useState("");
+
+			const load = async () => {
+				setBusy(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.reminders());
+					setError("");
+					if (r?.available === false) {
+						setEntries([]);
+						setNotice(t("The scheduler is not running (plugin not fully loaded).", "调度器未运行（插件未完全加载）。"));
+					} else {
+						setNotice("");
+						setEntries(Array.isArray(r?.entries) ? r.entries : []);
+					}
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			react.useEffect(() => {
+				load();
+			}, []);
+
+			const cancelOne = async (id) => {
+				setBusy(true);
+				setNotice("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.remindCancel(id));
+					if (r?.removed === false) {
+						setNotice(r.error || t("Could not cancel", "取消失败"));
+					}
+					await load();
+				} catch (e) {
+					setNotice(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const timeOf = (fireAt) => {
+				try {
+					const d = new Date(fireAt);
+					return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+				} catch {
+					return "?";
+				}
+			};
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Timed reminders", "定时提醒")),
+				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) },
+					t("Refresh", "刷新")));
+
+			if (error) {
+				return createElement("div", { style: panelStyle }, head,
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "\u26a0"),
+						createElement("span", null, error)));
+			}
+
+			const rows = (entries ?? []).map((entry) => createElement("div", {
+				key: entry.id,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, timeOf(entry.fireAt)),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, entry.text),
+				createElement("button", { onClick: () => cancelOne(entry.id), disabled: busy, style: buttonStyleFor(busy) },
+					t("Cancel", "取消"))));
+
+			return createElement("div", { style: panelStyle }, head,
+				notice ? createElement("p", { style: hintStyle }, notice) : null,
+				rows.length === 0 && !notice
+					? createElement("p", { style: hintStyle },
+						t("No pending reminders. Schedule one from WeChat: /remind 10m stand-up", "还没有待发提醒。在微信里安排：/remind 10m 例会"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, rows),
+				rows.length === 0 ? null : createElement("p", { style: captionStyle },
+					t("Scheduled from WeChat with /remind; cancels here take effect at once.",
+						"在微信里用 /remind 安排；这里取消立即生效。")));
+			}
+
 		/** Message journal: recent in/out traffic across accounts, newest first. */
 		function JournalSection({ ctx, t }) {
 			const [entries, setEntries] = react.useState(null);
@@ -2451,6 +2558,7 @@ window.__ModuleLoader__.load({
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t }) },
+					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);

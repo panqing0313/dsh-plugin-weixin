@@ -1959,3 +1959,20 @@ off：零网络请求、prompt 无链接块）。
 - 测试：`test/journal.test.js` 6 条（含 unwritable path 不抛、torn line 跳过）；e2e 1 条
   on/off 双态（收发都落盘 / off 零文件）；settings-tabs 断言新页签。辨别力：HEAD 还原后
   恰好 1 条 messageJournal e2e 红。
+
+## 设置卡「定时提醒」页签（本轮）
+
+- 用户追问「没有定时任务的管理界面吗」→ 补上：`RemindersSection` 第 7 个页签，列出待发提醒
+  （时间 + 内容）并带取消按钮，走新的 `reminders` / `remindCancel` remote 方法。
+- 接线沿用 messages journal 的教训：`remindersProvider` 是 controller 上的普通属性（绝不 #private），
+  setup IIFE 创建 scheduler 后挂上；provider 缺失时方法诚实回 `{available:false}` 而不是崩溃。
+- **两个新教训**：
+  1. 真 Cordis 的 ctx 是受保护对象，`ctx.anything = x` 抛 `cannot set property ... without provide`
+     且被 apply 的 try/catch 吞掉 → 之后 `ctx.get('weixinLoginController')` 变 undefined。
+     测试钩子不能往 ctx 上挂属性；e2e 的假 ctx 改从 `reflect.provide(name, self)` 的第二个参数捕获。
+  2. python 插入组件时第一个断言失败后，重试只补了引用（tab 行）没补函数体 →
+     `RemindersSection is not defined` 一口气红了 17 条卡片测试。教训：插入失败后必须
+     `grep -c "function X"` 确认本体真的在。
+- e2e 用 `/remind 90m …` 而不是绝对日期：`parseWhen` 的命令切分是首空格，
+  `/remind 2050-01-01 09:00 x` 会把 when 切成 `2050-01-01`、text 切成 `09:00 x` → 「看不懂这个时间」。
+- 辨别力：HEAD 还原 6 文件 + 移走未跟踪测试后全绿（353），恢复后 357——新测试钉住新代码。

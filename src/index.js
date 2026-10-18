@@ -321,6 +321,7 @@ export function apply(ctx, config) {
           log(`reminder ${reminder.id} delivered to ${reminder.conversationId}`)
         },
       })
+      if (loginController !== undefined) loginController.remindersProvider = reminderScheduler
       if (config.messageJournal === true) {
         journalOutboundRef = (entry) => appendJournal(stateRoot, { dir: 'out', ...entry }, { warn })
       }

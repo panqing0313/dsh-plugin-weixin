@@ -378,6 +378,14 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 硬读；抓不到的链接只给 Agent 一行原因（`HTTP 500`、`请求失败：…`），消息本身照常走完一轮。
 `test/links.test.js` 与 `test/e2e.test.js` 的 readLinks 用例守着这些行为。
 
+### 定时提醒（/remind 与设置卡）
+
+微信里用 `/remind 10m 内容`、`/remind 18:30 内容` 或 `/remind 2026-10-20 09:00 内容` 安排，
+`/remindlist` 查看、`/remindcancel <编号>` 取消。设置卡的「定时提醒」页签显示全部账号的待发提醒
+（到点时间、内容），可直接点「取消」——立即生效，不需要去微信里发命令。提醒到点由插件直接发出
+（「（提醒：内容）」），不消耗模型调用；到点时对应账号离线则丢弃并警告（重启后不补发过期的）。
+`test/scheduler.test.js`、`test/reminders-ui.test.js` 与 e2e 的 reminders 用例守着这些行为。
+
 ### 消息流水（messageJournal）
 
 `messageJournal` 开着时（默认开），每条收发的文本消息都会追加到本地流水（`<状态目录>/journal/`，

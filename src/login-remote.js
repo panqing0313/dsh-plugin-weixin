@@ -102,6 +102,13 @@ export class WeixinLoginController extends TypertRemoteService {
          * @type {(() => void) | undefined}
          */
         this.onAccountBound = undefined;
+        /**
+         * Set by the plugin's setup once the reminder scheduler exists; the
+         * journal/reminders card methods read through it. Undefined in the
+         * CLI and in tests — the methods below must answer honestly when it
+         * is missing instead of pretending the feature is broken.
+         */
+        this.remindersProvider = undefined;
     }
 
     /** Start (or resume) a QR login; returns {qrcodeUrl, qrDataUrl, sessionKey, status}. */
@@ -343,7 +350,27 @@ export class WeixinLoginController extends TypertRemoteService {
      * needs no re-scan. The host's next bring-up pass (this call re-arms the
      * host immediately via `onAccountControlChange`) skips paused accounts.
      */
-    /** Message journal for the settings card: newest first, optional account filter. */
+    /** Pending reminders for the settings card, soonest first. */
+    async reminders() {
+        if (this.remindersProvider === undefined) return { entries: [], available: false };
+        const entries = this.remindersProvider.list().map((r) => ({
+            id: r.id,
+            accountId: r.accountId,
+            conversationId: r.conversationId,
+            fireAt: r.fireAt,
+            text: r.text,
+        }));
+        return { entries, available: true };
+    }
+
+    /** Cancel one pending reminder from the settings card. */
+    async remindCancel(id) {
+        if (this.remindersProvider === undefined) return { removed: false, error: "\u8c03\u5ea6\u5668\u4e0d\u53ef\u7528" };
+        const removed = this.remindersProvider.cancel(String(id));
+        return removed ? { removed: true } : { removed: false, error: "\u6ca1\u6709\u8fd9\u4e2a\u7f16\u53f7" };
+    }
+
+    /** Message journal for the settings card: newest first, optional account filter. */    /** Message journal for the settings card: newest first, optional account filter. */
     async journal(options) {
         const opts = options ?? {};
         const limitRaw = Number(opts.limit);
@@ -539,4 +566,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel"]);
