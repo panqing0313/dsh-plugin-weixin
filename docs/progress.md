@@ -1922,3 +1922,21 @@ off：零网络请求、prompt 无链接块）。
 **教训**：裸 `node --test test/e2e.test.js` 不加载 `test/isolate-host-state.mjs`，
 `DSH_WEIXIN_LOG_DIR` 未重定向会让两条既有断言（vendor log dir redirected、readDurableLog）
 假红——辨别力和全量都必须走 `npm test` 的 script 入口。
+
+## 定时消息 /remind（本轮）
+
+- 用户诉求：希望机器人能在指定时间主动发消息（例如开会前 10 分钟提醒）。
+- `src/message/scheduler.js`（新）：`parseWhen` 支持相对时长（`10m`/`2h`/`1d30m` 连写）、
+  `HH:mm`（今天/明天滚动）、`YYYY-MM-DD HH:mm`；拒绝过去时间、25:00、超过 366 天。
+  `ReminderScheduler` 持久化到 `<stateRoot>/reminders.json`（tmp+rename 原子写）；到点用
+  当前账号的 transport 直发「（提醒：内容）」，**不经过 agent 轮次**（定时消息是插件自己的
+  行为，不应消耗模型调用）；到点时账号未在线则警告并丢弃（重启后不补发过期提醒——
+  「晚到好过静默丢」只适用于进程活着的情况）；每个账号上限 50 条待发。
+- `src/sessions.js`：`/remind`、`/remindlist`、`/remindcancel` 三个会话命令；调度器不可用时
+  诚实报错而不是假装已安排。
+- `src/index.js`：scheduler 在 setup 时创建（stateRoot + warn + fire 回调查 transports），
+  经 `createInboundHandler` 参数透传给命令层。**教训：顶层函数不能引用 apply 作用域的变量**——
+  最初直接写 `reminders: reminderScheduler`，每条消息 dispatch 都抛 ReferenceError 被错误
+  边界吞掉，表现为「全部消息无回复」；这正是它必须走参数透传的原因。
+- 测试：`test/scheduler.test.js` 7 条（虚拟时钟）；`test/session-commands.test.js` 2 条
+  全链路（真 transport 出站、持久化落盘、取消）。辨别力：HEAD 还原后恰好 2 条新测试红。

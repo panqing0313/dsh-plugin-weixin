@@ -28,6 +28,7 @@ import { chunkText } from './message/chunker.js'
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
+import { ReminderScheduler } from './message/scheduler.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
@@ -155,6 +156,7 @@ export const Config = z.object({
  * @param {z.infer<typeof Config>} config
  */
 export function apply(ctx, config) {
+
   // Must precede any credential/sync-buffer path resolution in the vendored
   // transport, which reads OPENCLAW_STATE_DIR on every call.
   const stateRoot = configureWeixinStateDir()
@@ -258,6 +260,7 @@ export function apply(ctx, config) {
     let asrBridge
     /** @type {string} */
     let cwd
+    let reminderScheduler
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -292,6 +295,24 @@ export function apply(ctx, config) {
       asrBridge =
         asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
       if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)
+
+      reminderScheduler = new ReminderScheduler({
+        stateRoot,
+        warn,
+        fire: async (reminder) => {
+          const transport = transports.get(reminder.accountId)
+          if (transport === undefined) {
+            warn(`reminder ${reminder.id} has no live transport for ${reminder.accountId}; dropped`)
+            return
+          }
+          await sendChunked(transport, config, {
+            conversationId: reminder.conversationId,
+            text: `（提醒：${reminder.text}）`,
+          })
+          log(`reminder ${reminder.id} delivered to ${reminder.conversationId}`)
+        },
+      })
+
     })()
 
     // Bring the loop up for one account (or every account on disk), replacing a
@@ -418,6 +439,7 @@ export function apply(ctx, config) {
         // sendProducedFiles). The same value the agent bridge registers as the
         // workspace, so "what the agent wrote" is well defined.
         agentCwd: cwd,
+        reminderScheduler,
       })
 
       const previous = transports.get(account.accountId)
@@ -497,6 +519,7 @@ export function apply(ctx, config) {
 
     return async () => {
       cancelled = true
+      reminderScheduler?.stop()
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
@@ -673,7 +696,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd }) {
+function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -685,7 +708,9 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
   // first-contact enrolment takes effect on the very message that triggered
   // it, without touching the per-handler `accountConfig` capture above.
   const effectiveConfig = { current: accountConfig }
-  return async (message) => {    // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
+  return async (message) => {
+    log(`DBG2 entered kind=${message.type} text=${JSON.stringify(message.text)}`)
+    // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
     //    NOT unsupported — they are normalized into descriptors by the transport
     //    and downloaded below, after authorization.
@@ -778,6 +803,7 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
         source: Array.isArray(registryEntry?.allowedSenders) && registryEntry.allowedSenders.length > 0 ? 'account' : 'global',
         senders: effectiveConfig.current.allowedSenders ?? [],
       },
+      reminders: reminderScheduler,
     })
     if (commandReply !== undefined) {
       await sendChunked(transport, config, {

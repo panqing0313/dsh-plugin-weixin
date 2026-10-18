@@ -306,3 +306,55 @@ test('/status answers with account facts and no agent turn', async () => {
     assert.deepEqual(sessionsOpened, [], '/status must cost no model turn, like every session command')
   })
 })
+
+test('/remind schedules a durable reminder that fires through the live transport', async () => {
+  await withPlugin(async ({ fake, root, sessionsOpened }) => {
+    // 1. The command is answered by the plugin at all, and costs no model turn.
+    fake.deliver('/remind 3s 测试提醒内容', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the confirm reply')
+    assert.match(fake.outbound[0].text, /我会提醒你（编号 /, 'the confirmation names the reminder id')
+    assert.match(fake.outbound[0].text, /\/remindcancel/, 'the confirmation teaches the cancel command')
+    assert.deepEqual(sessionsOpened, [], 'a remind command must cost no model turn')
+
+    // 2. The reminder is durable: it sits in reminders.json under the state
+    //    root before it fires, so a reload would re-arm it.
+    const store = JSON.parse(fs.readFileSync(path.join(root, 'reminders.json'), 'utf8'))
+    assert.equal(store.items.length, 1)
+    assert.equal(store.items[0].text, '测试提醒内容')
+
+    // 3. When the moment comes, the text goes out through the SAME fake iLink
+    //    outbound channel — no agent turn involved.
+    await waitFor(() => fake.outbound.some((line) => line.text.includes('测试提醒内容')), 'the reminder to fire', 8_000)
+    assert.match(fake.outbound.find((line) => line.text.includes('测试提醒内容')).text, /（提醒：测试提醒内容）/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'reminders.json'), 'utf8')).items.length, 0, 'a fired reminder leaves the store')
+
+    // 4. /remindlist then reports the empty truth.
+    fake.deliver('/remindlist', 'm2')
+    // The fired reminder is itself an outbound line, so `length > 1` is
+    // already true the moment it lands: the list reply is the third one.
+    await waitFor(() => fake.outbound.length > 2, 'the list reply')
+    assert.match(fake.outbound[fake.outbound.length - 1].text, /没有待发的提醒/)
+  })
+})
+
+test('/remind refuses a bad time, and /remindcancel removes a pending one', async () => {
+  await withPlugin(async ({ fake, root }) => {
+    fake.deliver('/remind 明天下午 喝水', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the refusal')
+    assert.match(fake.outbound[0].text, /没有安排：看不懂这个时间/)
+
+    fake.deliver('/remind 1h 还没发生的事', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the confirm')
+    const id = /编号 (r\d+)/.exec(fake.outbound[1].text)?.[1]
+    assert.ok(id, 'the confirm carries the id')
+
+    fake.deliver(`/remindcancel ${id}`, 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the cancel reply')
+    assert.match(fake.outbound[2].text, new RegExp(`已取消提醒 ${id}`))
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'reminders.json'), 'utf8')).items.length, 0)
+
+    fake.deliver(`/remindcancel ${id}`, 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the second cancel reply')
+    assert.match(fake.outbound[3].text, /没有找到编号/)
+  })
+})

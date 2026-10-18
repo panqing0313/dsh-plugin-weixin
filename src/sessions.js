@@ -36,6 +36,7 @@ import path from 'node:path'
 
 import { stateDir } from './state.js'
 import { labelForAccount } from './account-registry.js'
+import { parseWhen } from './message/scheduler.js'
 
 /** Filename under the state root holding every conversation's line list. */
 const LINES_FILE = 'sessions.json'
@@ -514,6 +515,14 @@ export function parseSessionCommand(text) {
   if (clearMatch !== null) return { command: 'clear' }
   const statusMatch = /^\/status$/i.exec(trimmed)
   if (statusMatch !== null) return { command: 'status' }
+  // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
+  // 单独报「缺内容」而非「看不懂命令」。
+  const remindMatch = /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
+  if (remindMatch !== null) return { command: 'remind', when: remindMatch[1], text: remindMatch[2] ?? '' }
+  const remindListMatch = /^\/remindlist$/i.exec(trimmed)
+  if (remindListMatch !== null) return { command: 'remindlist' }
+  const remindCancelMatch = /^\/remindcancel\s+(\S+)$/i.exec(trimmed)
+  if (remindCancelMatch !== null) return { command: 'remindcancel', id: remindCancelMatch[1] }
   return undefined
 }
 
@@ -528,6 +537,9 @@ export const SESSION_COMMANDS_HELP = [
   '/use <序号> 切换到第几条',
   '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
   '/status 查看当前账号和会话的状态（白名单、会话线等）',
+  '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
+  '/remindlist 查看这个账号还没发出的提醒',
+  '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）',
 ].join('\n')
 
 /**
@@ -542,9 +554,12 @@ export const SESSION_COMMANDS_HELP = [
  * @param {string} text
  * @param {string} [accountId] owning bot account; bare key when absent
  * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
- *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] } }} [context]
+ *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] },
+ *   reminders?: import('./message/scheduler.js').ReminderScheduler }} [context]
  *   account-level facts for `/status`, assembled by the inbound handler;
- *   optional so the command works for bare callers too
+ *   optional so the command works for bare callers too. `reminders` is the
+ *   live scheduler for remind commands; without it /remind reports that
+ *   scheduling is unavailable rather than crashing.
  * @returns {string | undefined}
  */
 export function runSessionCommand(lines, conversationId, text, accountId, context) {
@@ -589,6 +604,34 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     }
     parts.push(`本微信会话共 ${statusLines.length} 条会话线，当前使用第 ${statusLines.findIndex((candidate) => candidate.sessionId === active) + 1 || '?'} 条：${activeLine?.title ?? '(尚无对话)'}`)
     return parts.join('\n')
+  }
+  if (command.command === 'remind') {
+    // Scheduling needs the live scheduler; a caller without one (bare tests,
+    // tooling) gets an honest refusal rather than a silently dropped remind.
+    const scheduler = context?.reminders
+    if (scheduler === undefined) return '当前无法安排提醒（调度器不可用）。'
+    if (String(command.text ?? '').trim() === '') {
+      return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00'
+    }
+    const when = parseWhen(command.when)
+    if (when.ok === false) return `没有安排：${when.reason}`
+    const accountIdForRemind = context?.accountId ?? accountId ?? ''
+    const planned = scheduler.schedule({ accountId: accountIdForRemind, conversationId, text: command.text, fireAt: when.fireAt })
+    if (planned.error !== undefined) return `没有安排：${planned.error}`
+    return `好的，${when.label} 我会提醒你（编号 ${planned.id}）。\n用 /remindlist 可以查看，/remindcancel ${planned.id} 取消。`
+  }
+  if (command.command === 'remindlist') {
+    const scheduler = context?.reminders
+    if (scheduler === undefined) return '当前无法查看提醒（调度器不可用）。'
+    const items = scheduler.list(context?.accountId ?? accountId ?? '')
+    if (items.length === 0) return '这个账号现在没有待发的提醒。'
+    return ['待发的提醒：', ...items.map((item) => `${item.id} · ${new Date(item.fireAt).toLocaleString()} · ${item.text}`)].join('\n')
+  }
+  if (command.command === 'remindcancel') {
+    const scheduler = context?.reminders
+    if (scheduler === undefined) return '当前无法取消提醒（调度器不可用）。'
+    const removed = scheduler.cancel(command.id)
+    return removed === true ? `已取消提醒 ${command.id}。` : `没有找到编号 ${command.id} 的提醒（/remindlist 可以看现有的）。`
   }
   if (command.index === undefined) {
     return `${USE_USAGE}\n\n${lines.render(conversationId, accountId)}`
