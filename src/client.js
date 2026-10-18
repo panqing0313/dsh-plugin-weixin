@@ -1159,26 +1159,59 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const linkStyle = { color: C.stateOk, textDecoration: "none" };
+			// The About tab reuses the card's own panel language (panelStyle /
+			// panelTitleStyle) instead of bare text on the page background: the
+			// first cut was plain divs and read as an afterthought next to the
+			// other tabs.
+			const linkStyle = { color: C.brand, textDecoration: "none" };
+			const versionPill = {
+				display: "inline-flex",
+				alignItems: "center",
+				padding: "1px 8px",
+				borderRadius: RADIUS.pill,
+				background: C.surfaceSunken,
+				color: C.labelSecondary,
+				fontSize: 12,
+				lineHeight: "18px",
+			};
+			const row = (title, body) => createElement(panelStyle, null,
+				createElement("p", { style: panelTitleStyle }, title),
+				body);
+			// A numbered step line for the usage guide. The number sits in a
+			// sunken circle so the sequence reads at a glance, without tables.
+			const step = (n, text) => createElement("div", { key: `s${n}`, style: { display: "flex", gap: 8, alignItems: "baseline" } },
+				createElement("span", { style: { ...versionPill, flex: "none", minWidth: 20, justifyContent: "center", borderRadius: RADIUS.pill } }, String(n)),
+				createElement("span", { style: hintStyle }, text));
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
-				createElement("div", null,
-					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Version", "版本")),
-					createElement("div", { style: captionStyle }, `${PKG} v${PLUGIN_VERSION} (installed)`),
-					createElement("button", { onClick: checkUpdate, disabled: checkState === "busy", style: buttonStyle },
-						checkState === "busy" ? t("Checking…", "检查中…") : t("Check for updates", "检查更新")),
-					notice ? createElement("div", { style: captionStyle }, notice) : null),
-				createElement("div", null,
-					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Project", "项目")),
-					createElement("a", { href: "https://github.com/panqing0313/dsh-plugin-weixin", target: "_blank", rel: "noreferrer", style: linkStyle },
+				row(t("How to use", "使用说明"), [
+					step(1, t("Open the 微信账号 tab and scan the QR code with WeChat — the account comes online at once, no reload needed.",
+						"打开「微信账号」页签，用微信扫二维码——登录后立即生效，不用重启。")),
+					step(2, t("In 授权, add the WeChat ids allowed to talk to your agent (everything else is refused).",
+						"在「授权」里把允许使用 Agent 的微信 id 加进白名单（其余一律拒绝）。")),
+					step(3, t("Message the bound WeChat from any allowed account; DSH replies in the same chat. Send /help there to see the commands.",
+						"用白名单里的微信给机器人发消息，DSH 在同一会话里回复；微信里发 /help 可看全部命令。")),
+					step(4, t("Use the 会话 tab for multiple DSH sessions per chat (/new, /list, /use), and pause an account there when you need quiet.",
+						"「会话」页签可给一个微信会话挂多条 DSH 会话（/new、/list、/use）；需要安静时在「微信账号」页签暂停该账号。")),
+				]),
+				row(t("Version", "版本"), [
+					createElement("div", { key: "v", style: { display: "flex", alignItems: "center", gap: 8 } },
+						createElement("span", { style: versionPill }, `v${PLUGIN_VERSION}`),
+						createElement("span", { style: hintStyle }, PKG)),
+					createElement("div", { key: "b", style: { display: "flex", alignItems: "center", gap: 10 } },
+						createElement("button", { onClick: checkUpdate, disabled: checkState === "busy", style: buttonStyleFor(checkState === "busy") },
+							checkState === "busy" ? t("Checking…", "检查中…") : t("Check for updates", "检查更新")),
+						notice ? createElement("span", { style: captionStyle }, notice) : null),
+				]),
+				row(t("Project", "项目"), [
+					createElement("a", { key: "l", href: "https://github.com/panqing0313/dsh-plugin-weixin", target: "_blank", rel: "noreferrer", style: linkStyle },
 						"github.com/panqing0313/dsh-plugin-weixin"),
-					createElement("div", { style: captionStyle },
+					createElement("p", { key: "h", style: hintStyle },
 						t("Scan a QR code to bind a personal WeChat as a bot, chat with multiple accounts, per-account allowlists, session lines, voice replies.",
-							"扫码把个人微信绑成机器人：多账号、按账号白名单、会话线、语音回复。"))),
-				createElement("div", null,
-					createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t("Data location", "数据位置")),
-					createElement("div", { style: captionStyle },
-						t("State lives in ~/.dsh/weixin (accounts, registry, sessions, logs). Uninstalling the plugin does not delete it; removing that folder clears everything.",
-							"本地状态都在 ~/.dsh/weixin（账号、登记表、会话、日志）。卸载插件不会删除它们；删除该目录即清空全部状态。"))));
+							"扫码把个人微信绑成机器人：多账号、按账号白名单、会话线、语音回复。")),
+				]),
+				row(t("Data location", "数据位置"), createElement("p", { style: hintStyle },
+					t("State lives in ~/.dsh/weixin (accounts, registry, sessions, logs). Uninstalling the plugin does not delete it; removing that folder clears everything.",
+						"本地状态都在 ~/.dsh/weixin（账号、登记表、会话、日志）。卸载插件不会删除它们；删除该目录即清空全部状态。"))));
 		}
 
 		/**
