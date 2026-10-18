@@ -182,6 +182,7 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
       [
         { message_id: 1001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] },
         { message_id: 1002, from_user_id: 'wxid_stranger', group_id: '', message_type: 1, message_state: 2, context_token: 'ct2', create_time_ms: 2, item_list: [{ type: 1, text_item: { text: 'hack' } }] },
+        { message_id: 1004, from_user_id: 'wxid_second_stranger', group_id: '', message_type: 1, message_state: 2, context_token: 'ct4', create_time_ms: 4, item_list: [{ type: 1, text_item: { text: 'again' } }] },
         { message_id: 1003, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct3', create_time_ms: 3, item_list: [{ type: 2, image_item: {} }] },
         { message_id: 1001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] },
       ],
@@ -202,7 +203,7 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
 
     // Wait for the reply to be produced.
     const deadline = Date.now() + 10_000
-    while (sent.length < 2 && Date.now() < deadline) {
+    while (sent.length < 3 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     for (const d of disposers) await (await d)?.()
@@ -217,17 +218,26 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
     // reference. That image is no longer "unsupported": it is a media item
     // whose download failed, and the notice now names the reason.
     assert.equal(texts[0], 'pong: hi')
-    assert.match(texts[1], /下载失败/)
-    assert.match(texts[1], /no CDN reference|CDN/)
+    assert.equal(texts[1], 'pong: hack', 'first contact must be enrolled and answered')
+    assert.match(texts[2], /下载失败/)
+    assert.match(texts[2], /no CDN reference|CDN/)
 
-    // Regressions: every outbound message must be addressed to the sender even
-    // for a 1:1 conversation (group_id: ""), and must echo the inbound token.
-    for (const target of targets) assert.equal(target, ALLOWED)
+    // Regressions: every outbound message must be addressed to the SAME sender
+    // that produced it (1:1 chats still have no group), and must echo the
+    // inbound token. The enrolled stranger is answered, so their reply goes
+    // back to them, not to the allowlisted sender.
+    assert.equal(targets[0], ALLOWED)
+    assert.equal(targets[1], 'wxid_stranger', 'the enrolled first contact gets their own reply')
+    assert.equal(targets[2], ALLOWED)
     assert.equal(tokens[0], 'ct1')
-    assert.equal(tokens[1], 'ct3')
+    assert.equal(tokens[1], 'ct2', 'the enrolled first contact gets the same token echo')
+    assert.equal(tokens[2], 'ct3')
 
-    // The stranger is refused and no session or reply is produced for them.
-    assert.ok(warnings.some((w) => w.includes('wxid_stranger')), `expected a refusal warning, got: ${warnings.join(' | ')}`)
+    // The FIRST stranger enrols (first contact = scanner rule) and their
+    // message is answered; the SECOND stranger is refused — the account has
+    // an enrolment now, so late arrivals get nothing.
+    assert.ok(texts.includes('pong: hack'), `expected the first contact to be enrolled and answered, got: ${texts.join(' | ')}`)
+    assert.ok(warnings.some((w) => w.includes('wxid_second_stranger')), `expected a refusal warning for the second stranger, got: ${warnings.join(' | ')}`)
     // The redelivered 1001 is not answered twice.
     assert.equal(texts.filter((t) => t === 'pong: hi').length, 1)
   } finally {
@@ -634,6 +644,11 @@ test('an unauthorized sender never triggers a CDN download', async () => {
   const cdnBaseUrl = `http://127.0.0.1:${cdn.address().port}`
 
   try {
+    // Two steps: the FIRST sender enrols (first contact = scanner rule), and
+    // their video is downloaded, so the CDN IS hit once — legitimately. The
+    // SECOND stranger arrives after the enrolment, is refused, and must never
+    // reach the CDN. The invariant is "unauthorized ⇒ no CDN", not "stranger ⇒
+    // no CDN": after this change a stranger's first message authorizes them.
     const { server, baseUrl, sent } = await startFakeILink([
       [
         {
@@ -648,6 +663,21 @@ test('an unauthorized sender never triggers a CDN download', async () => {
             {
               type: 5,
               video_item: { media: { encrypt_query_param: 'evil', aes_key: 'Zg==' } },
+            },
+          ],
+        },
+        {
+          message_id: 3002,
+          from_user_id: 'wxid_second_stranger',
+          group_id: '',
+          message_type: 1,
+          message_state: 2,
+          context_token: 'ctx2',
+          create_time_ms: 7,
+          item_list: [
+            {
+              type: 5,
+              video_item: { media: { encrypt_query_param: 'evil2', aes_key: 'Zg==' } },
             },
           ],
         },
@@ -669,9 +699,10 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     }
     plugin.apply(ctx, config)
 
-    // Give the poll loop time to receive (and refuse) the batch.
+    // Give the poll loop time to receive, enrol the first sender, and refuse
+    // the second one.
     const deadline = Date.now() + 3_000
-    while (!warnings.some((w) => w.includes('wxid_stranger')) && Date.now() < deadline) {
+    while (!warnings.some((w) => w.includes('wxid_second_stranger')) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     // Stop the long-poll loop before closing the server, or the transport keeps
@@ -680,7 +711,8 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     server.close()
 
-    assert.ok(warnings.some((w) => w.includes('wxid_stranger')), `expected a refusal, got: ${warnings.join(' | ')}`)
+    assert.ok(!warnings.some((w) => w.includes('refused message from wxid_stranger')), `the first contact must be enrolled, not refused, got: ${warnings.join(' | ')}`)
+    assert.ok(warnings.some((w) => w.includes('wxid_second_stranger')), `expected a refusal for the second stranger, got: ${warnings.join(' | ')}`)
     // The refusal must ALSO reach the vendor file log: ctx.logger can drop
     // levels, and a refusal that leaves no trace turns an allowlist mismatch
     // into "the bot just ignores me" with nothing to grep afterwards.
@@ -696,13 +728,21 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     assert.ok(fs.existsSync(logFile), `expected a vendor log file at ${logFile}`)
     const logText = fs.readFileSync(logFile, 'utf8')
     assert.ok(
-      logText.includes('refused message from wxid_stranger') && logText.includes('allowedSenders'),
+      logText.includes('refused message from wxid_second_stranger') && logText.includes('allowedSenders'),
       `expected the refusal line with the allowlist in the file log, got:\n${logText.slice(-2000)}`,
     )
-    // This is the assertion that matters: the refusal happens before any fetch,
-    // so an unauthorized sender cannot make this host talk to Tencent's CDN.
-    assert.equal(cdnHits, 0)
-    assert.equal(sent.length, 0)
+    // This is the assertion that matters: the SECOND stranger's refusal happens
+    // before any fetch, so an unauthorized sender cannot make this host talk
+    // to Tencent's CDN. The first contact DID hit the CDN — legitimately, as
+    // the enrolled scanner — so the count is exactly one hit, not zero.
+    assert.equal(cdnHits, 1, `exactly the enrolled contact's video may reach the CDN, got ${cdnHits} hits`)
+    // The enrolled contact's video fails to decode (test aes_key is 1 byte), so
+    // the plugin answers THEM with the download-failure notice — exactly one
+    // outbound message, addressed to the enrolled contact, never the second
+    // stranger.
+    assert.equal(sent.length, 1, `expected only the failure notice for the enrolled contact, got ${sent.length}`)
+    assert.equal(sent[0].msg.to_user_id, 'wxid_stranger')
+    assert.match(sent[0].msg.item_list[0].text_item.text, /下载失败/)
   } finally {
     await new Promise((resolve) => cdn.close(resolve))
     fs.rmSync(stateRoot, { recursive: true, force: true })

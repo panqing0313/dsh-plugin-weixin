@@ -1802,3 +1802,35 @@ sessions.json。要让侧栏也显示 `备注名: 消息`，必须写宿主的�
 **测试**：`test/client-settings-tabs.test.js` tablist 断言加 `id: "about"` 与 `createElement(AboutSection, { ctx, t })`。辨别力：stash `src/client.js` + `bin/release.mjs` → 恰好 1 红；全量 315 pass。
 
 **教训**：react stub 测试只能做源码文本断言，`AboutSection` 的 fetch 状态机无法在测试里驱动——首渲染 `checkState="idle"` 无副作用，因此文本断言足够钉住接线；真正的网络分支靠文案形状断言。
+
+## （九）首联系人自动登记：扫码人自动进白名单
+
+**需求**（2026-10-18）：第二人扫码后发消息无回复，日志实锤 `refused message from ... not on the
+allowlist`。这是设计行为，但暴露一个真缺口——扫码时服务端只给 bot id（`@im.bot`），**人的微信 id
+要等第一条消息才出现**，所以「首次扫码自动加白名单」不可能在登录时做，只能在第一条消息处做。
+
+**拍板方案**（用户确认）：账号级白名单为空（卡片没配过、registry 也没登记过）时，第一个发信人
+视为扫码人本人，自动登记进该账号的 registry 白名单并放行这一条；只认第一条——之后的其他陌生人
+照旧拒绝，防止「随便谁先发消息谁就拿到权限」。
+
+**实现**：
+- `src/account-registry.js` `enrolFirstContact(accountId, senderId, hasOverride, note)`：已登记
+  过（`firstContactEnrolledAt`）或账号有自己的白名单覆盖则不动；登记时 `allowedSenders` 取
+  **全局名单 ∪ 首联系人**（第一版只写 `[senderId]`，被 e2e 抓出：`allowlistForAccount` 的语义是
+  entry 非空即整体替换，登记瞬间把全局名单顶掉了）。
+- `src/index.js` createInboundHandler 拒绝分支先尝试登记，成功后重解析
+  `allowlistForAccount` 放行本次；`effectiveConfig = { current: accountConfig }` cell 让同一条
+  消息立即按新名单走（`accountConfig` 是 const 捕获，不能重指向）。
+- `src/client.js` 登录卡账号行下方新增白名单摘要：有名单列 sender id；没有则提示
+  「暂用全局名单，第一条消息的发送者会自动登记」。
+
+**测试**：`test/e2e.test.js` 两条改为新契约（首陌生人登记放行、第二个陌生人才拒、CDN 下载数按
+新行为计）；`test/session-commands.test.js`「refused sender cannot steer」改两步——首陌生人
+`/new` 得到回复（**命令永不开 agent session**，第一版断言 `sessionsOpened>0` 等超时是设计错误），
+第二陌生人 `/list` 被拒且 `sessionsOpened` 仍为空。
+
+**辨别力**：stash src/index.js + src/account-registry.js → 恰好 3 红（全是新契约测试）；全量
+316 pass。
+
+**教训**：改「陌生人的第一件事」这类安全前置路径时，先把每个依赖「陌生人一律拒」假设的测试翻出来
+（e2e、session-commands），契约一起改，否则全量回归要来回几轮。

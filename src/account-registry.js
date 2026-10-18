@@ -183,3 +183,52 @@ export function allowlistForAccount(accountId, config) {
     : (config.allowedChats ?? [])
   return { allowedSenders: senders, allowedChats: chats }
 }
+
+/**
+ * Enrol the FIRST contact of a freshly bound account into that account's own
+ * allowlist — the "first contact is the scanner" rule.
+ *
+ * At scan time the login flow only learns the BOT id; the human's WeChat id
+ * (`o9cq...@im.wechat`) first appears with the first inbound message, so the
+ * allowlist cannot be pre-filled at bind. This hook runs inside the inbound
+ * handler's refusal branch: when the account has never had an allowlist
+ * enrolment, the first denied sender is written into the account-level
+ * allowlist and the message itself is allowed through.
+ *
+ * Only the FIRST contact enrols: afterwards the account has an override and
+ * further strangers are refused as before — whoever scans owns the account,
+ * but a stranger who merely messages first does not (the enrolment has
+ * already happened by then, or the operator removed it deliberately).
+ *
+ * @param {string} accountId
+ * @param {string} senderId the sender to enrol
+ * @param {() => boolean} hasOverride whether the account already carries an
+ *   account-level allowlist override (checked by the caller against the same
+ *   registry snapshot it refused under, so the read and the write agree)
+ * @param {(line: string) => void} [note] called with a human-readable line
+ *   describing what was enrolled (the caller logs it)
+ * @returns {boolean} true when the sender was enrolled and the caller should
+ *   let the message through; false when enrolment does not apply
+ */
+export function enrolFirstContact(accountId, senderId, hasOverride, note = () => {}, globalSenders = []) {
+  if (typeof accountId !== 'string' || accountId === '') return false
+  if (typeof senderId !== 'string' || senderId === '') return false
+  if (hasOverride()) return false
+  const registry = readRegistry()
+  // Re-check against a fresh read: the caller's snapshot may be stale if a
+  // concurrent handler for the same account enrolled between the two reads.
+  const entry = registry[accountId]
+  if (Array.isArray(entry?.allowedSenders) && entry.allowedSenders.length > 0) return false
+  if (entry?.firstContactEnrolledAt) return false
+  const fresh = ensureAccountEntry(registry, accountId)
+  // Merge, not replace: an account-level list REPLACES the global one (that is
+  // the documented override rule), so seeding it with only the first contact
+  // would silently revoke every global sender mid-conversation. The enrolled
+  // entry starts as "global list plus the scanner".
+  const merged = new Set([...(Array.isArray(globalSenders) ? globalSenders : []), senderId])
+  fresh.allowedSenders = [...merged]
+  fresh.firstContactEnrolledAt = new Date().toISOString()
+  writeRegistry(registry, () => {})
+  note(`first contact ${senderId} enrolled into account ${accountId}'s allowlist`)
+  return true
+}

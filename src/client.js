@@ -1000,6 +1000,29 @@ window.__ModuleLoader__.load({
 				// One row per bound account: identity, liveness, controls.
 				accountRows,
 
+				// Who can talk to each account, straight from status(): the
+				// operator asked to see, at a glance under the login state, which
+				// logged-in WeChat ids are allowlisted and which accounts have no
+				// list of their own (the global one rules, or the first-contact
+				// enrolment has not happened yet).
+				bound
+					? createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+							accounts.map((account) => {
+								const senders = (account.allowedSenders ?? []).filter((id) => typeof id === "string" && id !== "");
+								return createElement("div", { key: `al-${account.accountId}`, style: { display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" } },
+									createElement("span", { style: { fontSize: 12, color: C.labelSecondary, flex: "none" } },
+										account.label || account.accountId),
+									senders.length > 0
+										? createElement("span", { style: { fontSize: 12, color: C.labelPrimary } },
+												t("allowlisted:", "白名单："),
+												" ",
+												senders.join(", "))
+										: createElement("span", { style: { fontSize: 12, color: C.labelSecondary } },
+												t("no allowlist of its own yet — global list rules, first message enrols its sender",
+													"还没有自己的白名单 — 暂用全局名单，第一条消息的发送者会自动登记")));
+							}))
+					: null,
+
 				accountNotice
 					? createElement("div", { style: noticeStyle },
 							createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),

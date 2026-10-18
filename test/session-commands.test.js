@@ -233,17 +233,23 @@ test('an ordinary message still goes to the agent', async () => {
 
 test('a refused sender cannot steer the conversation, even with a valid command', async () => {
   await withPlugin(async ({ fake, sessionsOpened, lines }) => {
-    // The allowlist gate runs first: an unauthorized sender must not be able to
-    // create or switch session lines in someone else's conversation. A refusal
-    // must also produce no outbound message — answering would confirm to a
-    // stranger that this bot is live.
+    // The allowlist gate runs first. The FIRST stranger is the first-contact
+    // enrolment (whoever scans owns the account), so their command is
+    // ANSWERED — /new replies and never opens an agent session (that is the
+    // contract asserted by the /new test above), so the reply is the proof.
     fake.deliver('/new', 'm1', 'wxid_stranger')
+    await waitFor(() => fake.outbound.length > 0, 'the enrolled first contact to get the command reply')
+    assert.match(fake.outbound[0].text, /已开启第 2 条会话/)
+    assert.deepEqual(sessionsOpened, [], 'a command must not cost a model turn, even for the enrolled contact')
+    // A SECOND stranger arrives after the enrolment: refused, before any
+    // session command, silently to the sender.
+    fake.deliver('/list', 'm2', 'wxid_second_stranger')
     await waitFor(
-      () => lines.some((line) => /refused message/.test(line)),
+      () => lines.some((line) => /refused message from wxid_second_stranger/.test(line)),
       'the refusal to be logged',
     )
     assert.deepEqual(sessionsOpened, [], 'a refused sender must not open or switch a session')
-    assert.equal(fake.outbound.length, 0, 'a refusal must be silent to the sender')
+    assert.equal(fake.outbound.length, 1, 'a refusal must be silent to the sender')
   })
 })
 

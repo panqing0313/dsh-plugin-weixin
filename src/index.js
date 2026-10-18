@@ -32,7 +32,7 @@ import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/a
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
-import { isAccountPaused, touchAccount, allowlistForAccount } from './account-registry.js'
+import { isAccountPaused, touchAccount, allowlistForAccount, readRegistry, enrolFirstContact } from './account-registry.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -678,8 +678,12 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
   // `accountId` is always set here (bringUpAccount passes it), but the
   // fallback keeps the helper's contract honest.
   const accountConfig = { ...config, ...allowlistForAccount(accountId, config) }
-  return async (message) => {
-    // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
+  // The enrolment branch below re-resolves the allowlist mid-flight; the
+  // handler reads the config for THIS message through this cell so a
+  // first-contact enrolment takes effect on the very message that triggered
+  // it, without touching the per-handler `accountConfig` capture above.
+  const effectiveConfig = { current: accountConfig }
+  return async (message) => {    // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
     //    NOT unsupported — they are normalized into descriptors by the transport
     //    and downloaded below, after authorization.
@@ -696,18 +700,49 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
     //    critically — before any download. An unauthorized sender must not be
     //    able to make this host issue requests to Tencent's CDN, so nothing
     //    below this point may run for a denied message.
-    if (!isAllowedSender(accountConfig, message.senderId, message.conversationId)) {
-      // Log the refusal to the file logger too, with the full allowlist: the
-      // rebind flow generates a fresh sender id per bot, so the most common
-      // refusal is a stale allowedSenders entry, and this line is both the
-      // diagnosis and the exact value the operator needs to paste into config.
-      fileLog.info(
-        `refused message from ${message.senderId} (conversation ${message.conversationId}): ` +
-          `${denialReason(accountConfig, message.senderId, message.conversationId)}; ` +
-          `allowedSenders=${JSON.stringify(accountConfig.allowedSenders ?? [])}`,
-      )
-      warn(`refused message from ${message.senderId}: ${denialReason(accountConfig, message.senderId, message.conversationId)}`)
-      return
+    if (!isAllowedSender(effectiveConfig.current, message.senderId, message.conversationId)) {
+      // First contact enrolment: at scan time only the bot id is known — the
+      // human's WeChat id first appears HERE, on the first inbound message.
+      // So the very first sender an account without an allowlist override
+      // hears is treated as the person who scanned (whoever scans owns the
+      // account), enrolled into that account's own allowlist, and let
+      // through. Every later stranger is refused exactly as before.
+      let enrolled = false
+      if (accountId) {
+        const hasOverride = () => {
+          const entry = readRegistry()[accountId]
+          return (Array.isArray(entry?.allowedSenders) && entry.allowedSenders.length > 0) || Boolean(entry?.firstContactEnrolledAt)
+        }
+        enrolled = enrolFirstContact(accountId, message.senderId, hasOverride, (line) => {
+          log(`${line}`)
+          fileLog.info(`dsh-weixin: ${line} (the scanner's first message; add more senders on the card or in the registry)`)
+        }, config.allowedSenders)
+        if (enrolled) {
+          // Re-resolve the effective config so the rest of this message runs
+          // under the list that now contains the sender.
+          const enrolledConfig = { ...config, ...allowlistForAccount(accountId, config) }
+          if (isAllowedSender(enrolledConfig, message.senderId, message.conversationId)) {
+            effectiveConfig.current = enrolledConfig
+          } else {
+            // The enrolment did not actually authorize the sender (chat
+            // allowlist still denies, say): refuse after all, do not pretend.
+            enrolled = false
+          }
+        }
+      }
+      if (!enrolled) {
+        // Log the refusal to the file logger too, with the full allowlist: the
+        // rebind flow generates a fresh sender id per bot, so the most common
+        // refusal is a stale allowedSenders entry, and this line is both the
+        // diagnosis and the exact value the operator needs to paste into config.
+        fileLog.info(
+          `refused message from ${message.senderId} (conversation ${message.conversationId}): ` +
+            `${denialReason(accountConfig, message.senderId, message.conversationId)}; ` +
+            `allowedSenders=${JSON.stringify(accountConfig.allowedSenders ?? [])}`,
+        )
+        warn(`refused message from ${message.senderId}: ${denialReason(accountConfig, message.senderId, message.conversationId)}`)
+        return
+      }
     }
 
     // 3. Dedupe: iLink can redeliver a message after a reconnect.
