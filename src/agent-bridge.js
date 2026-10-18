@@ -20,7 +20,7 @@
  * @module dsh-weixin/agent-bridge
  */
 import { readAssistantReply, describePending } from './session-reader.js'
-import { baseSessionIdFor, SessionLines, runSessionCommand } from './sessions.js'
+import { baseSessionIdFor, scopedLineKey, SessionLines, runSessionCommand } from './sessions.js'
 
 /**
  * `@deepseek-ai/dsh-llm` resolves only from inside a DSH profile, so it is
@@ -158,11 +158,13 @@ export class AgentBridge {
    * and for the first-message title.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {string}
    */
-  #activeSessionId(conversationId) {
-    const sessionId = this.lines.active(conversationId)
-    this.conversationTargets.set(conversationId, sessionId)
+  #activeSessionId(conversationId, accountId) {
+    const key = scopedLineKey(accountId, conversationId)
+    const sessionId = this.lines.active(conversationId, accountId)
+    this.conversationTargets.set(key, sessionId)
     return sessionId
   }
 
@@ -175,14 +177,16 @@ export class AgentBridge {
    * context: it is answered by the plugin itself.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @param {string} text
    * @returns {string | undefined}
    */
-  handleCommand(conversationId, text) {
+  handleCommand(conversationId, text, accountId) {
     // Capture the target BEFORE the command runs: `/clear` replaces the line,
     // and the id to orphan is the one that was active up to now.
-    const previouslyActive = this.conversationTargets.get(conversationId)
-    const reply = runSessionCommand(this.lines, conversationId, text)
+    const key = scopedLineKey(accountId, conversationId)
+    const previouslyActive = this.conversationTargets.get(key)
+    const reply = runSessionCommand(this.lines, conversationId, text, accountId)
     if (reply === undefined) return undefined
     // `/clear` orphans the line that was active: its session id is no longer
     // in the list and the fresh line has a different id, so the old in-memory
@@ -200,7 +204,7 @@ export class AgentBridge {
     }
     // A command can change which line is active, so the next message must not
     // reuse a mapping taken before it ran.
-    this.conversationTargets.delete(conversationId)
+    this.conversationTargets.delete(key)
     this.log?.(`session command handled for ${conversationId}: ${String(text).trim()}`)
     return reply
   }
@@ -208,9 +212,10 @@ export class AgentBridge {
   /**
    * Session lines recorded for a conversation, for the settings card.
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    */
-  sessionLines(conversationId) {
-    return this.lines.list(conversationId)
+  sessionLines(conversationId, accountId) {
+    return this.lines.list(conversationId, accountId)
   }
 
   /**
@@ -321,9 +326,10 @@ export class AgentBridge {
    * line is active.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    */
-  async attach(conversationId) {
-    const sessionId = this.#activeSessionId(conversationId)
+  async attach(conversationId, accountId) {
+    const sessionId = this.#activeSessionId(conversationId, accountId)
     const existing = this.sessions.get(sessionId)
     if (existing !== undefined) return existing
 
@@ -463,18 +469,19 @@ export class AgentBridge {
    *
    * @param {object} params
    * @param {string} params.conversationId
+   * @param {string} [params.accountId] owning bot account; bare key when absent
    * @param {string} params.text
    * @param {(note: string) => Promise<void>|void} [params.onProgress]
    * @param {AbortSignal} [params.signal]
    * @returns {Promise<{ text: string, sessionId: string }>}
    */
-  async deliver({ conversationId, text, onProgress, signal, busyMessageMode, onLateReply }) {
-    const record = await this.attach(conversationId)
-    const sessionId = this.conversationTargets.get(conversationId)
+  async deliver({ conversationId, accountId, text, onProgress, signal, busyMessageMode, onLateReply }) {
+    const record = await this.attach(conversationId, accountId)
+    const sessionId = this.conversationTargets.get(scopedLineKey(accountId, conversationId))
     // Name the line after the first message that runs in it. Done before the
     // turn so `/list` shows what the topic is even while the first reply is
     // still being written; a later message never renames it.
-    if (sessionId !== undefined) this.lines.title(conversationId, sessionId, text)
+    if (sessionId !== undefined) this.lines.title(conversationId, sessionId, text, accountId)
     const mode = busyMessageMode === 'steer' ? 'steer' : 'queue'
 
     if (record.busy) {
@@ -494,7 +501,7 @@ export class AgentBridge {
         return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionId ?? baseSessionIdFor(conversationId) }
       }
       // queue (default): FIFO tail drained when the running turn settles.
-      return await this.#enqueue({ record, conversationId, text, onProgress, signal, onLateReply })
+      return await this.#enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply })
     }
     record.busy = true
     try {
@@ -521,8 +528,8 @@ export class AgentBridge {
    * own reply, so the caller delivers the real answer through its normal
    * reply path once the turn runs.
    */
-  async #enqueue({ record, conversationId, text, onProgress, signal, onLateReply }) {
-    const sessionId = record.agent.session?.id ?? this.conversationTargets.get(conversationId) ?? baseSessionIdFor(conversationId)
+  async #enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply }) {
+    const sessionId = record.agent.session?.id ?? this.conversationTargets.get(scopedLineKey(accountId, conversationId)) ?? baseSessionIdFor(conversationId)
     const entry = { text, onProgress, signal, onLateReply }
     entry.done = new Promise((resolve) => { entry.resolveDone = resolve })
     record.queue.push(entry)

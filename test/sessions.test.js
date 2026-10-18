@@ -395,3 +395,86 @@ test('/clear replies with the fresh-start notice and resets the list', () => {
   assert.match(reply ?? '', /全新的会话/)
   assert.equal(lines.list('room-clear-reply').length, 1)
 })
+
+test('scopedLineKey keeps bare keys for accountless callers and prefixes otherwise', async () => {
+  const { scopedLineKey } = await import('../src/sessions.js')
+  assert.equal(scopedLineKey(undefined, 'room-1'), 'room-1')
+  assert.equal(scopedLineKey('', 'room-1'), 'room-1', 'a blank account must not create a ":..." key')
+  assert.equal(scopedLineKey('  ', 'room-1'), 'room-1')
+  assert.equal(scopedLineKey('05e25f48bbe8@im.bot', 'room-1'), '05e25f48bbe8-im-bot:room-1')
+})
+
+test('two accounts with the same conversation id keep separate line lists', () => {
+  const lines = freshLines()
+  const conversationId = 'room-shared'
+  const accountA = 'aaaaaaaaaaaa@im.bot'
+  const accountB = 'bbbbbbbbbbbb@im.bot'
+
+  // Account A opens a second line; account B must not see or inherit it.
+  runSessionCommand(lines, conversationId, '/new', accountA)
+  assert.equal(lines.list(conversationId, accountA).length, 2)
+  assert.equal(lines.list(conversationId, accountB).length, 1, 'account B must start on its own first line')
+  assert.equal(lines.list(conversationId, accountB).length, 1)
+  assert.notEqual(lines.active(conversationId, accountB), lines.active(conversationId, accountA))
+
+  // Titles recorded for A must never show up under B.
+  lines.title(conversationId, lines.active(conversationId, accountA), 'A 的第一条消息', accountA)
+  const bFirst = lines.list(conversationId, accountB)[0]
+  assert.equal(bFirst.title, undefined, 'account B must not inherit a title from account A')
+
+  // And the store keys are really separated, not just in memory. Only A has
+  // an entry on disk: B was only ever read, and reading synthesizes its first
+  // line without persisting it (the same no-write-on-read rule as always).
+  const persisted = readLines()
+  assert.ok(Object.keys(persisted).some((key) => key === 'aaaaaaaaaaaa-im-bot:room-shared'), 'account A must have its own key')
+  assert.ok(!Object.keys(persisted).includes('room-shared'), 'no bare key may exist once accounts are in play')
+  // Once B actually mutates (a title of its own), its key appears separately.
+  // Note A's active line is its SECOND line (/new made it active), so titles
+  // are matched by active id, not by position.
+  lines.title(conversationId, lines.active(conversationId, accountB), 'B 的第一条消息', accountB)
+  const afterB = readLines()
+  assert.ok(Object.keys(afterB).some((key) => key === 'bbbbbbbbbbbb-im-bot:room-shared'), 'account B must have its own key')
+  assert.equal(afterB['bbbbbbbbbbbb-im-bot:room-shared'].lines[0].title, 'B 的第一条消息')
+  const aEntry = afterB['aaaaaaaaaaaa-im-bot:room-shared']
+  const aActive = afterB['aaaaaaaaaaaa-im-bot:room-shared'].active
+  assert.equal(aEntry.lines.find((line) => line.sessionId === aActive)?.title, 'A 的第一条消息', 'A and B titles live under separate keys')
+})
+
+test('/use under one account cannot reach another account\'s lines', () => {
+  const lines = freshLines()
+  const conversationId = 'room-shared-use'
+  const accountA = 'aaaaaaaaaaaa@im.bot'
+  const accountB = 'bbbbbbbbbbbb@im.bot'
+
+  runSessionCommand(lines, conversationId, '/new', accountA)
+  // Account B has only one line; /use 2 must be out of range for B even
+  // though account A has two.
+  const reply = runSessionCommand(lines, conversationId, '/use 2', accountB)
+  assert.match(reply ?? '', /没有第 2 条会话/)
+  // And B's active line is untouched by A's /new.
+  assert.equal(lines.active(conversationId, accountB), baseSessionIdFor(conversationId))
+})
+
+test('/clear under one account leaves the other account\'s lines intact', () => {
+  const lines = freshLines()
+  const conversationId = 'room-shared-clear'
+  const accountA = 'aaaaaaaaaaaa@im.bot'
+  const accountB = 'bbbbbbbbbbbb@im.bot'
+
+  runSessionCommand(lines, conversationId, '/new', accountA)
+  const bFirst = lines.active(conversationId, accountB)
+  runSessionCommand(lines, conversationId, '/clear', accountB)
+
+  assert.equal(lines.list(conversationId, accountA).length, 2, 'account A must keep both lines')
+  assert.equal(lines.list(conversationId, accountB).length, 1, 'account B gets exactly one fresh line')
+  assert.notEqual(lines.active(conversationId, accountB), bFirst)
+})
+
+test('an accountless caller still reads and writes the bare key', () => {
+  const lines = freshLines()
+  const conversationId = 'room-legacy'
+  lines.create(conversationId)
+  const persisted = readLines()
+  assert.ok(Object.keys(persisted).includes('room-legacy'), 'legacy callers must keep the historical bare key')
+  assert.equal(lines.list(conversationId).length, 2)
+})

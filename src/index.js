@@ -711,7 +711,7 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
     //    list the plugin already knows, and `/new` would run in the very session
     //    it is meant to leave. Placed after the allowlist and dedupe so a
     //    refused or replayed message still cannot steer a conversation.
-    const commandReply = bridge.handleCommand(message.conversationId, message.text)
+    const commandReply = bridge.handleCommand(message.conversationId, message.text, accountId)
     if (commandReply !== undefined) {
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
@@ -784,6 +784,7 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
       const startedAt = Date.now()
       const reply = await bridge.deliver({
         conversationId: message.conversationId,
+        accountId,
         text: prompt,
         busyMessageMode: config.busyMessageMode,
         onProgress: async (note) => {

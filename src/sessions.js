@@ -66,6 +66,28 @@ export function conversationSlug(conversationId) {
 }
 
 /**
+ * Store key for one conversation under one account.
+ *
+ * Accounts are separated at the store level: two bots that somehow report the
+ * same conversation id must never share a line list, or a message meant for
+ * one account could land in the other's session. The slug is the same fold
+ * used for session ids, so the key stays readable even though it is only ever
+ * a JSON key.
+ *
+ * With no account (or a blank one) the bare conversation id is used, which
+ * keeps pre-multi-account entries working unchanged.
+ *
+ * @param {string | undefined} accountId
+ * @param {string} conversationId
+ * @returns {string}
+ */
+export function scopedLineKey(accountId, conversationId) {
+  const slug = String(accountId ?? '').trim()
+  if (slug === '') return conversationId
+  return `${conversationSlug(slug)}:${conversationId}`
+}
+
+/**
  * Session id for the FIRST line of a conversation.
  *
  * This is the historical id and must stay stable forever: it is what every
@@ -212,10 +234,12 @@ export class SessionLines {
    * allowlist check later refused them.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {Array<{sessionId: string, title?: string, createdAt?: string, lastUsedAt?: string}>}
    */
-  list(conversationId) {
-    const entry = this.store[conversationId]
+  list(conversationId, accountId) {
+    const key = scopedLineKey(accountId, conversationId)
+    const entry = this.store[key]
     if (entry === undefined || !Array.isArray(entry.lines) || entry.lines.length === 0) {
       return [{ sessionId: baseSessionIdFor(conversationId), title: undefined }]
     }
@@ -231,11 +255,13 @@ export class SessionLines {
    * `attach` create a brand-new empty session under a stale name.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {string} session id
    */
-  active(conversationId) {
-    const lines = this.list(conversationId)
-    const active = this.store[conversationId]?.active
+  active(conversationId, accountId) {
+    const key = scopedLineKey(accountId, conversationId)
+    const lines = this.list(conversationId, accountId)
+    const active = this.store[key]?.active
     if (typeof active === 'string' && lines.some((line) => line.sessionId === active)) return active
     return lines[0].sessionId
   }
@@ -255,16 +281,17 @@ export class SessionLines {
    * into cleared context.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {string} the fresh line's session id
    */
-  clear(conversationId) {
+  clear(conversationId, accountId) {
     // Write the fresh line directly rather than going through create(): the
     // empty list would make list() synthesize the historical base id and
     // create() would push onto it, silently resurrecting the line /clear was
     // asked to remove.
     const now = new Date().toISOString()
     const sessionId = newSessionIdFor(conversationId)
-    this.#set(conversationId, { lines: [{ sessionId, createdAt: now, lastUsedAt: now }], active: sessionId })
+    this.#set(scopedLineKey(accountId, conversationId), { lines: [{ sessionId, createdAt: now, lastUsedAt: now }], active: sessionId })
     return sessionId
   }
 
@@ -273,14 +300,15 @@ export class SessionLines {
    * so switching away and back preserves the earlier context.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {string} the new line's session id
    */
-  create(conversationId) {
+  create(conversationId, accountId) {
     const now = new Date().toISOString()
     const sessionId = newSessionIdFor(conversationId)
-    const lines = this.list(conversationId).slice()
+    const lines = this.list(conversationId, accountId).slice()
     lines.push({ sessionId, createdAt: now, lastUsedAt: now })
-    this.#set(conversationId, { lines, active: sessionId })
+    this.#set(scopedLineKey(accountId, conversationId), { lines, active: sessionId })
     return sessionId
   }
 
@@ -296,12 +324,12 @@ export class SessionLines {
    * @param {number} index 1-based position as shown by `/list`
    * @returns {string | undefined} the session id, or undefined when out of range
    */
-  use(conversationId, index) {
-    const lines = this.list(conversationId).slice()
+  use(conversationId, index, accountId) {
+    const lines = this.list(conversationId, accountId).slice()
     if (!Number.isInteger(index) || index < 1 || index > lines.length) return undefined
     const target = lines[index - 1]
     target.lastUsedAt = new Date().toISOString()
-    this.#set(conversationId, { lines, active: target.sessionId })
+    this.#set(scopedLineKey(accountId, conversationId), { lines, active: target.sessionId })
     return target.sessionId
   }
 
@@ -315,16 +343,18 @@ export class SessionLines {
    * @param {string} conversationId
    * @param {string} sessionId
    * @param {string} text
+   * @param {string} [accountId] owning bot account; bare key when absent
    */
-  title(conversationId, sessionId, text) {
+  title(conversationId, sessionId, text, accountId) {
     // A conversation whose first message has just arrived has no entry on disk
     // yet — `list()` synthesizes its first line rather than persisting one, so
     // that merely receiving a message does not write state. Materialize the
     // entry here instead of dropping the title.
-    const existing = this.store[conversationId]
+    const key = scopedLineKey(accountId, conversationId)
+    const existing = this.store[key]
     const lines = Array.isArray(existing?.lines) && existing.lines.length > 0
       ? existing.lines
-      : this.list(conversationId).slice()
+      : this.list(conversationId, accountId).slice()
     const line = lines.find((candidate) => candidate.sessionId === sessionId)
     if (line === undefined) return
     // Only the first message names a line: re-titling on every message would
@@ -334,18 +364,19 @@ export class SessionLines {
     if (line.createdAt === undefined) line.createdAt = now
     line.lastUsedAt = now
     line.title = titleFrom(text)
-    this.#set(conversationId, { lines, active: existing?.active ?? sessionId })
+    this.#set(key, { lines, active: existing?.active ?? sessionId })
   }
 
   /**
    * Render the line list as the text `/list` replies with.
    *
    * @param {string} conversationId
+   * @param {string} [accountId] owning bot account; bare key when absent
    * @returns {string}
    */
-  render(conversationId) {
-    const all = this.list(conversationId)
-    const activeId = this.active(conversationId)
+  render(conversationId, accountId) {
+    const all = this.list(conversationId, accountId)
+    const activeId = this.active(conversationId, accountId)
     // Newest first: the lines a user wants to switch back to are the recent
     // ones, and the list is capped.
     const numbered = all.map((line, index) => ({ line, index: index + 1 }))
@@ -430,36 +461,36 @@ export const SESSION_COMMANDS_HELP = [
  * @param {string} text
  * @returns {string | undefined}
  */
-export function runSessionCommand(lines, conversationId, text) {
+export function runSessionCommand(lines, conversationId, text, accountId) {
   const command = parseSessionCommand(text)
   if (command === undefined) return undefined
   if (command.command === 'new') {
-    const sessionId = lines.create(conversationId)
-    const ordinal = lines.list(conversationId).length
+    const sessionId = lines.create(conversationId, accountId)
+    const ordinal = lines.list(conversationId, accountId).length
     // Deliberately no title yet: the line is named by its first real message,
     // and stamping a placeholder here would count as "already titled" and keep
     // the user looking at "(无标题)" forever.
     return `已开启第 ${ordinal} 条会话，接下来的消息进入这里。\n（之前那条仍然保留，/list 可以切回去）`
   }
   if (command.command === 'list') {
-    return lines.render(conversationId)
+    return lines.render(conversationId, accountId)
   }
   if (command.command === 'clear') {
     // Deliberately refuses an argument: `/clear 3` would read like `/use 3`
     // with a reset bolted on, and picking one line out of the list to wipe is
     // a rarer need than "start over" — misfiring it destroys context, so the
     // safer surface is the one that cannot be aimed at the wrong line.
-    lines.clear(conversationId)
+    lines.clear(conversationId, accountId)
     return `已清空当前会话，接下来是一条全新的会话。\n之前的上下文不再使用，也没有别的影响。`
   }
   if (command.index === undefined) {
-    return `${USE_USAGE}\n\n${lines.render(conversationId)}`
+    return `${USE_USAGE}\n\n${lines.render(conversationId, accountId)}`
   }
-  const sessionId = lines.use(conversationId, command.index)
+  const sessionId = lines.use(conversationId, command.index, accountId)
   if (sessionId === undefined) {
-    return `没有第 ${command.index} 条会话。\n\n${lines.render(conversationId)}`
+    return `没有第 ${command.index} 条会话。\n\n${lines.render(conversationId, accountId)}`
   }
-  const line = lines.list(conversationId).find((candidate) => candidate.sessionId === sessionId)
+  const line = lines.list(conversationId, accountId).find((candidate) => candidate.sessionId === sessionId)
   const title = line?.title ?? '(尚无对话)'
   return `已切换到第 ${command.index} 条会话：${title}\n接下来的消息进入这里，这条会话之前的上下文还在。`
 }

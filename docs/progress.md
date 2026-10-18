@@ -1536,3 +1536,47 @@ test/client-remote.test.js` 退回阶段 1 → 两条新行为测试恰好 **2 �
   方式一致。
 - emitWarning 是模块级 process 通道，caller warn 收不到；断言它必须先 await 一个
   tick（setImmediate）。
+
+## 2026-10-18：多账号阶段 3 —— 会话线按账号隔离
+
+### 缺陷
+
+会话线（`/new` `/list` `/use`）的存取以**裸 conversationId** 为 key 写在
+`sessions.json`。多账号下若两个账号出现同一个会话 id，两边会共用同一条会话线：
+给 A 账号发 `/new` 会把 B 账号也切到新线，B 的标题会出现在 A 的列表里。
+
+### 修复
+
+- `src/sessions.js` 新增 `scopedLineKey(accountId, conversationId)`：有账号时
+  store key 变 `<accountSlug>:<conversationId>`（`@` 等折叠成 `-`，与 session id
+  同一套 slug 规则）；无账号（或空账号）保持裸 key，既有单账号条目原样可读。
+- `SessionLines` 的 `list/active/clear/create/use/title/render` 全部加可选尾参
+  `accountId`；`runSessionCommand` 透传。session id 本身不变（仍是
+  `weixin-<slug>`），换的只是 store 的 key——按用户拍板接受「升级后既有单账号
+  会话另起一条新线」（旧 transcript 保留，`/list` 不再显示旧线）。
+- `src/agent-bridge.js`：`attach/handleCommand/deliver/#enqueue/sessionLines` 全链路
+  带 `accountId`，`conversationTargets` 改用 scoped key。
+- `src/index.js`：`handleCommand`/`deliver` 调用点传 `message.accountId`。
+
+### 测试与辨别力
+
+- `test/sessions.test.js` 新增 5 条：`scopedLineKey` 形状（含空账号回退裸 key）、
+  双账号同 conversationId 的线表隔离与标题隔离、跨账号 `/use` 不可达、
+  跨账号 `/clear` 不波及、无账号调用方仍读写裸 key。
+- `test/session-routing.test.js` 新增 1 条：bridge 层一个账号的 `/new` `/list`
+  不触碰另一账号的线。
+- 辨别力实测：`git stash push -- src/sessions.js src/agent-bridge.js src/index.js`
+  后恰好 5 红（新加的账号隔离测试），恢复后全绿。全量 **307 pass / 0 fail**。
+
+### 顺带修复：「新增账号登录」入口不可发现
+
+已绑定状态下卡片只有「重新扫码登录」按钮，文案读起来像重登当前账号，没有表达
+「可以再登录一个」。改为：未过期时按钮显示**新增账号登录**（会话过期时仍是
+「重新扫码登录」——那是补救场景）。后端本就支持：凭证按 `ilink_bot_id` 分账号
+落盘，confirmed 后 `onAccountBound(bot_id)` 只重挂该账号的循环。
+
+### 教训
+
+- 测试里断言「另一个账号有 key」前先想清楚它是否真的发生过写入：`list()` 刻意
+  不落盘（首条线按需合成），只读不写的账号在文件里没有 key 是预期行为。
+- heredoc 追加测试时撇号（`account's`）会闭合单引号字符串——`node --check` 先行。

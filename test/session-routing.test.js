@@ -160,3 +160,24 @@ test('sessionLines exposes the line list without changing what is active', async
   assert.equal(listed.length, 2)
   assert.equal(lines.active(conversationId), before, 'reading the list must not switch the conversation')
 })
+
+test('a session command aimed at one account never touches another account\'s lines', async () => {
+  fs.rmSync(path.join(stateRoot, 'sessions.json'), { force: true })
+  const lines = new SessionLines()
+  const { ctx } = fakeHost()
+  const bridge = bridgeOver(ctx, lines)
+  const conversationId = 'room-multi'
+  const accountA = 'aaaaaaaaaaaa@im.bot'
+  const accountB = 'bbbbbbbbbbbb@im.bot'
+
+  // Account A opens a fresh line; account B must still be on its first.
+  const aReply = bridge.handleCommand(conversationId, '/new', accountA)
+  assert.match(aReply ?? '', /已开启第 2 条/)
+  assert.equal(bridge.sessionLines(conversationId, accountA).length, 2)
+  assert.equal(bridge.sessionLines(conversationId, accountB).length, 1)
+  assert.equal(bridge.sessionLines(conversationId).length, 1, 'the bare key is untouched by account-scoped commands')
+
+  // B lists its own (single) line even though A has two.
+  const bReply = bridge.handleCommand(conversationId, '/list', accountB)
+  assert.match(bReply ?? '', /共 1 条会话/)
+})

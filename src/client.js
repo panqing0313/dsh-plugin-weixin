@@ -949,7 +949,9 @@ window.__ModuleLoader__.load({
 								onClick: start,
 								style: primaryButtonStyle,
 							}, bound || sessionExpired
-								? t("Scan again to log in", "重新扫码登录")
+								? sessionExpired
+									? t("Scan again to log in", "重新扫码登录")
+									: t("Add another WeChat account", "新增账号登录")
 								: t("Scan QR code to log in", "扫码登录微信")),
 							// Only offered when there is something to forget. A
 							// logout is destructive, so it is never the primary
