@@ -25,6 +25,14 @@ import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
+import { appendJournal } from './message/journal.js'
+
+/**
+ * Module-level outbound journal sink, wired once in setup (see sendChunked).
+ * `sendChunked` is a module-level function with no apply scope, so the wiring
+ * has to cross scopes exactly once — null before setup means "not recording".
+ */
+let journalOutboundRef = null
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
@@ -81,6 +89,7 @@ export const Config = z.object({
   allowedSenders: z.array(z.string()).default([]).description('Weixin user ids allowed to drive the agent. Empty denies everyone.'),
   allowedChats: z.array(z.string()).default([]).description('Optional conversation allowlist. Empty allows any conversation from an allowed sender.'),
   maxMessageLength: z.number().default(1500).description('Maximum characters per outbound Weixin message.'),
+  messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
   markdownMode: z
     .union([z.const('strip'), z.const('off')])
     .default('strip')
@@ -312,6 +321,9 @@ export function apply(ctx, config) {
           log(`reminder ${reminder.id} delivered to ${reminder.conversationId}`)
         },
       })
+      if (config.messageJournal === true) {
+        journalOutboundRef = (entry) => appendJournal(stateRoot, { dir: 'out', ...entry }, { warn })
+      }
 
     })()
 
@@ -440,6 +452,7 @@ export function apply(ctx, config) {
         // workspace, so "what the agent wrote" is well defined.
         agentCwd: cwd,
         reminderScheduler,
+        journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
       })
 
       const previous = transports.get(account.accountId)
@@ -696,7 +709,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler }) {
+function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, journalInbound }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -709,7 +722,14 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
   // it, without touching the per-handler `accountConfig` capture above.
   const effectiveConfig = { current: accountConfig }
   return async (message) => {
-    log(`DBG2 entered kind=${message.type} text=${JSON.stringify(message.text)}`)
+    if (config.messageJournal === true && message.type === 'text') {
+      journalInbound?.({
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        text: message.text,
+      })
+    }
     // 1. Truly unknown item kinds (TOOL_CALL_*, anything the protocol adds
     //    later) still get one short notice rather than silence. Media kinds are
     //    NOT unsupported — they are normalized into descriptors by the transport
@@ -1140,6 +1160,11 @@ async function sendProducedFiles(params) {
  */
 async function sendChunked(transport, config, message) {
   const text = markdownToPlainText(message.text ?? '', resolveMarkdownMode(config))
+  journalOutboundRef?.({
+    accountId: transport.accountId,
+    conversationId: message.conversationId,
+    text,
+  })
   const chunks = chunkText(text, config.maxMessageLength)
   for (const chunk of chunks) {
     await transport.send({

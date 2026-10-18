@@ -1940,3 +1940,22 @@ off：零网络请求、prompt 无链接块）。
   边界吞掉，表现为「全部消息无回复」；这正是它必须走参数透传的原因。
 - 测试：`test/scheduler.test.js` 7 条（虚拟时钟）；`test/session-commands.test.js` 2 条
   全链路（真 transport 出站、持久化落盘、取消）。辨别力：HEAD 还原后恰好 2 条新测试红。
+
+## 消息流水 messageJournal + 设置卡「消息流水」页签（本轮）
+
+- 用户诉求：定时任务希望有界面管理（/remindlist 已够聊天侧用）；补做之前排序里的可选功能 5
+  （多账号消息聚合视图）。
+- `src/message/journal.js`（新）：`appendJournal` 追加 JSONL 到 `<stateRoot>/journal/journal-YYYY-MM-DD.jsonl`
+  （按天滚动、文本截断 200 字符、**失败只 warn 永不抛**——流水是观测工具，不能反过来弄坏收发）；
+  `readJournal` 从最新文件往回读到 limit（默认 50），坏行跳过。
+- `src/index.js`：出站在 `sendChunked` 挂点（覆盖回复/提醒/媒体文本全部出站），入站在
+  `createInboundHandler` 入口（仅 text）。**教训重演**：`sendChunked` 是模块级函数，
+  `journalOutboundRef` 声明在 apply 作用域内会再现 `ReferenceError` 被吞 → 必须提到模块级
+  （声明处注释写明原因）；`createInboundHandler` 侧继续走参数透传。
+- `src/login-remote.js`：新增 `journal({limit?, accountId?})` remote 方法（host 侧），
+  `src/client.js` 补同名 descriptor（form↔schema 一致性测试强制两侧同步，这次真的先红后绿抓到了）。
+- `src/client.js`：新增 `JournalSection` + 第 6 个页签「消息流水」（时间、↓收/↑发、账号、内容）。
+- `src/config-remote.js`：配置表单加 `messageJournal` 开关（默认 true）。
+- 测试：`test/journal.test.js` 6 条（含 unwritable path 不抛、torn line 跳过）；e2e 1 条
+  on/off 双态（收发都落盘 / off 零文件）；settings-tabs 断言新页签。辨别力：HEAD 还原后
+  恰好 1 条 messageJournal e2e 红。

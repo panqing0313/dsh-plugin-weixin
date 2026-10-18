@@ -24,6 +24,7 @@ import { readSavedConfig } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
 import { SessionLines, conversationSlug } from "./sessions.js";
+import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -342,6 +343,15 @@ export class WeixinLoginController extends TypertRemoteService {
      * needs no re-scan. The host's next bring-up pass (this call re-arms the
      * host immediately via `onAccountControlChange`) skips paused accounts.
      */
+    /** Message journal for the settings card: newest first, optional account filter. */
+    async journal(options) {
+        const opts = options ?? {};
+        const limitRaw = Number(opts.limit);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : DEFAULT_JOURNAL_LIMIT;
+        const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
+        return { entries: readJournal(stateDir(), { limit, accountId }) };
+    }
+
     async pause(accountId) {
         const id = String(accountId ?? "").trim();
         if (!id) throw new RemoteError("account id is required");
@@ -529,4 +539,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal"]);

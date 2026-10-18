@@ -207,6 +207,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `sendIntervalMs` | `1200` | 两条外发消息（文本分片和附件都算）之间的最小间隔，毫秒。实测约 20 条/几分钟会触发账号级发送封锁（≥30 分钟），该间隔让分片回复保持在线以下 |
 | `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
 | `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
+| `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 50 条 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
@@ -376,6 +377,13 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 直接回答，而不是「我打不开链接」。抓取是尽力而为：只碰 http(s)；二进制内容（图片/音视频）不当作文本
 硬读；抓不到的链接只给 Agent 一行原因（`HTTP 500`、`请求失败：…`），消息本身照常走完一轮。
 `test/links.test.js` 与 `test/e2e.test.js` 的 readLinks 用例守着这些行为。
+
+### 消息流水（messageJournal）
+
+`messageJournal` 开着时（默认开），每条收发的文本消息都会追加到本地流水（`<状态目录>/journal/`，
+按天一个文件，文本截断 200 字符）。设置卡的「消息流水」页签显示最近 50 条（收 ↓ / 发 ↑、账号、时间、
+内容，最新在前），不用翻日志就能确认每个账号都活着。写流水是尽力而为：失败只 warn，绝不影响消息收发。
+`test/journal.test.js` 与 `test/e2e.test.js` 的 messageJournal 用例守着这些行为。
 
 语音是微信 SILK 格式。插件会尝试用上游的 `silkToWav` 转成 WAV；`silk-wasm` 现在是
 `optionalDependencies` 里的一项（已装则可用；卸载或安装失败不影响插件加载，会走降级路径）。

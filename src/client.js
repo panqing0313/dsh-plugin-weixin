@@ -127,6 +127,17 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/useSession:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/journal`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "journal",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/journal:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journal:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/removeSession`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1422,6 +1433,68 @@ window.__ModuleLoader__.load({
 		 * type — and the host coerces them, so this component never has to know
 		 * whether "1500" is a number, a list, or a JSON blob.
 		 */
+		/** Message journal: recent in/out traffic across accounts, newest first. */
+		function JournalSection({ ctx, t }) {
+			const [entries, setEntries] = react.useState(null);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+
+			const load = async () => {
+				setBusy(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.journal({ limit: 50 }));
+					setError("");
+					setEntries(Array.isArray(r?.entries) ? r.entries : []);
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			react.useEffect(() => {
+				load();
+			}, []);
+
+			const timeOf = (at) => {
+				try {
+					return new Date(at).toLocaleTimeString();
+				} catch {
+					return "?";
+				}
+			};
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Message journal", "消息流水")),
+				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) },
+					t("Refresh", "刷新")));
+
+			if (error) {
+				return createElement("div", { style: panelStyle }, head,
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "\u26a0"),
+						createElement("span", null, error)));
+			}
+
+			const rows = (entries ?? []).map((entry, i) => createElement("div", {
+				key: `${entry.at}-${i}`,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, timeOf(entry.at)),
+				createElement("span", { style: { flex: "0 0 auto", fontWeight: 600 } }, entry.dir === "out" ? "\u2191" : "\u2193"),
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, entry.accountId),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
+					`${entry.senderId ?? ""}${entry.senderId ? ": " : ""}${entry.text ?? ""}`)));
+
+			return createElement("div", { style: panelStyle }, head,
+				rows.length === 0
+					? createElement("p", { style: hintStyle }, t("No recorded messages yet.", "还没有记录到的消息。"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, rows),
+				createElement("p", { style: captionStyle },
+					t("Newest first, last 50. \u2191 sent by the bot, \u2193 received from WeChat.",
+						"最新在前，最近 50 条。\u2191 机器人发出，\u2193 收到。")));
+			}
+
 		function ConfigSection({ ctx, t }) {
 			const [groups, setGroups] = react.useState([]);
 			const [draft, setDraft] = react.useState({});
@@ -2377,6 +2450,7 @@ window.__ModuleLoader__.load({
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
+										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);

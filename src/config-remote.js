@@ -82,6 +82,15 @@ export const FIELDS = [
         hintEn: "Prepend a source block so the agent knows the message came from WeChat and who sent it.",
       },
       {
+        path: "messageJournal",
+        type: T.boolean,
+        default: true,
+        label: "记录消息流水",
+        labelEn: "Record a message journal",
+        hint: "把最近的收发消息记到本地流水（消息流水页签展示），只存最近条目，方便确认账号活着。",
+        hintEn: "Keep a local journal of recent in/out traffic (shown on the Journal tab) so you can confirm accounts are alive without reading logs.",
+      },
+      {
         path: "readLinks",
         type: T.boolean,
         default: true,

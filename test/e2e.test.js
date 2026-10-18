@@ -465,6 +465,65 @@ test('readLinks on: a pasted URL is fetched and its text reaches the agent; a de
   }
 })
 
+test('messageJournal on: in and out traffic both land in the journal; off: nothing is recorded', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  for (const messageJournal of [true, false]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-journal-${messageJournal}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ctj', create_time_ms: 13, item_list: [{ type: 1, text_item: { text: 'journal me' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, messageJournal })
+
+      const disposers = []
+      const warnings = []
+      const ctx = {
+        logger: { info: () => {}, warn: (l) => warnings.push(l) },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      assert.ok(sent.length >= 1, `expected a reply (messageJournal=${messageJournal})`)
+      const journalDir = path.join(stateRoot, 'journal')
+      const files = fs.existsSync(journalDir) ? fs.readdirSync(journalDir) : []
+      if (messageJournal) {
+        assert.ok(files.length >= 1, 'expected a journal file when messageJournal is on')
+        const lines = fs.readFileSync(path.join(journalDir, files[0]), 'utf8').split('\n').filter((l) => l !== '')
+        const entries = lines.map((l) => JSON.parse(l))
+        const inbound = entries.find((e) => e.dir === 'in')
+        const outbound = entries.find((e) => e.dir === 'out')
+        assert.ok(inbound, 'expected an inbound entry')
+        assert.equal(inbound.text, 'journal me')
+        assert.equal(inbound.accountId, ACCOUNT_ID)
+        assert.ok(outbound, 'expected an outbound entry')
+        assert.match(outbound.text, /pong: journal me/)
+        assert.equal(outbound.conversationId, ALLOWED)
+      } else {
+        assert.equal(files.length, 0, 'messageJournal off must not write a journal')
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
+  }
+})
+
 test('a CDN root saved in the account record is used when config does not set one', async () => {
   // Regression: the schema used to default `cdnBaseUrl` to the production root,
   // which made the account-record fallback dead code — an operator who set the

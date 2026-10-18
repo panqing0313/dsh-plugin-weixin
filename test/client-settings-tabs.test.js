@@ -20,6 +20,8 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
   // Both sections exist as tabs.
   assert.match(card[0], /id: "account"/)
   assert.match(card[0], /id: "voice"/)
+  assert.match(card[0], /id: "journal"/, 'the journal tab must exist beside the other tabs')
+  assert.match(card[0], /createElement\(JournalSection, \{ ctx, t \}\)/, 'the journal tab must render its own section')
   assert.match(card[0], /id: "about"/, 'the About tab must exist beside the other tabs')
   assert.match(card[0], /createElement\(LoginSection, \{ ctx, t \}\)/)
   assert.match(card[0], /createElement\(AsrSection, \{ ctx, t \}\)/)
