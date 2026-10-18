@@ -358,3 +358,28 @@ test('/remind refuses a bad time, and /remindcancel removes a pending one', asyn
     assert.match(fake.outbound[3].text, /没有找到编号/)
   })
 })
+
+test('/help lists every command with what it does', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/help', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the help reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /\/new 开一条新会话/)
+    assert.match(reply, /\/list 查看这个微信会话下的所有会话/)
+    assert.match(reply, /\/use <序号>/)
+    assert.match(reply, /\/clear 清空当前会话/)
+    assert.match(reply, /\/status 查看当前账号和会话的状态/)
+    assert.match(reply, /\/remind <时间> <内容>/)
+    assert.match(reply, /\/remindlist/)
+    assert.match(reply, /\/remindcancel/)
+    assert.deepEqual(sessionsOpened, [], '/help must not cost a model turn')
+  })
+})
+
+test('/帮助 is an alias for /help', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/帮助', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the help reply')
+    assert.match(fake.outbound[0].text, /会话指令/)
+  })
+})

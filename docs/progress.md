@@ -1976,3 +1976,11 @@ off：零网络请求、prompt 无链接块）。
 - e2e 用 `/remind 90m …` 而不是绝对日期：`parseWhen` 的命令切分是首空格，
   `/remind 2050-01-01 09:00 x` 会把 when 切成 `2050-01-01`、text 切成 `09:00 x` → 「看不懂这个时间」。
 - 辨别力：HEAD 还原 6 文件 + 移走未跟踪测试后全绿（353），恢复后 357——新测试钉住新代码。
+
+## /help 会话命令（本轮）
+
+- 用户诉求：增加一个命令显示有哪些命令可以用、各自干嘛。
+- `src/sessions.js`：`parseSessionCommand` 加 `/help`（别名 `/帮助`、`/指令`）；`runSessionCommand`
+  直接回 `SESSION_COMMANDS_HELP`（帮助文本首行改为「发 /help 或 /帮助 可再看一遍」）。命令族由此
+  自描述：以后加新命令只需同步 SESSION_COMMANDS_HELP，用户侧就能发现它。
+- 测试：`test/session-commands.test.js` 2 条（内容逐行断言 + `/帮助` 别名 + 不产生 agent 轮次）。

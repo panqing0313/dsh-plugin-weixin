@@ -515,6 +515,8 @@ export function parseSessionCommand(text) {
   if (clearMatch !== null) return { command: 'clear' }
   const statusMatch = /^\/status$/i.exec(trimmed)
   if (statusMatch !== null) return { command: 'status' }
+  const helpMatch = /^\/(?:help|帮助|指令)$/i.exec(trimmed)
+  if (helpMatch !== null) return { command: 'help' }
   // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
   // 单独报「缺内容」而非「看不懂命令」。
   const remindMatch = /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
@@ -531,7 +533,7 @@ export const USE_USAGE = '用法：/use <序号>，序号来自 /list'
 
 /** Help text shown for a bare `/use` with no argument. */
 export const SESSION_COMMANDS_HELP = [
-  '会话指令：',
+  '会话指令（发 /help 或 /帮助 可再看一遍）：',
   '/new 开一条新会话（当前这条会保留，之后可以切回来）',
   '/list 查看这个微信会话下的所有会话',
   '/use <序号> 切换到第几条',
@@ -583,6 +585,9 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     // safer surface is the one that cannot be aimed at the wrong line.
     lines.clear(conversationId, accountId)
     return `已清空当前会话，接下来是一条全新的会话。\n之前的上下文不再使用，也没有别的影响。`
+  }
+  if (command.command === 'help') {
+    return SESSION_COMMANDS_HELP
   }
   if (command.command === 'status') {
     // Session-line facts are always available (the store owns them); the
