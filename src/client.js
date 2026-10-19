@@ -1024,15 +1024,6 @@ window.__ModuleLoader__.load({
 						}))
 				: null;
 
-			const [donateQr, setDonateQr] = react.useState(null);
-			react.useEffect(() => {
-				// The QR is a bundled asset read by the host; if it is missing
-				// (custom install, stripped package) the section just hides.
-				callRemote(() => ctx.remote.weixin.donateQr())
-					.then((r) => setDonateQr(typeof r?.qrDataUrl === "string" ? r.qrDataUrl : null))
-					.catch(() => setDonateQr(null));
-			}, []);
-
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 
 				//#region status
@@ -1202,6 +1193,15 @@ window.__ModuleLoader__.load({
 		function AboutSection({ ctx, t }) {
 			const [checkState, setCheckState] = react.useState("idle");
 			const [notice, setNotice] = react.useState("");
+
+			const [donateQr, setDonateQr] = react.useState(null);
+			react.useEffect(() => {
+				// The QR is a bundled asset read by the host; if it is missing
+				// (custom install, stripped package) the section just hides.
+				callRemote(() => ctx.remote.weixin.donateQr())
+					.then((r) => setDonateQr(typeof r?.qrDataUrl === "string" ? r.qrDataUrl : null))
+					.catch(() => setDonateQr(null));
+			}, []);
 
 			const checkUpdate = async () => {
 				setCheckState("busy");
