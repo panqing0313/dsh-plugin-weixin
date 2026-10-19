@@ -23,6 +23,26 @@ import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist
 import { readSavedConfig } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { qrDataUrl } from "./qr-png.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// The donate QR ships as a bundled asset (assets/donate-qr.jpg, whitelisted in
+// package.json "files"). Read it once, lazily, as a data URL - the settings
+// card cannot reach plugin files by path, so the image must ride the remote
+// result like the login QR does. A missing or unreadable file just means the
+// About tab hides its donate section; nothing else may break because of it.
+let donateQrDataUrlCache;
+function donateQrDataUrl() {
+    if (donateQrDataUrlCache !== undefined) return donateQrDataUrlCache;
+    try {
+        const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets", "donate-qr.jpg");
+        donateQrDataUrlCache = `data:image/jpeg;base64,${fs.readFileSync(file).toString("base64")}`;
+    } catch {
+        donateQrDataUrlCache = null;
+    }
+    return donateQrDataUrlCache;
+}
 import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
 
@@ -364,6 +384,11 @@ export class WeixinLoginController extends TypertRemoteService {
     }
 
     /** Cancel one pending reminder from the settings card. */
+    /** The donate QR as a data URL for the About tab; null when the asset is missing. */
+    donateQr() {
+        return { qrDataUrl: donateQrDataUrl() };
+    }
+
     async remindCancel(id) {
         if (this.remindersProvider === undefined) return { removed: false, error: "\u8c03\u5ea6\u5668\u4e0d\u53ef\u7528" };
         const removed = this.remindersProvider.cancel(String(id));
@@ -566,4 +591,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel", "donateQr"]);

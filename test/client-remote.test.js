@@ -213,6 +213,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
       [
         'weixin/allowlist',
         'weixin/cancel',
+        'weixin/donateQr',
         'weixin/journal',
         'weixin/label',
         'weixin/logout',

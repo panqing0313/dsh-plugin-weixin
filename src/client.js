@@ -136,6 +136,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/reminders:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/donateQr`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "donateQr",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/donateQr:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/remindCancel`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1015,6 +1024,15 @@ window.__ModuleLoader__.load({
 						}))
 				: null;
 
+			const [donateQr, setDonateQr] = react.useState(null);
+			react.useEffect(() => {
+				// The QR is a bundled asset read by the host; if it is missing
+				// (custom install, stripped package) the section just hides.
+				callRemote(() => ctx.remote.weixin.donateQr())
+					.then((r) => setDonateQr(typeof r?.qrDataUrl === "string" ? r.qrDataUrl : null))
+					.catch(() => setDonateQr(null));
+			}, []);
+
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 
 				//#region status
@@ -1267,6 +1285,14 @@ window.__ModuleLoader__.load({
 						t("Scan a QR code to bind a personal WeChat as a bot, chat with multiple accounts, per-account allowlists, session lines, voice replies.",
 							"扫码把个人微信绑成机器人：多账号、按账号白名单、会话线、语音回复。")),
 				]),
+				typeof donateQr === "string"
+					? row(t("Support the author", "打赏作者"), [
+						createElement("img", { key: "qr", src: donateQr, alt: t("Donate QR", "微信赞赏码"), style: { width: 180, height: 245, display: "block", borderRadius: 8 } }),
+						createElement("p", { key: "h", style: hintStyle },
+							t("If this plugin saves you time, a small tip keeps the updates coming — scan with WeChat to buy the author a coffee.",
+								"如果这个插件帮到了你，请作者喝杯咖啡吧——用微信扫码打赏，鼓励作者持续更新、优化功能、推出更好的特性。")),
+					])
+					: null,
 				row(t("Data location", "数据位置"), createElement("p", { style: hintStyle },
 					t("State lives in ~/.dsh/weixin (accounts, registry, sessions, logs). Uninstalling the plugin does not delete it; removing that folder clears everything.",
 						"本地状态都在 ~/.dsh/weixin（账号、登记表、会话、日志）。卸载插件不会删除它们；删除该目录即清空全部状态。"))));

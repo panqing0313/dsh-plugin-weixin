@@ -577,3 +577,11 @@ npm run release 0.4.0                # 正式发布
 - [进度记录](docs/progress.md)
 - [安全策略](docs/security.md)
 - [第三方代码](THIRD-PARTY-NOTICES.md)
+
+## 打赏作者
+
+如果这个插件帮到了你，欢迎请作者喝杯咖啡 —— 用微信扫下面的码打赏，鼓励作者持续更新、优化功能、推出更好的特性。
+
+<p align="center"><img src="assets/donate-qr.jpg" alt="微信打赏二维码" width="280" /></p>
+
+也可以提 Issue / PR：[github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)
