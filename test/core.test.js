@@ -234,6 +234,14 @@ test('readAssistantReply tracks in-flight tool calls', () => {
   assert.equal(describePending([]), 'thinking…')
 })
 
+test('describePending reflects tool changes for streaming progress', () => {
+  // A2: the bridge re-announces a CHANGED tool set. The note itself must
+  // differ when the pending set changes, or no amount of re-sending in
+  // #awaitReply can make the stream visible.
+  assert.notEqual(describePending(['bash']), describePending(['bash', 'read']))
+  assert.notEqual(describePending(['bash']), describePending(['read']))
+})
+
 test('sessionIdFor is stable and filesystem-safe', () => {
   assert.equal(sessionIdFor('wxid_abc'), 'weixin-wxid-abc')
   assert.equal(sessionIdFor('room/1@chat'), 'weixin-room-1-chat')

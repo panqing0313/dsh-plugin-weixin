@@ -101,7 +101,10 @@ export function parseSteerCommand(text) {
  * @property {(line: string) => void} [log]
  * @property {(line: string) => void} [errLog]
  * @property {number} [createTimeoutMs]
- * @property {number} [progressAfterMs]  Send a progress line after this long.
+ * @property {number} [progressAfterMs]  Send the first progress line after this long.
+ * @property {number} [progressEveryMs]  Re-send a CHANGED progress line at most
+ *   this often, so a turn that moves from one tool to the next stays visible
+ *   without spamming an unchanged state.
  * @property {number} [maxWaitMs]        Give up on a turn after this long.
  * @property {number} [pollMs]           Session-log polling interval.
  * @property {SessionLines} [lines]      Session-line index. Defaults to the
@@ -117,6 +120,7 @@ export class AgentBridge {
     this.errLog = options.errLog ?? options.log ?? (() => {})
     this.createTimeoutMs = options.createTimeoutMs ?? 30_000
     this.progressAfterMs = options.progressAfterMs ?? 45_000
+    this.progressEveryMs = options.progressEveryMs ?? 60_000
     this.maxWaitMs = options.maxWaitMs ?? 20 * 60_000
     this.pollMs = options.pollMs ?? 1_000
     // Session lines: which of a conversation's sessions the next message goes
@@ -647,7 +651,8 @@ export class AgentBridge {
     const sessionId = record.agent.session?.id ?? ''
     const startedAt = Date.now()
     const deadline = startedAt + this.maxWaitMs
-    let progressSent = false
+    let lastProgressAt = 0
+    let lastProgressNote = ''
     let lateAnnounced = false
 
     while (Date.now() < deadline) {
@@ -664,11 +669,20 @@ export class AgentBridge {
         return { text: `（模型调用失败：${reply.turnError}）`, sessionId }
       }
 
-      // A long tool run is invisible in WeChat; one progress line keeps the
-      // user informed without spamming the conversation.
-      if (!progressSent && onProgress && Date.now() - startedAt >= this.progressAfterMs) {
-        progressSent = true
-        await onProgress(describePending(reply.pendingTools))
+      // A long tool run is invisible in WeChat. The first note goes out after
+      // progressAfterMs; after that a CHANGED tool set is re-announced at most
+      // every progressEveryMs, so "running: bash" becoming "running: read"
+      // reaches the user while one long unchanged tool never spams.
+      if (onProgress) {
+        const note = describePending(reply.pendingTools)
+        const due = lastProgressAt === 0
+          ? Date.now() - startedAt >= this.progressAfterMs
+          : note !== lastProgressNote && Date.now() - lastProgressAt >= this.progressEveryMs
+        if (due) {
+          lastProgressAt = Date.now()
+          lastProgressNote = note
+          await onProgress(note)
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, this.pollMs))
     }

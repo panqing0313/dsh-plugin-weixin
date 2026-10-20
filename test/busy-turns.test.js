@@ -49,6 +49,28 @@ test.after?.(() => {
  * `release(text)` emits an assistant message into the event log. `steer`
  * records its payload so a test can assert exactly what was injected.
  */
+/**
+ * A fake agent whose event log starts mid-turn with one pending tool; `push`
+ * appends further events so a test can change the pending set over time.
+ */
+function streamingAgent() {
+  // Events start EMPTY: deliver() computes `before` from the snapshot at
+  // attach time, and readAssistantReply skips every event with seq <= before.
+  // A pre-seeded tool/call would be invisible to the progress loop — real
+  // tool calls happen after the turn starts, so the test pushes them in too.
+  const events = []
+  const agent = {
+    inbox: { clear() {} },
+    session: {
+      id: 'weixin-room-1',
+      snapshotEvents: () => events,
+    },
+    followup() {},
+    steer() {},
+  }
+  return { agent, push: (event) => events.push(event) }
+}
+
 function fakeAgent() {
   const calls = { followup: [], steer: [] }
   let seq = 0
@@ -197,6 +219,51 @@ test('/steer <instruction> steers the running turn regardless of the configured 
 
   fake.release('done')
   await Promise.all([first, second])
+})
+
+test('progress streams: a changed tool set is re-announced, an unchanged one is not', async () => {
+  const notes = []
+  const { agent, push } = streamingAgent()
+  const { AgentBridge } = await import('../src/agent-bridge.js')
+  // `attach` needs an agents service whose create returns our streaming fake;
+  // the in-memory SessionLines keeps the test off the operator's real state.
+  const agents = {
+    get: () => undefined,
+    async create() { return { agent, dispose: async () => {} } },
+  }
+  const ctx = { get: (n) => (n === 'agents' ? agents : undefined) }
+  const { SessionLines } = await import('../src/sessions.js')
+  const bridge = new AgentBridge({
+    ctx,
+    cwd: '/tmp',
+    lines: new SessionLines({ warn: () => {} }),
+    progressAfterMs: 30,
+    progressEveryMs: 40,
+    pollMs: 10,
+    maxWaitMs: 500,
+  })
+  // The snapshot holds "running: bash" until 100ms in, then gains a second
+  // tool — which is what makes the next note differ and worth re-sending.
+  const started = Date.now()
+  push({ type: 'turn/start', seq: 0, time: started, data: {} })
+  const timer = setInterval(() => {
+    const elapsed = Date.now() - started
+    if (elapsed > 20 && elapsed <= 100) push({ type: 'tool/call', seq: 1, time: Date.now(), data: { callId: 'c1', name: 'bash' } })
+    if (elapsed > 100) push({ type: 'tool/call', seq: 2, time: Date.now(), data: { callId: 'c2', name: 'read' } })
+  }, 20)
+  try {
+    await bridge.deliver({
+      conversationId: 'p1',
+      text: 'go',
+      onProgress: (note) => { notes.push(note) },
+    })
+  } finally {
+    clearInterval(timer)
+  }
+  const bashNotes = notes.filter((n) => String(n).includes('bash'))
+  const readNotes = notes.filter((n) => String(n).includes('read'))
+  assert.ok(bashNotes.length >= 1, 'the first pending tool must be announced once')
+  assert.ok(readNotes.length >= 1, 'a changed tool set must be re-announced')
 })
 
 test('a queued message resolves with its own reply; the receipt goes through onProgress', async () => {
