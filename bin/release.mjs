@@ -5,6 +5,7 @@
  *   node bin/release.mjs <version>            # full release: verify, commit, tag, push, publish
  *   node bin/release.mjs <version> --dry-run  # do everything except publishing
  *   node bin/release.mjs <version> --yes      # skip the confirmation prompt
+ *   node bin/release.mjs <version> --allow-stale-lockfile  # release despite a stale lockfile
  *
  * The script does, in order:
  *
@@ -39,6 +40,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PKG_NAME = 'dsh-plugin-weixin'
@@ -47,6 +49,7 @@ const argv = process.argv.slice(2)
 const flags = new Set(argv.filter((a) => a.startsWith('--')))
 const dryRun = flags.has('--dry-run')
 const assumeYes = flags.has('--yes')
+const allowStaleLockfile = flags.has('--allow-stale-lockfile')
 const version = argv.find((a) => !a.startsWith('--'))
 
 // ---------------------------------------------------------------------------
@@ -113,6 +116,41 @@ function has(command) {
 	return capture('sh', ['-c', `command -v ${command}`]) !== ''
 }
 
+/**
+ * Which release manifest disagrees with package.json, if any.
+ *
+ * package-lock.json records the package version twice (`version` at the top and
+ * `packages[""].version` inside the root package), and neither is rewritten by
+ * `npm test`, `npm pack`, or this script's own bump. That is why the lockfile
+ * sat at 0.1.1 from the first release all the way through 0.9.2 while
+ * package.json said otherwise: nothing ever looked. Preflight turns that into
+ * a hard stop.
+ *
+ * Exported (and the release only runs when this file is the entry point) so a
+ * test can point it at fixture manifests without starting a release.
+ */
+export function manifestVersionProblems(root = ROOT) {
+	const pkgVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
+	let lock
+	try {
+		lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
+	} catch (error) {
+		// An unreadable lockfile cannot be compared, which is not permission to
+		// ship it: report it the same way as a mismatch.
+		return { pkgVersion, problems: [`package-lock.json cannot be read as JSON: ${error.message}`] }
+	}
+	const seen = [
+		['lockfile "version"', lock.version],
+		['lockfile packages[""].version', lock.packages?.['']?.version],
+	]
+	return {
+		pkgVersion,
+		problems: seen
+			.filter(([, value]) => value !== pkgVersion)
+			.map(([where, value]) => `${where} says ${value ?? '(missing)'}`),
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Preflight
 // ---------------------------------------------------------------------------
@@ -131,6 +169,23 @@ function preflight() {
 		if (!has(tool)) die(`${tool} is not on PATH`)
 	}
 	ok(`node ${process.version}, npm ${capture('npm', ['--version'])}`)
+
+	// The lockfile is released alongside package.json: each carries a version,
+	// and a stale one ships a tree that disagrees with itself. Checked before
+	// anything touches git or the registry, so the operator gets told to run
+	// one npm command instead of debugging a diff later.
+	const manifests = manifestVersionProblems()
+	if (manifests.problems.length === 0) {
+		ok(`package-lock.json matches package.json ${manifests.pkgVersion}`)
+	} else if (allowStaleLockfile) {
+		warn(`package-lock.json disagrees with package.json ${manifests.pkgVersion}: ${manifests.problems.join('; ')}`)
+		warn('continuing because --allow-stale-lockfile was given — this release ships a stale lockfile')
+	} else {
+		die(
+			`package-lock.json disagrees with package.json ${manifests.pkgVersion}`,
+			`${manifests.problems.join('\n')}\nrefresh it with:  npm install --package-lock-only --cache "$PWD/.npmcache"\n(or pass --allow-stale-lockfile to release anyway)`,
+		)
+	}
 
 	const branch = git(['branch', '--show-current'])
 	if (branch !== 'main') warn(`on branch "${branch}", not "main" — the tag will point here`)
@@ -279,6 +334,24 @@ function bumpVersion(previousVersion) {
 	pkg.version = version
 	fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
 	ok(`package.json ${previousVersion} → ${version}`)
+
+	// The lockfile names the same version in two places, and preflight refuses
+	// a tree where they disagree. A bump that left them behind would make the
+	// release commit itself the drift it is supposed to prevent.
+	const lockPath = path.join(ROOT, 'package-lock.json')
+	const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+	if (lock.version !== version || lock.packages?.['']?.version !== version) {
+		// Report the lockfile's OWN old version, not package.json's: a lockfile
+		// that had been stale for releases would otherwise be described as
+		// having moved from a version it never carried.
+		const lockWas = lock.version ?? lock.packages?.['']?.version ?? '(missing)'
+		lock.version = version
+		if (lock.packages?.[''] !== undefined) lock.packages[''].version = version
+		fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`)
+		ok(`package-lock.json ${lockWas} → ${version}`)
+	} else {
+		ok('package-lock.json already names this version')
+	}
 
 	// The settings card shows the installed version from a constant it cannot
 	// import out of package.json; the release script is what keeps them in
@@ -651,7 +724,7 @@ function main() {
 
 /** Read the files the version bump rewrites, so a dry run can put them back. */
 function snapshotTextFiles() {
-	return ['package.json', 'README.md'].map((p) => ({ path: p, text: fs.readFileSync(path.join(ROOT, p), 'utf8') }))
+	return ['package.json', 'package-lock.json', 'README.md'].map((p) => ({ path: p, text: fs.readFileSync(path.join(ROOT, p), 'utf8') }))
 }
 
 function restoreTextFiles(snapshot) {
@@ -660,19 +733,26 @@ function restoreTextFiles(snapshot) {
 	}
 }
 
-try {
-	main()
-} catch (error) {
-	if (error?.reported === true) {
-		// die() already printed the reason and the hint; just fail the process.
-		process.exitCode = 1
-	} else {
-		// An unexpected failure (a spawn error, a filesystem problem): report it
-		// through die() so the cleanup still runs and the message stays uniform.
-		try {
-			die(String(error?.message ?? error))
-		} catch {
+// Only run when invoked as a script: importing this file (the lockfile test
+// does) must not start a release.
+const invokedDirectly =
+	process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
+
+if (invokedDirectly) {
+	try {
+		main()
+	} catch (error) {
+		if (error?.reported === true) {
+			// die() already printed the reason and the hint; just fail the process.
 			process.exitCode = 1
+		} else {
+			// An unexpected failure (a spawn error, a filesystem problem): report it
+			// through die() so the cleanup still runs and the message stays uniform.
+			try {
+				die(String(error?.message ?? error))
+			} catch {
+				process.exitCode = 1
+			}
 		}
 	}
 }
