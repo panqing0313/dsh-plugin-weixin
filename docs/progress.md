@@ -4,10 +4,10 @@
 
 ## 当前状态（2026-10-23）
 
-- **版本**：`0.9.2`（npm 已发布；`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住）。
-- **仓库**：`main` 干净；本轮 6 个 commit 已提交——`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`39cd6c6` 轮内派发改造（`/cancel` 真机打不通的修复）、`f81b63f` 文档。相对已发布的 0.9.2 共 **7 个未发版 commit**（含 2026-10-20 的 `19b1a73` 回合内工具流式推送）。
+- **版本**：`0.9.3`，2026-10-23 已发布（npm `latest`、tag `v0.9.3`、GitHub release 三者齐全；注册表 `dist.shasum` / `dist.integrity` 与本地 `dsh-plugin-weixin-0.9.3.tgz` 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
+- **仓库**：`main` 干净，**没有未发版 commit**。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）。
 - **测试**：`npm test` → `tests 396 / pass 396 / fail 0`（约 36s；相对 0.9.2 新增 35 条：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
-- **完成度**：按「可运行的生产插件」计约 **97%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
+- **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
 
@@ -16,7 +16,7 @@
 - **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述；`/cancel` 中断正在跑的那一轮（排队消息仍继续）。
 - **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ **滚动窗口上限**（默认 15 条 / 2 分钟，到顶自动等窗口滑过而不是硬发）+ 失败冷却；回合中的工具变化流式推送。
 - **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
-- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对）；设置卡 7 个页签（登录 / 账号 / 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
+- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 7 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
 - **健壮性**：长轮询看门狗（响应头到达后 body 挂死）、归档会话自动恢复、模型调用失败不卡队、二维码 PNG 只用 `node:zlib` 自编码（Windows 可用）。
 
@@ -27,7 +27,7 @@
 - **长时间运行**：断线重连、sync buf 漂移、iLink 丢消息后的自愈，还没有跨天观察记录。
 - **多账号长期并发**：两个账号同时高频收发没跑过；限速是**按账号**的，跨账号互不影响这点未实测。
 - **群聊**：入站 `group_id` 非空路径目前只有单元测试（空 group_id 回归也在其中），真实群消息未验证。
-- **0.9.2 之后那 7 个 commit**：回合中流式推送工具变化（**已真机验过**，不轰炸、不丢）、出站限速接线（含 15 条/2 分钟窗口，**已真机验过**：实测发送间隔 0/1200/2400/3600ms）、工具审计（**已真机验过**：`tool/call`+`tool/result` 按 `callId` 配对，带发送者与 sessionId）、状态卡自刷新、发版清单守卫、轮内派发改造（`/cancel` 之前结构上打不通，已修，**待真机复测**）——剩下几项仍需真机长回合确认后再发 0.9.3。
+- **0.9.3 的真机覆盖**：回合中工具流式推送、出站限速（实测发送间隔 0/1200/2400/3600ms）、工具审计（`tool/call`+`tool/result` 按 `callId` 配对，带发送者与 sessionId；被中断的调用补 `ok:false` + `aborted:true`）、`/cancel`（`sleep 120` 跑到 65s 时中途取消，回「已请求取消当前回合。」，日志记 `turn cancelled by user`）都已真机验过；状态卡自刷新与发版清单守卫靠单测覆盖，没做人工长观察。
 
 ### 二、功能缺口（有明确原因，不是遗漏）
 
@@ -2099,3 +2099,22 @@ off：零网络请求、prompt 无链接块）。
     `createInboundHandler` 的 `accountConfig` 每次 bring-up 只解析一次，消息被正在被替换的那条 transport
     抢走时还用旧白名单判断（约 1/3 概率失败）。`onAccountControlChange` 是 fire-and-forget，所以只能靠这行
     日志确认新 transport 已经起来。
+
+## 发布 0.9.3（2026-10-23）
+
+- npm `latest` = `0.9.3`，tag `v0.9.3` 指向 `4faad53`，GitHub release 已建；注册表 `dist.shasum`
+  `5e9a4dfb76f1f778840f5ff90943baefd978e9f6` 与本地 `dsh-plugin-weixin-0.9.3.tgz`（67 个文件，986 kB）
+  一致，`dist.integrity` 也对得上。
+- 发版过程中真踩到的三件事，记下来省下次的时间：
+  - `bin/release.mjs` 的 publish 步骤必须有真 TTY。在非 TTY 下 npm 会把一次性验证链接打成
+    `https://www.npmjs.com/auth/cli/***`（打码），拿不到就没法授权。用 `script -q /tmp/out.log node
+    bin/release.mjs 0.9.3 --yes` 起一个伪终端才拿得到真实链接；而且 npm 停在 `Press ENTER to open in the
+    browser...` 等 stdin，得配上 `(sleep 70; printf '\n'; sleep 600) | script -q …` 喂回车。
+  - 浏览器里授权完成后，那一条「卡在回车」的进程其实已经把包发出去了——重跑会撞
+    `npm error You cannot publish over the previously published versions: 0.9.3`。看到这句先去
+    `npm view dsh-plugin-weixin version` 确认，别再改代码。
+  - 包内文件权限会被检查（`✗ file(s) in the tarball are not world-readable`）。工具写出来的文件是 0600，
+    发版前 `chmod 644` 一下 `src/`、`test/` 下新增的文件。
+- e2e 的一条断言原来是隐性依赖「所有会话串行」的：它按下标取 `sent[0]/[1]/[2]`。派发改成同会话有序、
+  跨会话并发之后，两个发送者的回复会交错，这条用例就会偶发失败（同一小时内先绿后红）。改成按
+  `to_user_id` 分组断言，谁的回谁的回，顺序无关。
