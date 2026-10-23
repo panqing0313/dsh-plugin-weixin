@@ -5,8 +5,8 @@
 ## 当前状态（2026-10-23）
 
 - **版本**：`0.9.2`（npm 已发布；`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住）。
-- **仓库**：`main` 干净；本轮 5 个 commit 已提交——`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`f81b63f` 文档。相对已发布的 0.9.2 共 **6 个未发版 commit**（含 2026-10-20 的 `19b1a73` 回合内工具流式推送）。
-- **测试**：`npm test` → `tests 389 / pass 389 / fail 0`（约 103s；本轮新增 28 条：出站限速接线 9、`/cancel` 5、工具审计 7、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1）。
+- **仓库**：`main` 干净；本轮 6 个 commit 已提交——`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`39cd6c6` 轮内派发改造（`/cancel` 真机打不通的修复）、`f81b63f` 文档。相对已发布的 0.9.2 共 **7 个未发版 commit**（含 2026-10-20 的 `19b1a73` 回合内工具流式推送）。
+- **测试**：`npm test` → `tests 395 / pass 395 / fail 0`（约 36s；相对 0.9.2 新增 34 条：出站限速接线 9、`/cancel` 5、工具审计 7、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
 - **完成度**：按「可运行的生产插件」计约 **97%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -27,7 +27,7 @@
 - **长时间运行**：断线重连、sync buf 漂移、iLink 丢消息后的自愈，还没有跨天观察记录。
 - **多账号长期并发**：两个账号同时高频收发没跑过；限速是**按账号**的，跨账号互不影响这点未实测。
 - **群聊**：入站 `group_id` 非空路径目前只有单元测试（空 group_id 回归也在其中），真实群消息未验证。
-- **0.9.2 之后那 6 个 commit**：回合中流式推送工具变化、出站限速接线（含 15 条/2 分钟窗口）、`/cancel`、工具审计、状态卡自刷新、发版清单守卫——都只在测试里验过，需真机长回合确认（尤其流式推送不会轰炸用户、限速不会让正常回复变慢）；确认后再发 0.9.3。
+- **0.9.2 之后那 7 个 commit**：回合中流式推送工具变化（**已真机验过**，不轰炸、不丢）、出站限速接线（含 15 条/2 分钟窗口，**已真机验过**：实测发送间隔 0/1200/2400/3600ms）、工具审计（**已真机验过**：`tool/call`+`tool/result` 按 `callId` 配对，带发送者与 sessionId）、状态卡自刷新、发版清单守卫、轮内派发改造（`/cancel` 之前结构上打不通，已修，**待真机复测**）——剩下几项仍需真机长回合确认后再发 0.9.3。
 
 ### 二、功能缺口（有明确原因，不是遗漏）
 
@@ -2059,3 +2059,37 @@ off：零网络请求、prompt 无链接块）。
   保证不叠请求（跳过而不是排队）；QR 登录轮询持有卡片时后台不读（`sessionKeyRef` 已在那里）；没有
   `window`/`document` 的宿主（测试 harness）不装定时器与监听；卸载时清定时器与监听。
 - 测试：`test/client-login-poll.test.js` 加 1 条（15000ms 定时器、两个监听、隐藏不读、不叠请求、登录中不抢读）。
+
+### 六、真机复测：`/cancel` 结构上根本打不通（`39cd6c6`）
+
+- 真机两次实测（`sleep 90` / `sleep 180`）全失败：轮次跑着时发的 `/cancel` 全部在**轮次结束后**才被回答，
+  内容是「当前没有正在跑的回合」；四次 `/cancel` 集中在轮次结束后 2–3 秒内回复，这就是指纹。
+- 根因：`src/transport/ilink.js` 的 `for (const raw of msgs) { … await dispatchMessage(...) }` 把「处理这一条
+  消息」和「整轮 agent」串成一条链。轮次跑着时循环停在一条消息里，没有新的 `getUpdates` 在飞，后面的消息
+  （包括 `/cancel`）只能留在服务端。也就是说 `/cancel` 是个**实现过但到不了**的功能——和 `99624e8` 之前的
+  `OutboundPacer` 同一类缺陷；`test/cancel-turn.test.js` 之所以一直是绿的，是因为它直接调 `handleCommand`
+  并手工把 `busy` 置真，根本没经过轮询循环。
+- 修复分三半（解决的是三个不同问题）：
+  1. 循环不再 `await` 处理结果 → 轮次在跑时下一次 `getUpdates` 已经在飞；
+  2. 同一会话仍然**按顺序**投递：`createInboundScheduler()` 用 `chains`（`Map<conversationId, Promise>`）
+     串链，`.then(run, run)` 保证一条失败不毒化后面的链，不同会话互不阻塞。只去掉 `await` 不加链，会让
+     同一会话相邻两轮的工具调用与回复交错——bridge 自己的队列顶不上，它要等 `deliver()` 被调用才生效；
+  3. `/cancel` 走 `bypass`：`isInterruptCommand()`（`src/sessions.js` 导出，与解析器共用 `CANCEL_COMMAND`）
+     → `src/index.js` 传 `bypassQueue`，这条命令跳过链立即处理，否则它会排在它要去中断的那一轮后面。
+- `stop()` 现在 `await scheduler.drain()`，保留原来「卸载时等当前轮次结束」的语义（否则插件已经卸载还在往外发）。
+- 顺带修掉一个潜伏的句柄泄漏：`start()`/`stop()` 用 `sleep(longPollTimeoutMs * 2 + 10_000)` 给
+  `notifyStart`/`notifyStop` 兜底，race 输掉后那个 80s 定时器仍然存活，进程要空等它 → 改成
+  `deadline()`（`timer.unref?.()`）。全套测试因此从 ~103s 降到 ~36s，断言一条没动。
+- 测试：新增 `test/turn-dispatch.test.js` 6 条（同会话按序、跨会话并发、`/cancel` 插队、抛错的 handler 不毒化
+  链、`isInterruptCommand` 只认 `/cancel` `/CANCEL` `/取消`、以及**真的经过 `ILinkTransport.start()` 的
+  socket 级回归**）。做了负向验证：把循环改回 `await`，那条 socket 用例立刻失败（只跑完 `long task`），
+  改回来即绿。
+- 测试基建的两个教训（都踩实了）：
+  - `test/inbound-loop-start.test.js` 的假服务器原来「每次 poll 都造一条新消息」。派发改成不等之后，循环
+    毫秒级拉取，一轮队列涨到 **16558** 条，`stop()` 的 drain 永远等不完（全套卡死 400s+）。改成消息队列
+    （`push()` 才有一条）+ 响应 10ms（客户端单轮截止时间由服务端 `longpolling_timeout_ms` 决定，50ms/50ms
+    就会客户端超时、消息丢失，表现为「handler 一次都没被调用」）+ 死连接时把消息 `unshift` 回队列。
+  - 「账号级白名单覆盖后重启」的用例必须等**新一轮的 `listening as account …`** 再投递消息：
+    `createInboundHandler` 的 `accountConfig` 每次 bring-up 只解析一次，消息被正在被替换的那条 transport
+    抢走时还用旧白名单判断（约 1/3 概率失败）。`onAccountControlChange` 是 fire-and-forget，所以只能靠这行
+    日志确认新 transport 已经起来。
