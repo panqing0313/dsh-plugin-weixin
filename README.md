@@ -411,7 +411,9 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 - 写审计是观测行为：参数无法 `JSON.stringify`（循环引用、BigInt）时退回 `String()` 也要留下一行；
   目录不可写、磁盘满只 warn，**绝不影响一轮对话**；
 - 参数是模型产出的原文，可能含密钥或路径——审计文件是本地文件，别直接贴到公开 issue 里；
-- 只记工具调用，不记工具输出内容（输出可能极大，且已在会话记录里）。
+- 只记工具调用，不记工具输出内容（输出可能极大，且已在会话记录里）；
+- `/cancel` 打断的调用不会悬空：宿主被杀掉的工具永远不会有结果事件，桥自己补一行
+  `ok: false, aborted: true` 并带上它已经跑了多久，所以「那条命令到底跑完没有」始终有答案。
 
 `test/tool-audit.test.js` 覆盖写入/截断/撕裂行/失败降级，`test/e2e.test.js` 的 toolAudit 用例覆盖
 「插件真的把它接到磁盘上、关掉就一个文件都不写」。
