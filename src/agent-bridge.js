@@ -111,11 +111,13 @@ export function parseSteerCommand(text) {
  *   on-disk store, so a bridge built without one still supports `/new`.
  * @property {(entry: { kind: 'tool/call' | 'tool/result', accountId: string,
  *   conversationId: string, sessionId: string, senderId?: string, tool?: string,
- *   callId?: string, args?: unknown, ok?: boolean, durationMs?: number,
- *   at: number }) => void} [onToolAudit] Called once per tool event observed
- *   during a turn. The plugin wires this to the on-disk audit log; tests use it
- *   to assert what a turn would have recorded. Absent means "no audit", which
- *   is the default so a bare bridge writes nothing.
+ *   callId?: string, args?: unknown, ok?: boolean, aborted?: boolean,
+ *   durationMs?: number, at: number }) => void} [onToolAudit] Called once per
+ *   tool event observed during a turn. The plugin wires this to the on-disk
+ *   audit log; tests use it to assert what a turn would have recorded. Absent
+ *   means "no audit", which is the default so a bare bridge writes nothing.
+ *   An `ok:false, aborted:true` result is emitted by the bridge itself for a
+ *   call the host never finished because `/cancel` interrupted the turn.
  */
 
 export class AgentBridge {
@@ -704,6 +706,46 @@ export class AgentBridge {
   }
 
   /**
+   * Close the calls a cancelled turn never finished.
+   *
+   * Measured on a real account (2026-10-23 23:29): `/cancel` during a
+   * `sleep 120` left `tool/call bash` in the audit with no `tool/result` ever
+   * following it — the turn was aborted, so the host had nothing to report, and
+   * the bridge returned before its next poll could have seen one. An
+   * unterminated call is the worst line for the file to end on, because "did
+   * that destructive command actually run?" is exactly what the audit exists to
+   * answer. So the interruption is recorded, as `ok:false, aborted:true` with
+   * the time the call had been running.
+   *
+   * @param {any} record
+   */
+  #auditAbandoned(record) {
+    const sink = this.onToolAudit
+    if (sink === undefined || record.auditCalls.size === 0) return
+    const meta = { ...(record.auditMeta ?? {}), sessionId: record.agent?.session?.id ?? '' }
+    const now = Date.now()
+    for (const [callId, call] of record.auditCalls) {
+      try {
+        sink({
+          kind: 'tool/result',
+          at: now,
+          ...meta,
+          tool: call.tool,
+          callId,
+          ok: false,
+          aborted: true,
+          durationMs: Math.max(0, now - call.at),
+        })
+      } catch (failure) {
+        this.errLog(`tool audit sink failed: ${String(failure)}`)
+      }
+    }
+    // Cleared so a stale entry cannot fabricate a result for an unrelated later
+    // call that happens to reuse the id.
+    record.auditCalls.clear()
+  }
+
+  /**
    * Turn this poll's new events into audit lines.
    *
    * Called before the reply is read, so a fast turn that settles in the same
@@ -823,7 +865,14 @@ export class AgentBridge {
       // would blame the model for something the user asked for — so the flag
       // wins, and the empty text means the command's own receipt is the only
       // message the user gets.
-      if (record.cancelled === true) return { text: '', sessionId, cancelled: true }
+      if (record.cancelled === true) {
+        // A cancelled turn ends with whatever the host already wrote (the
+        // aborted tool's own result may be there) and never with an assistant
+        // message, so this is the last poll that will ever look at its events.
+        this.#auditEvents(record, record.agent.session?.snapshotEvents?.() ?? [], before)
+        this.#auditAbandoned(record)
+        return { text: '', sessionId, cancelled: true }
+      }
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
@@ -876,7 +925,11 @@ export class AgentBridge {
       if (signal?.aborted === true) return { text: '', sessionId, late: true }
       // A cancelled turn is over; the late wait must not keep polling for a
       // reply the user explicitly asked not to receive.
-      if (record.cancelled === true) return { text: '', sessionId, late: true }
+      if (record.cancelled === true) {
+        this.#auditEvents(record, record.agent.session?.snapshotEvents?.() ?? [], before)
+        this.#auditAbandoned(record)
+        return { text: '', sessionId, late: true }
+      }
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })

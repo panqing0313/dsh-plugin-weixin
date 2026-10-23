@@ -53,7 +53,7 @@ function renderArgs(args) {
  * @param {{ at?: number, kind: 'tool/call' | 'tool/result', accountId?: string,
  *   conversationId?: string, sessionId?: string, senderId?: string,
  *   tool?: string, callId?: string, args?: unknown, ok?: boolean,
- *   durationMs?: number }} entry
+ *   aborted?: boolean, durationMs?: number }} entry
  * @param {{ warn?: (line: string) => void }} [options]
  */
 export function appendToolAudit(stateRoot, entry, { warn } = {}) {
@@ -70,6 +70,10 @@ export function appendToolAudit(stateRoot, entry, { warn } = {}) {
             callId: entry.callId === undefined ? undefined : String(entry.callId),
             args: renderArgs(entry.args),
             ...(typeof entry.ok === 'boolean' ? { ok: entry.ok } : {}),
+            // Set when the turn was interrupted, so a reader can tell "the tool
+            // reported a failure" from "nobody ever reported: the user stopped
+            // it". Kept separate from `ok` for exactly that reason.
+            ...(entry.aborted === true ? { aborted: true } : {}),
             ...(typeof entry.durationMs === 'number' ? { durationMs: entry.durationMs } : {}),
         })
         mkdirSync(auditDir(stateRoot), { recursive: true })

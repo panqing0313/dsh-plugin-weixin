@@ -247,3 +247,82 @@ test('the tool audit is on by default and an operator can turn it off', async ()
   assert.equal(plugin.Config({}).toolAudit, true, 'the audit is on unless an operator turns it off')
   assert.equal(plugin.Config({ toolAudit: false }).toolAudit, false)
 })
+
+/**
+ * A fake agent that starts one tool and never reports a result — what a turn
+ * looks like while a long command runs, and exactly what `/cancel` interrupts.
+ */
+function stuckToolAgent({ tool = 'bash', args = { command: 'sleep 120' }, callId = 'call-stuck' } = {}) {
+  let seq = 0
+  const events = []
+  const ev = (type, data) => events.push({ type, seq: seq++, time: Date.now(), data })
+  return {
+    events,
+    agent: {
+      inbox: { clear() {} },
+      session: { id: 'weixin-room-audit', snapshotEvents: () => events },
+      cancel(cause) {
+        this.cancelledWith = cause
+        // The host aborts the turn and writes an error end event; it never
+        // fabricates a tool/result for a call it killed.
+        ev('turn/end', { reason: { kind: 'error', error: { message: 'aborted' } } })
+      },
+      followup() {
+        setTimeout(() => ev('tool/call', { callId, name: tool, arguments: args }), 10)
+      },
+    },
+  }
+}
+
+test('a cancelled turn closes the tool call it interrupted instead of leaving it dangling', async () => {
+  // Measured on a real account (2026-10-23 23:29): /cancel during `sleep 120`
+  // left `tool/call bash` in the audit with no result line ever after it, so the
+  // file could not answer "did that command finish?" about the one call an
+  // operator is most likely to ask about.
+  const { appendToolAudit } = await import('../src/message/audit.js')
+  const stateRoot = tempRoot()
+  try {
+    const fake = stuckToolAgent()
+    const bridge = await bridgeWith(fake, {
+      onToolAudit: (entry) => appendToolAudit(stateRoot, entry),
+    })
+
+    const turn = bridge.deliver({
+      conversationId: 'room-cancel',
+      accountId: 'acc',
+      text: 'run the long thing',
+      senderId: 'wxid_sender',
+    })
+    // Wait until the tool is genuinely in flight: the call line is on disk and
+    // the turn is still running.
+    const soFar = () => {
+      try {
+        return readLines(stateRoot)
+      } catch {
+        return [] // no audit file yet: the turn has not reached a tool
+      }
+    }
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && !soFar().some((line) => line.kind === 'tool/call')) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    const reply = bridge.handleCommand('room-cancel', '/cancel', 'acc')
+    assert.equal(reply, '已请求取消当前回合。')
+    const result = await turn
+    assert.equal(result.cancelled, true)
+
+    const lines = readLines(stateRoot)
+    const call = lines.find((line) => line.kind === 'tool/call')
+    const results = lines.filter((line) => line.kind === 'tool/result')
+    assert.equal(call.tool, 'bash')
+    assert.equal(results.length, 1, 'the interrupted call gets exactly one closing line')
+    assert.equal(results[0].callId, call.callId, 'the closing line pairs with the call it killed')
+    assert.equal(results[0].ok, false, 'nobody reported success for it')
+    assert.equal(results[0].aborted, true, 'and the file says why: the user stopped it')
+    assert.equal(typeof results[0].durationMs, 'number', 'how long it had been running is the useful part')
+    assert.equal(results[0].senderId, 'wxid_sender', 'attribution survives the interruption too')
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+  }
+})
