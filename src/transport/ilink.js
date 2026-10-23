@@ -57,6 +57,22 @@ export class SessionRejectedError extends Error {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * A timer whose only job is to bound another promise.
+ *
+ * Unlike {@link sleep} it must not keep the event loop alive on its own: the
+ * deadline is normally *lost* (notifyStart/notifyStop answer long before it),
+ * and an armed 80 s timer would then hold the process open for the remainder of
+ * the timeout after `stop()` — which is exactly what a disposed plugin must not
+ * do, and what made one transport test take 80 s to finish.
+ *
+ * @param {number} ms
+ */
+const deadline = (ms) => new Promise((resolve) => {
+  const timer = setTimeout(resolve, ms)
+  timer.unref?.()
+})
+
+/**
  * Recognise the abort the platform raises when a fetch/`res.text()` is
  * cancelled through an AbortController. The watchdog and `stop()` both abort
  * the loop's controller, so the catch path needs to tell "we cancelled this
@@ -208,17 +224,95 @@ export function normalizeInbound(raw) {
 }
 
 /**
- * Run one message through the handler with its own error boundary.
+ * Dispatch inbound messages to the handler without letting a long turn block
+ * the poll loop.
  *
- * @param {(message: any) => Promise<void>} onMessage
- * @param {any} message
- * @param {(line: string) => void} errLog
+ * WHY this exists — measured on a real account, 2026-10-23: the loop used to
+ * `await` the handler, and the handler awaits the whole agent turn. So while a
+ * turn ran (a 180 s `sleep` in that test) the loop sat inside one message and
+ * every later message stayed unread on the server. `/cancel` is *defined* as
+ * "interrupt the turn that is running right now", and it could never do that:
+ * the four cancel messages the operator sent during that turn were all answered
+ * only after it finished, each with "当前没有正在跑的回合" — the turn they were
+ * aimed at had already ended.
+ *
+ * The fix has two halves, because they solve different halves of the problem:
+ *
+ *  1. The loop awaits nothing any more, so the next `getUpdates` goes out while
+ *     a turn is still running and a cancel can arrive mid-turn.
+ *  2. Messages are still delivered **in order per conversation**, by chaining
+ *     them here: turn N+1 starts only once turn N has settled. Dropping the
+ *     await without this chain would let two turns of the same conversation
+ *     interleave their tool use and their replies. The bridge's own queue is
+ *     not a substitute — it only engages once `deliver()` has been called, i.e.
+ *     after the handler has already run for that message.
+ *
+ * Messages the host marks with `bypass(message)` skip the chain and run at
+ * once. That is exactly `/cancel`: it must not queue behind the turn it was
+ * sent to stop.
+ *
+ * @param {object} options
+ * @param {(message: any) => Promise<void>} options.onMessage
+ * @param {(line: string) => void} options.errLog
+ * @param {(message: any) => boolean} [options.bypass]
  */
-async function dispatchMessage(onMessage, message, errLog) {
-  try {
-    await onMessage(message)
-  } catch (error) {
-    errLog(`message ${message.id || '(no id)'} failed: ${String(error)}`)
+export function createInboundScheduler({ onMessage, errLog, bypass = () => false }) {
+  /** @type {Map<string, Promise<void>>} conversation id → tail of its chain */
+  const chains = new Map()
+  /** @type {Set<Promise<void>>} everything still running, for {@link drain} */
+  const running = new Set()
+
+  const track = (promise) => {
+    running.add(promise)
+    promise.catch(() => {}).finally(() => running.delete(promise))
+    return promise
+  }
+
+  // The handler gets its own error boundary: a failing turn (bad send, agent
+  // error) is not a poll failure, and folding it into the loop would trip the
+  // poll backoff for an unrelated reason.
+  const run = async (message) => {
+    try {
+      await onMessage(message)
+    } catch (error) {
+      errLog(`message ${message.id || '(no id)'} failed: ${String(error)}`)
+    }
+  }
+
+  return {
+    /**
+     * Start handling one message. The returned promise settles with the
+     * handler, but the poll loop must not await it — awaiting is exactly the
+     * stall this scheduler removes.
+     *
+     * @param {any} message
+     */
+    dispatch(message) {
+      if (bypass(message) === true) return track(run(message))
+      const previous = chains.get(message.conversationId)
+      // No queue for this conversation: start now, so a batch of messages keeps
+      // the server's order (deferring to a resolved promise would let a later
+      // bypassed `/cancel` start ahead of this one for no reason).
+      const next = previous === undefined
+        ? run(message)
+        // `.then(run, run)` rather than `.then(run)`: a previous message that
+        // rejected must not poison the chain for every later message.
+        : previous.then(() => run(message), () => run(message))
+      chains.set(message.conversationId, next)
+      return track(next.finally(() => {
+        if (chains.get(message.conversationId) === next) chains.delete(message.conversationId)
+      }))
+    },
+
+    /** How many handler runs are still in flight. */
+    get pending() {
+      return running.size
+    },
+
+    /** Wait for everything dispatched so far; used by stop(), never by the loop. */
+    async drain() {
+      while (running.size > 0) await Promise.allSettled([...running])
+    },
   }
 }
 
@@ -242,6 +336,11 @@ export class ILinkTransport {
    * @param {(error: SessionRejectedError) => void} [options.onSessionRejected]
    *   Called once when the server refuses the session, so the host can surface
    *   "log in again" somewhere the operator will actually see it.
+   * @param {(message: any) => boolean} [options.bypassQueue]
+   *   Messages that must be handled immediately instead of in per-conversation
+   *   order. The host passes `/cancel` here: it exists to interrupt a turn that
+   *   is already running, so queueing it behind that turn would make it useless
+   *   (see {@link createInboundScheduler}).
    * @param {number} [options.sendIntervalMs]  Floor between two outbound sends.
    * @param {number} [options.sendCooldownMs]  Cooldown armed by repeated failures.
    * @param {import('../message/rate-limit.js').OutboundPacer} [options.pacer]
@@ -267,6 +366,7 @@ export class ILinkTransport {
       warn: this.errLog,
     })
     this.#onSessionRejected = options.onSessionRejected
+    this.#bypassQueue = options.bypassQueue ?? (() => false)
     this.syncBufPath = getSyncBufFilePath(this.accountId)
     this.abort = new AbortController()
     this.running = false
@@ -288,6 +388,10 @@ export class ILinkTransport {
   /** Set once the server refuses the session; see {@link SessionRejectedError}. */
   #onSessionRejected
   #sessionExpired = false
+  /** @type {(message: any) => boolean} */
+  #bypassQueue
+  /** @type {ReturnType<typeof createInboundScheduler> | undefined} */
+  #scheduler
 
   /**
    * @param {(message: any) => Promise<void>} onMessage
@@ -304,15 +408,16 @@ export class ILinkTransport {
     // of server this file's watchdog exists for. Race it with a deadline; a
     // lost race just skips the notification.
     const notified = notifyStart({ baseUrl: this.baseUrl, token: this.token })
-    const notifyDeadline = sleep(this.longPollTimeoutMs * 2 + 10_000).then(() => 'deadline')
+    const notifyDeadline = deadline(this.longPollTimeoutMs * 2 + 10_000).then(() => 'deadline')
     const outcome = await Promise.race([notified.then(() => 'notified', (error) => { this.log(`notifyStart failed (continuing): ${String(error)}`); return 'notified' }), notifyDeadline])
     if (outcome === 'deadline') {
       this.log(`notifyStart did not answer within ${this.longPollTimeoutMs * 2 + 10_000}ms (headers arrived, body never did); continuing without it`)
     }
-    this.loopPromise = this.#loop(onMessage)
+    this.#scheduler = createInboundScheduler({ onMessage, errLog: this.errLog, bypass: this.#bypassQueue })
+    this.loopPromise = this.#loop()
   }
 
-  async #loop(onMessage) {
+  async #loop() {
     let consecutiveFailures = 0
     while (this.running && !this.abort.signal.aborted) {
       let buf = loadGetUpdatesBuf(this.syncBufPath)
@@ -388,13 +493,11 @@ export class ILinkTransport {
         for (const raw of msgs) {
           const message = normalizeInbound(raw)
           if (message === null) continue
-          // Deliver sequentially: a Weixin conversation is one ordered
-          // conversation, and the agent session is single-threaded.
-          //
-          // The handler runs OUTSIDE this try: a failing turn (bad send, agent
-          // error) is not a poll failure, and folding it in here would both
-          // mislabel it and trip the poll backoff for an unrelated reason.
-          await dispatchMessage(onMessage, message, this.errLog)
+          // Hand off and move on. The scheduler keeps per-conversation order
+          // and lets `/cancel` jump the queue; awaiting here would park the
+          // loop inside the turn, so no later message (cancel included) could
+          // be read until it finished — the defect this replaced.
+          this.#scheduler?.dispatch(message)
         }
       } catch (error) {
         // stop() flips `running` before aborting, so a watchdog abort on a
@@ -619,13 +722,22 @@ export class ILinkTransport {
     } catch {
       // The loop swallows its own errors; nothing to propagate.
     }
+    // The loop no longer awaits handlers, so a turn started a moment ago is
+    // still running: wait for it, exactly as the old `await dispatchMessage`
+    // made stop() wait. Skipping this would let a disposed plugin keep sending
+    // replies for a session it no longer owns.
+    try {
+      await this.#scheduler?.drain()
+    } catch {
+      // Handler errors are already reported by the scheduler's own boundary.
+    }
     try {
       // Bounded for the same reason as notifyStart in start(): the vendor's
       // timeout is cleared at headers, so a body-stalling server would hang
       // shutdown forever. Best-effort either way.
       await Promise.race([
         notifyStop({ baseUrl: this.baseUrl, token: this.token }),
-        sleep(this.longPollTimeoutMs * 2 + 10_000),
+        deadline(this.longPollTimeoutMs * 2 + 10_000),
       ])
     } catch {
       // Shutting down; a failed notification is not actionable.

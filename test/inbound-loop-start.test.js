@@ -482,12 +482,21 @@ test('a paused account gets no loop on bring-up; resuming brings it back without
 })
 
 /**
- * A fake iLink endpoint that hands out ONE queued inbound message, then polls
+ * A fake iLink endpoint that hands out queued inbound messages, then polls
  * empty — the minimal shape for proving what the allowlist does to a real
  * message travelling the real dispatch path (normalizeInbound → handler).
+ *
+ * Messages are queued explicitly by the test rather than regenerated on every
+ * poll. Regenerating them stopped being harmless once the transport stopped
+ * awaiting a turn inside its poll loop: the loop now goes straight back to
+ * polling, so a server that answers every poll with a fresh message grows a
+ * turn queue (16k entries in one measurement) that never drains, and the
+ * dispose that waits for it never returns.
  */
-async function startOneMessageServer() {
-  const seen = { getupdates: 0, refusals: 0 }
+async function startQueuedMessageServer() {
+  const seen = { getupdates: 0 }
+  const queue = []
+  let counter = 0
   const server = http.createServer((req, res) => {
     let body = ''
     req.on('data', (chunk) => { body += chunk })
@@ -501,24 +510,50 @@ async function startOneMessageServer() {
       }
       if (url.pathname === '/ilink/bot/getupdates') {
         seen.getupdates += 1
-        // Every poll hands out a FRESH message (unique id), because the test
-        // consumes one message before the override is set and still needs one
-        // after the forced re-arm to observe the refusal.
-        const msgs = [{
-          message_id: `mid-${seen.getupdates}`,
-          message_state: 0,
-          from_user_id: ALLOWED,
-          group_id: '',
-          context_token: 'ctx-1',
-          item_list: [{ type: 1, text_item: { text: 'hello' } }],
-        }]
-        return res.end(JSON.stringify({ ret: 0, get_updates_buf: 'buf', longpolling_timeout_ms: 50, msgs }))
+        // Answered after a beat, like a long poll that had nothing to report:
+        // without it the loop spins as fast as the socket allows (thousands of
+        // polls per second) and every push/poll assertion becomes a coin flip.
+        const msgs = queue.splice(0, queue.length)
+        setTimeout(() => {
+          // A poll that dies before its body lands must not swallow the
+          // message: the transport being replaced can still have one request in
+          // flight, and losing a message there is what made this test depend on
+          // which transport happened to ask first. A real server would hand the
+          // message to whoever polls next.
+          if (res.writableEnded || res.destroyed) {
+            queue.unshift(...msgs)
+            return
+          }
+          // The client's own deadline for a round is the `longpolling_timeout_ms`
+          // the server last advertised, so this pause has to stay well inside
+          // it: answering at the deadline made every round time out client-side,
+          // and the message in that body was never seen.
+          res.end(JSON.stringify({ ret: 0, get_updates_buf: 'buf', longpolling_timeout_ms: 200, msgs }))
+        }, 10)
+        return
       }
       res.end(JSON.stringify({ ret: 0 }))
     })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, seen }
+  return {
+    server,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    seen,
+    /** Queue one inbound text message from the globally allowed sender. */
+    push() {
+      counter += 1
+      queue.push({
+        message_id: `mid-${counter}`,
+        message_state: 0,
+        from_user_id: ALLOWED,
+        group_id: '',
+        context_token: 'ctx-1',
+        item_list: [{ type: 1, text_item: { text: 'hello' } }],
+      })
+      return counter
+    },
+  }
 }
 
 test('an account-level allowlist override narrows only that account', async () => {
@@ -528,25 +563,35 @@ test('an account-level allowlist override narrows only that account', async () =
     seedAccount(root, { baseUrl })
     await waitFor(() => seen.getupdates > 0, 'bot1 to start polling')
 
-    // Both accounts get a one-message server of their own: the refusal and the
-    // acceptance both have to be observable per account, so the message has to
-    // actually arrive at each. Redirecting an account's record at a new fake
-    // server is the same shape a re-bind produces.
-    const first = await startOneMessageServer()
-    const second = await startOneMessageServer()
+    // Both accounts get a server of their own: the refusal and the acceptance
+    // both have to be observable per account, so the message has to actually
+    // arrive at each. Redirecting an account's record at a new fake server is
+    // the same shape a re-bind produces.
+    const first = await startQueuedMessageServer()
+    const second = await startQueuedMessageServer()
     registerServer(first.server)
     registerServer(second.server)
     seedAccount(root, { baseUrl: first.baseUrl, token: 'tok-1b' })
     seedAccount(root, { accountId: 'bot2', token: 'tok-2', baseUrl: second.baseUrl })
     seedAccount(root, { baseUrl: first.baseUrl, token: 'tok-1b' })
     loginService(provided).onAccountControlChange(ACCOUNT_ID)
-    await waitFor(() => first.seen.getupdates > 0, 'bot1 to come up on the one-message server')
+    await waitFor(() => first.seen.getupdates > 0, 'bot1 to come up on its own server')
     loginService(provided).onAccountBound('bot2')
-    await waitFor(() => second.seen.getupdates > 0, 'bot2 to come up on its one-message server')
+    await waitFor(() => second.seen.getupdates > 0, 'bot2 to come up on its own server')
 
-    // bot1's override omits the globally-allowed sender entirely.
+    // bot1's override omits the globally-allowed sender entirely. The message is
+    // queued only after the re-arm, so it is judged by the override and not by
+    // whatever the effective list was when the loop came up.
     setAccountAllowlist('bot1', ['someone-else'], undefined)
+    const listening = () => lines.filter((line) => line.includes(`listening as account ${ACCOUNT_ID}`)).length
+    const listeningBefore = listening()
     loginService(provided).onAccountControlChange(ACCOUNT_ID)
+    // Wait for the RE-ARMED transport, not merely for a poll: the replaced one
+    // may still have a request in flight, and a message it grabs was judged by
+    // whatever allowlist was in effect before the override was written — that
+    // race made this test fail about one run in three.
+    await waitFor(() => listening() > listeningBefore, 'bot1 to be re-armed on the new allowlist')
+    first.push()
     await waitFor(
       () => lines.some((line) => line.includes(`refused message from ${ALLOWED}`)),
       'bot1 to refuse the globally-allowed sender by override',
@@ -573,7 +618,12 @@ test('an account-level allowlist override narrows only that account', async () =
         || fileLogText.includes('\\"someone-else\\"'),
       'the file log must show the EFFECTIVE list, so the operator can see exactly what ruled',
     )
-    assert.ok(second.seen.getupdates > 1, 'bot2 must keep polling after its message was accepted, not refused')
+
+    // The same sender reaches bot2, whose effective list is still the global one:
+    // the message must be accepted (handled, not refused) and polling must go on.
+    const pollsBefore = second.seen.getupdates
+    second.push()
+    await waitFor(() => second.seen.getupdates > pollsBefore + 1, 'bot2 to keep polling after its message was accepted')
     assert.ok(
       !lines.some((line) => line.includes('refused message') && line.includes('bot2')),
       'the override on bot1 must not reach bot2',

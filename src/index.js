@@ -45,6 +45,10 @@ import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
 import { isAccountPaused, touchAccount, allowlistForAccount, readRegistry, enrolFirstContact } from './account-registry.js'
+// `/cancel` is the one message the transport must be able to deliver while a
+// turn is still running; the predicate lives beside the parser so the two
+// cannot drift apart.
+import { isInterruptCommand } from './sessions.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -428,6 +432,10 @@ export function apply(ctx, config) {
         // pacer module's defaults when a caller omits them (tests, bin/ scripts).
         sendIntervalMs: config.sendIntervalMs,
         sendCooldownMs: config.sendCooldownMs,
+        // `/cancel` must reach the bridge while the turn it targets is still
+        // running. Every other message is queued in conversation order by the
+        // transport; this one skips the queue for the obvious reason.
+        bypassQueue: (message) => message?.type === 'text' && isInterruptCommand(message.text),
         log,
         errLog: warn,
         // An expired session stops inbound messaging with no other symptom —

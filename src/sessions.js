@@ -489,6 +489,22 @@ export class SessionLines {
   }
 }
 
+/** The one command whose purpose is to interrupt a turn that is already running. */
+const CANCEL_COMMAND = /^\/(?:cancel|取消)$/i
+
+/**
+ * Whether a message is a cancel request.
+ *
+ * The transport asks this before it queues a message, because `/cancel` is the
+ * one command that must run *ahead* of a turn still in flight: it exists to
+ * stop that turn. Everything else is delivered in per-conversation order.
+ *
+ * @param {unknown} text
+ */
+export function isInterruptCommand(text) {
+  return typeof text === 'string' && CANCEL_COMMAND.test(text.trim())
+}
+
 /**
  * Parse a Weixin control command out of a message.
  *
@@ -517,7 +533,12 @@ export function parseSessionCommand(text) {
   // a command rather than a busy-mode action on purpose: it has to be answerable
   // WHILE the conversation is busy, which is exactly when a plain message would
   // be queued behind the turn the user wants to stop.
-  const cancelMatch = /^\/(?:cancel|取消)$/i.exec(trimmed)
+  //
+  // Being a command is necessary but NOT sufficient: the transport used to
+  // await the whole turn inside its poll loop, so a cancel sent mid-turn was
+  // only read after that turn ended. `isInterruptCommand` (below) is what lets
+  // the transport recognise this one command and handle it out of order.
+  const cancelMatch = CANCEL_COMMAND.exec(trimmed)
   if (cancelMatch !== null) return { command: 'cancel' }
   const statusMatch = /^\/status$/i.exec(trimmed)
   if (statusMatch !== null) return { command: 'status' }
