@@ -56,6 +56,7 @@ const PKG_NAME = 'dsh-plugin-weixin'
 const ROW_ID = 'dsh-weixin'
 
 const sourceRoot = path.resolve(import.meta.dirname, '..')
+const ownVersion = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')).version
 const profileName = readFlag('profile') ?? process.env.DSH_PROFILE ?? 'desktop'
 const dshHome = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
 const profileDir = path.join(dshHome, 'profiles', profileName)
@@ -203,6 +204,21 @@ if (!bundles.includes(PKG_NAME)) {
   process.stdout.write(`${PKG_NAME} already in dsh.profile.bundles\n`)
 }
 if (profileChanged) fs.writeFileSync(profilePkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+
+// 2b. The settings card's "来源信息" line prints the profile's *declared* spec,
+// not the bytes this installer just copied. A `file:` tarball spec therefore
+// survives every upgrade — the card keeps naming an old tarball that may not
+// even exist any more, while the version next to it climbs. Do not rewrite the
+// operator's dependency (that changes how their next `pnpm install` resolves);
+// say exactly what to change instead.
+const declared = pkg.dependencies?.[PKG_NAME]
+if (typeof declared === 'string' && declared.startsWith('file:')) {
+  process.stdout.write(
+    `note: the profile still declares "${PKG_NAME}": "${declared}"\n` +
+      `      The settings card shows that as 来源信息. Point it at the published package with\n` +
+      `      "${PKG_NAME}": "^${ownVersion}" in ${profilePkgPath}\n`,
+  )
+}
 
 // 3. Operator settings.
 //

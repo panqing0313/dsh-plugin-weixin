@@ -30,17 +30,26 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const INSTALL = path.join(ROOT, 'bin', 'install.mjs')
 
 /** Build a throwaway DSH home with one profile, and return the paths we use. */
-function fakeHome({ patch } = {}) {
+function fakeHome({ patch, dependencies } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-install-'))
   const profile = path.join(home, 'profiles', 'testprofile')
   fs.mkdirSync(profile, { recursive: true })
   fs.writeFileSync(
     path.join(profile, 'package.json'),
-    JSON.stringify({ name: 'test-profile', dsh: { profile: { bundles: [] } } }, null, 2),
+    JSON.stringify(
+      {
+        name: 'test-profile',
+        ...(dependencies === undefined ? {} : { dependencies }),
+        dsh: { profile: { bundles: [] } },
+      },
+      null,
+      2,
+    ),
   )
   if (patch !== undefined) fs.writeFileSync(path.join(profile, 'cordis.patch.yml'), patch)
   return {
     home,
+    profilePkgPath: path.join(profile, 'package.json'),
     patchPath: path.join(profile, 'cordis.patch.yml'),
     settingsPath: path.join(home, 'weixin', 'config.json'),
   }
@@ -181,5 +190,37 @@ test('installing into a profile with no patch file still writes settings', () =>
   assert.deepEqual(readSettings(settingsPath), {})
   // The installer must not create a patch file just to hold a mount row.
   assert.ok(!fs.existsSync(patchPath) || !/- insert:/.test(fs.readFileSync(patchPath, 'utf8')))
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('a file: dependency is reported, because the settings card shows it as 来源信息', () => {
+  const { home, profilePkgPath } = fakeHome({
+    dependencies: { 'dsh-plugin-weixin': 'file:../../../../../tmp/dsh-plugin-weixin-0.8.0.tgz' },
+  })
+  const out = runInstall(home)
+
+  // The card's "来源信息" line is the DECLARED spec, not the copied bytes, so a
+  // stale tarball spec keeps naming a file that no longer exists while the
+  // version next to it says otherwise. The installer copies files; it cannot
+  // fix that by itself, so it must at least say what to change.
+  assert.match(
+    out,
+    /still declares "dsh-plugin-weixin": "file:\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/tmp\/dsh-plugin-weixin-0\.8\.0\.tgz"/,
+    'a stale file: spec was installed over silently, leaving the card lying about the source',
+  )
+  assert.match(out, /"dsh-plugin-weixin": "\^\d+\.\d+\.\d+"/, 'the note must name the exact spec to switch to')
+
+  // Reporting is the whole job: rewriting the operator's dependency would change
+  // how their next install resolves, which is their call, not the installer's.
+  const after = JSON.parse(fs.readFileSync(profilePkgPath, 'utf8'))
+  assert.equal(after.dependencies['dsh-plugin-weixin'], 'file:../../../../../tmp/dsh-plugin-weixin-0.8.0.tgz')
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('a registry spec produces no 来源信息 note', () => {
+  const { home } = fakeHome({ dependencies: { 'dsh-plugin-weixin': '^0.9.3' } })
+  const out = runInstall(home)
+
+  assert.doesNotMatch(out, /still declares/, 'an honest spec must not be nagged about')
   fs.rmSync(home, { recursive: true, force: true })
 })

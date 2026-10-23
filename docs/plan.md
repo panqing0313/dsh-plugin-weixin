@@ -60,11 +60,11 @@ M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账�
 - **Agent 语境**：可选 `sourceContext` 在 prompt 前附 `<weixin_source …/>` 来源块。
 - **设置 UI**：真 tablist + 下载设置原子保存（暂存→保存/还原条）；同一设置卡同时挂在插件页与宿主 Settings 导航（`settings.section`，order 22）。
 - **语音识别开箱可用**：仓库自带 `bin/asr-bridge.py`（双引擎：Apple Silicon 走 mlx-whisper GPU，其它平台走 faster-whisper CPU），用户下载插件后只需 `pip install` 一个引擎、在设置页点一次下载，不再需要自己写服务端。实测热调用 0.29s（mlx/GPU）对 5.3s（Rosetta CPU），中文默认出简体，非语音返回空而不是编造。
-- **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 目前仍钉在 tarball 上，但 `package.json` 与 `package-lock.json` 的版本一致性已由发版 preflight 强制，漂移会在发版时被拒绝而不是悄悄发出去。
+- **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 现依赖 registry semver（`dsh-plugin-weixin@^0.9.3`），不再钉在 /tmp 的 tarball 上；`package.json` 与 `package-lock.json` 的版本一致性由发版 preflight 强制，漂移会在发版时被拒绝而不是悄悄发出去。设置卡「来源信息」显示的是 profile **声明的** spec，不是磁盘上的字节，所以安装器会提示把残留的 `file:…tgz` 换成 `^<版本>`。
 
 ### 候选后续
 
-1. **依赖源切换**：desktop profile 应改为依赖 registry 上的 semver（`dsh-plugin-weixin@<version>`），而不是 `file:…tgz`，这样就不必再同步三处清单、也不用备份 /tmp tarball。清单漂移现在由发版脚本兜住：`bin/release.mjs` 的 preflight 会核对 `package.json` 与 `package-lock.json` 的两处版本字段，不一致就拒绝发版。
+1. **依赖源切换（2026-10-23 已完成）**：desktop profile 已改为 `dsh-plugin-weixin@^0.9.3`，锁文件同步（`pnpm-lock.yaml` 的 specifier/version/integrity 都与 registry 一致）。清单漂移由发版脚本兜住：`bin/release.mjs` 的 preflight 会核对 `package.json` 与 `package-lock.json` 的两处版本字段，不一致就拒绝发版；`bin/install.mjs` 在 profile 仍声明 `file:…tgz` 时会打印该换成哪条 semver（设置卡的「来源信息」读的就是这条声明）。
 2. **语音回复**：出站 TTS（SILK 编码已验证可行；注意服务端对 BOT voice_item 接受但不投递，需先验证投递路径）。
 3. **市场收录跟进**：PR #7426 合并后核对 dsh-market 搜索结果与条目渲染。
 

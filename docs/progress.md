@@ -36,7 +36,7 @@
 
 ### 三、工程与发布
 
-- **依赖源切换（剩操作侧）**：desktop profile 仍指 `file:…tgz`；代码侧已就绪——`bin/release.mjs` preflight 现在会拒绝 `package-lock.json` 与 `package.json` 版本不一致，`--allow-stale-lockfile` 可显式绕过，改 registry semver 后不再有「三处清单同步 + 备份 tarball」的负担。切换本身要动作者的 profile，不在仓库里。
+- **依赖源切换（已完成，2026-10-23）**：作者的 desktop profile 已从 `file:/tmp/dsh-plugin-weixin-0.8.0.tgz` 换成 `^0.9.3`，`pnpm-lock.yaml` 同步（specifier / version / integrity 与 registry 一致，而那个 tarball 其实早已不存在了）。设置卡「来源信息」印的是 profile **声明的** spec，所以 `bin/install.mjs` 现在会在仍声明 `file:…tgz` 时打印该换成的 semver；它不会擅自改作者的依赖。
 - **市场收录跟进**：`awesome-dsh-plugin` PR #7426 合并后核对 dsh-market 的搜索结果与条目渲染。
 - **低优先整洁性**（判定不值得单开一轮）：`src/media/inbound.js:127` 与 `:323` 各自重算同一 trim 表达式；语法合法但语义错误的 CDN URL 被静默接受（属用户配置问题）。
 
