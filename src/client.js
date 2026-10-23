@@ -693,9 +693,78 @@ window.__ModuleLoader__.load({
 				}
 			}, [ctx]);
 
+			// How often the card re-reads its status while it is mounted. The
+			// settings page is often left open, and the account state changes
+			// elsewhere: another device logs in or out, or the server-side session
+			// expires. A status read is cheap but not free, so 15s is the compromise
+			// -- fast enough that the card is not visibly stale when the operator
+			// looks back at it (and a session expiring is noticed within one tick),
+			// slow enough that an idle settings page is not a request per second.
+			const STATUS_POLL_MS = 15000;
+
 			react.useEffect(() => {
 				refreshStatus();
+				// The background refresh is a browser affordance: it exists to notice
+				// changes made on another device and it watches the window and the
+				// document for the moments the operator returns to the card. A host
+				// without them (the tests, any non-browser importer of this bundle)
+				// keeps the one-shot read above and nothing else, rather than throwing
+				// on a global it never had.
+				const win = typeof window === "undefined" ? null : window;
+				const doc = typeof document === "undefined" ? null : document;
+				const watch = win !== null && doc !== null && typeof win.addEventListener === "function";
+				let timer = null;
+				let reading = false;
+
+				/**
+				 * One status read, or none.
+				 *
+				 * Skipped rather than queued while a read is in flight: the host can
+				 * hold a request open, and a slow answer must not stack the next tick
+				 * behind it. Also skipped while a QR login is polling -- that loop
+				 * refreshes the status itself on every transition, so a background
+				 * read would only race it with the state it is already updating.
+				 */
+				const read = async () => {
+					if (reading || sessionKeyRef.current) return;
+					reading = true;
+					try {
+						await refreshStatus();
+					} finally {
+						reading = false;
+					}
+				};
+
+				// Self-scheduling, like the login poll, so a tick can never overlap the
+				// next one; `reading` covers a request a focus event started.
+				const schedule = () => {
+					timer = setTimeout(() => {
+						timer = null;
+						read();
+						schedule();
+					}, STATUS_POLL_MS);
+				};
+
+				const onFocus = () => read();
+				const onVisibility = () => {
+					if (doc !== null && doc.visibilityState === "visible") read();
+				};
+
+				if (watch) {
+					win.addEventListener("focus", onFocus);
+					doc.addEventListener("visibilitychange", onVisibility);
+					schedule();
+				}
+
 				return () => {
+					if (watch) {
+						win.removeEventListener("focus", onFocus);
+						doc.removeEventListener("visibilitychange", onVisibility);
+					}
+					if (timer !== null) {
+						clearTimeout(timer);
+						timer = null;
+					}
 					stopPolling();
 					if (sessionKey) ctx.remote.weixin.cancel(sessionKey).catch(() => {});
 				};

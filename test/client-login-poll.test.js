@@ -237,12 +237,23 @@ function fakeHost(script = []) {
  * Load src/client.js under a working hook runtime and a controlled clock, apply
  * it, and render the settings card it registers.
  */
-async function mountCard(remote) {
+async function mountCard(remote, options = {}) {
   const source = fs.readFileSync(CLIENT_PATH, 'utf8')
   const hooks = createHooks()
   const timers = []
   let nextTimerId = 1
   let registration
+  // The card's background status refresh installs itself only on a page: it needs
+  // `window` and `document` to notice the operator coming back to it. Those
+  // listeners are recorded here so a test can fire them. Opt-in, because the
+  // login-loop tests are about that loop's own clock and its own timers.
+  const listeners = new Map()
+  const page = options.browser
+    ? {
+        addEventListener: (type, fn) => listeners.set(type, [...(listeners.get(type) ?? []), fn]),
+        removeEventListener: (type, fn) => listeners.set(type, (listeners.get(type) ?? []).filter((f) => f !== fn)),
+      }
+    : null
 
   const sandbox = {
     window: { __ModuleLoader__: { load: (r) => { registration = r } } },
@@ -263,6 +274,13 @@ async function mountCard(remote) {
     // express that, so its use is a failure rather than a detail of the clock.
     setInterval: () => assert.fail('the poll loop must not use setInterval: the endpoint long-polls'),
     clearInterval: () => {},
+  }
+  if (page) {
+    // A real page, as far as the card's refresh loop can tell: the same listener
+    // table on both hosts, and a document whose visibility can be changed.
+    sandbox.window.addEventListener = page.addEventListener
+    sandbox.window.removeEventListener = page.removeEventListener
+    sandbox.document = { visibilityState: 'visible', ...page }
   }
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
@@ -327,8 +345,19 @@ async function mountCard(remote) {
     ctx,
     calls: null,
     timers,
+    /** The listeners the card installed on `window`/`document` (browser mode). */
+    listeners,
     /** Re-render and return the current tree. */
     render: () => hooks.flush(),
+    /** Fire every listener the card installed for an event name. */
+    fire(type) {
+      for (const fn of listeners.get(type) ?? []) fn()
+    },
+    /** What `document.visibilityState` reports at the next visibilitychange. */
+    setVisibility(state) {
+      assert.ok(sandbox.document, 'mount the card with { browser: true } to have a document')
+      sandbox.document.visibilityState = state
+    },
     /** Click a button by its label, then let the resulting work settle. */
     async click(text) {
       const button = findButton(hooks.flush(), text)
@@ -512,3 +541,77 @@ function collect(node, predicate, into = []) {
   for (const child of node.children ?? []) collect(child, predicate, into)
   return into
 }
+
+test('the status card refreshes itself instead of going stale while mounted', async () => {
+  /** Let the card's async reads finish: the clock is fake, the promises are not. */
+  const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+  // The open item this pins (docs/progress.md, 状态卡实时性): the status read ran
+  // exactly once, from the mount effect, so a login from another device — or the
+  // server-side session expiring — left the card showing the old state until it
+  // happened to be unmounted and mounted again. Without a timer and the two
+  // return-to-the-card events, none of the assertions below can even find a
+  // listener to fire: the effect installed neither.
+  const host = fakeHost()
+  const card = await mountCard(host, { browser: true })
+
+  // Mounted: one read, and a timer that will read again on its own.
+  assert.equal(host.calls.status, 1, 'mounting reads the status once')
+  // The refresh is the only non-zero timer a freshly mounted card owns.
+  const statusTimer = () => card.timers.find((t) => t.ms > 0)
+  assert.ok(statusTimer(), 'a mounted card must schedule its own status refresh')
+  // 15s is the documented tradeoff: a status read is cheap but not free, and the
+  // settings page is often left open.
+  assert.equal(statusTimer().ms, 15000, 'the refresh interval is the documented 15s')
+  assert.deepEqual(
+    [...card.listeners.keys()].sort(),
+    ['focus', 'visibilitychange'],
+    'the card must watch the moments the operator comes back to it',
+  )
+
+  await statusTimer().fn()
+  await settle()
+  assert.equal(host.calls.status, 2, 'the interval must re-read the status')
+  assert.ok(statusTimer(), 'the refresh must keep scheduling itself')
+
+  // Coming back to the window is exactly when a stale card gets looked at.
+  card.fire('focus')
+  assert.equal(host.calls.status, 3, 'regaining focus must refresh immediately')
+  await settle()
+
+  // ... and so is the tab becoming visible again. Going hidden is not a refresh
+  // moment: nobody is reading the card then.
+  card.setVisibility('hidden')
+  card.fire('visibilitychange')
+  await settle()
+  assert.equal(host.calls.status, 3, 'hiding the card is not a reason to read')
+  card.setVisibility('visible')
+  card.fire('visibilitychange')
+  assert.equal(host.calls.status, 4, 'becoming visible must refresh immediately')
+  await settle()
+
+  // Ticks must not stack. The host may hold a request open, and the point of a
+  // self-scheduled read is that the next trigger cannot pile one on top.
+  let release
+  host.weixin.status = () => {
+    host.calls.status += 1
+    return new Promise((resolve) => { release = resolve })
+  }
+  card.fire('focus')
+  assert.equal(host.calls.status, 5, 'the focus read is in flight')
+  card.fire('focus')
+  assert.equal(host.calls.status, 5, 'a second trigger must not start a second read')
+  release({ accounts: [], stateDir: '/tmp', pendingLogin: false, sessionExpired: false })
+  await settle()
+  card.fire('focus')
+  assert.equal(host.calls.status, 6, 'once the read settles, the next trigger reads again')
+  await settle()
+
+  // A QR login owns the card while it runs, and that loop refreshes the status
+  // on every transition itself; the background tick must not race it.
+  await card.click('扫码登录微信')
+  const beforeLoginTick = host.calls.status
+  await statusTimer().fn()
+  await settle()
+  assert.equal(host.calls.status, beforeLoginTick, 'no background status read while a QR login polls')
+})
