@@ -1,72 +1,67 @@
 # 开发进度
 
-更新时间：2026-06-16
+更新时间：2026-10-23
 
-## 已完成
+## 当前状态（2026-10-23）
 
-- [x] 创建 `dsh-weixin` 项目目录与包结构；
-- [x] 落地总体方案、移植边界、里程碑和安全策略；
-- [x] 建立消息、会话、配置和白名单的领域模型；
-- [x] 调研并确认真实的 DSH 插件契约（`name` / `inject` / `Config` / `apply`）与 `agents` 服务用法；
-- [x] 放弃"手写移植 Hermes Python iLink 客户端"，改为 vendor 腾讯官方 MIT 传输层；
-- [x] vendor `@tencent-weixin/openclaw-weixin@2.4.10` 的编译产物并剥离 OpenClaw 耦合（3 个 SDK import → shim）；
-- [x] 把凭证目录从 `~/.openclaw` 重定向到 `~/.dsh/weixin`；
-- [x] 实现 iLink 长轮询 transport（`getUpdates` / `sendMessage` / `sendTyping` / sync buf / backoff）；
-- [x] 实现 `AgentBridge`：微信会话 ↔ DSH agent 会话（create/resume + `followup` + 读回回复）；
-- [x] 实现 session log 读取（`assistant/message` / `assistant/attempt` 的 `stream` + 在跑工具）；
-- [x] 实现扫码登录 CLI（`bin/login.js`）；
-- [x] 实现插件入口 `src/index.js`（Config schema + 白名单 → 去重 → 会话 → 分段回发）；
-- [x] 实现安装脚本 `bin/install.mjs`（写 node_modules / bundles / cordis.patch.yml）；
-- [x] `node --test "test/**/*.test.js"`：`tests 11 / pass 11 / fail 0`；
-- [x] 端到端冒烟（假 iLink 服务 + 假 agents 服务 + 真实插件代码）通过；
-- [x] 真实网络扫码登录探测通过（拿到真实二维码与 fallback URL）；
-- [x] 补第三方代码声明 `THIRD-PARTY-NOTICES.md`。
+- **版本**：`0.9.2`（npm 已发布；`package.json`、根目录 tarball、README 三处一致）。
+- **仓库**：`main` 干净；最后一次提交 `19b1a73 feat(progress): stream changed tool notes while a turn runs, rate-limited`（2026-10-20）**尚未发版**。
+- **测试**：`npm test` → `tests 361 / pass 361 / fail 0`（33 个测试文件，约 96s）。
+- **完成度**：按「可运行的生产插件」计约 **95%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
-## 进行中
+### 已落地能力
 
-- [ ] 安装到 `desktop` profile 并在真实 DSH 里加载（受沙箱写权限限制，需用户授权或手动执行）；
-- [ ] 真实微信账号闭环验收。
+- **收发闭环**：文本 / 图片 / 文件 / 入站语音（SILK→WAV→ASR 桥，热调用约 300ms），下载、解密、落盘、转码、降级齐全。
+- **多账号**：逐个扫码接入、各自独立长轮询、账号级 Pause/Resume、账号级白名单覆盖全局、首联系人自动登记、扫码后即时生效（不重启）。
+- **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述。
+- **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ 失败冷却；回合中的工具变化流式推送（最后一个 commit）。
+- **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
+- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）；设置卡 7 个页签（登录 / 账号 / 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
+- **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
+- **健壮性**：长轮询看门狗（响应头到达后 body 挂死）、归档会话自动恢复、模型调用失败不卡队、二维码 PNG 只用 `node:zlib` 自编码（Windows 可用）。
 
-## 待完成
+## 未完成 / 待办
 
-- [ ] 图片、文件、语音、视频的收发（vendor 的 media/cdn 模块未引入）；
-- [ ] 长任务进度与取消（目前只有一条进度提示，无 `/cancel`）；
-- [ ] 审计日志持久化（目前只有 `ctx.logger`）；
-- [ ] DSH 配置 UI / 设置面板；
-- [ ] 多账号路由与账号状态上报；
-- [ ] 真实账号长时间运行的重连与限流观察（iLink 已知会有消息丢弃）。
+### 一、只差真机与时间验证（代码已就绪）
 
-## 关键决策
+- **长时间运行**：断线重连、sync buf 漂移、iLink 丢消息后的自愈，还没有跨天观察记录。
+- **多账号长期并发**：两个账号同时高频收发没跑过；限速是**按账号**的，跨账号互不影响这点未实测。
+- **群聊**：入站 `group_id` 非空路径目前只有单元测试（空 group_id 回归也在其中），真实群消息未验证。
+- **0.9.2 之后那一个 commit**（回合中流式推送工具变化）只在测试里验过，需真机长回合确认不会轰炸用户；确认后再发 0.9.3。
 
-1. **不移植 Hermes runtime，只借通信层。** 避免两套控制中心（session/工具/权限各存一份）。
+### 二、功能缺口（有明确原因，不是遗漏）
+
+- **出站语音 / 视频**：`silk` 只用于入站；服务端对 BOT 的 `voice_item` 接受但不投递（已实测），所以出站 `.mp3/.wav/.m4a` 一律按 file 附件发，不会变成语音气泡；视频需要编码管线，未做。
+- **长任务取消 `/cancel`**：现在只有进度提示与 `/steer` 插话，没有中断在跑回合的入口（取决于宿主 agent 是否暴露 abort）。
+- **审计日志持久化**：只有 `ctx.logger` 与消息流水；「哪个工具、什么参数、被谁触发」没有落盘。
+- **原生图像理解**：入站图片以本地路径交给 Agent，由 Agent 用 `read_image` 打开——依赖当前模型与工具链，插件不保证。
+
+### 三、工程与发布
+
+- **依赖源切换**：desktop profile 从 `file:…tgz` 改回 npm registry 版本号，消除「发版同步 `package.json` / `package-lock.json` / `pnpm-lock.yaml` 三处 + 备份 tarball」的负担。
+- **发送频控自护**：约 20 条 / 几分钟会触发账号级封锁 ≥30min；出站分片在接近阈值时应主动合并或延迟（现在只是固定间隔）。
+- **状态卡实时性**：多端登录或服务端会话失效时状态卡不会自己变，现在依赖卡片挂载与登录事件刷新。
+- **市场收录跟进**：`awesome-dsh-plugin` PR #7426 合并后核对 dsh-market 的搜索结果与条目渲染。
+- **低优先整洁性**（判定不值得单开一轮）：`src/media/inbound.js:127` 与 `:323` 各自重算同一 trim 表达式；语法合法但语义错误的 CDN URL 被静默接受（属用户配置问题）。
+
+## 关键决策（仍然有效）
+
+1. **不移植 Hermes runtime，只借通信层。** 避免两套控制中心（session / 工具 / 权限各存一份）。
 2. **vendor 腾讯官方 SDK，不手写 iLink 客户端。** 协议细节（uint64 精度、AES-128-ECB 媒体、typing ticket、sync buf）已由官方实现覆盖。
 3. **不引入 OpenClaw。** 只需要 3 个叶子 helper，用 `openclaw-shim.js` 顶掉即可。
-4. **运行时用 JS，不用 TS。** `.ts` 在工作区可直接跑，但安装进 profile 后位于 `node_modules` 下，Node 拒绝在 `node_modules` 里做类型剥离（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`）。类型用 JSDoc 表达。
+4. **运行时用 JS，不用 TS。** 装进 profile 后位于 `node_modules` 下，Node 拒绝在那里做类型剥离（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`）；类型用 JSDoc 表达。
 5. **会话 meta 不写自定义 `origin`。** session header schema 只允许 `origin: 'subagent'`，写了会抛 `SessionFormatError`。
 6. **白名单默认拒绝所有人。** 微信文本不是授权凭据。
+7. **提醒不经过 agent 轮次。** 定时消息是插件自己的行为，不应消耗模型调用。
 
-## 当前完成度
-
-按"可运行的生产插件"计：约 **85%**（真实收发已验证；仅剩 Agent 接管需重启 DSH 后验收）。
-
-## 验证记录
-
-- `node --test "test/**/*.test.js"` → `tests 13 / pass 13 / fail 0`（白名单、分段、去重、入站归一化、stream 重组、回复读取、工具跟踪、session id、空 group_id 回归、完整链路 e2e）。
-- 端到端冒烟：假 iLink HTTP 服务 + 假 `agents` 服务 + 真实插件/transport/bridge。
-  - 输出：`listening as account bot1` → `turn settled in ~1000ms` → 拒绝 `wxid_stranger` → 跳过重复 `1001`；
-  - 出站：`{"to":"wxid_abc","ctx":"ct1","text":"pong: hi"}`、`{"to":"wxid_abc","ctx":"ct3","text":"（暂不支持这条消息：item type 2）"}`。
-- 真实网络登录探测：`node bin/login.js --timeout 4000` 打印真实二维码 + fallback URL `https://liteapp.weixin.qq.com/q/...&bot_type=3`；另生成 PNG 到 `~/.dsh/weixin/login-qr.png`（终端半块字符在 GUI 里不可见）。
-- **真实账号登录成功**：得到一个 `<account-id>@im.bot` 形式的机器人账号 → `~/.dsh/weixin/openclaw-weixin/accounts/<account-id>@im.bot.json`（0600），index `accounts.json` 里登记同一个 id。
-- **真实收发验证通过**（2026-10-13）：真实 iLink 长轮询收到 `在不在超级大管家` / `我是谁`，回发 `echo: …` 两条均成功；`conversationId` 正确解析为发送者 id。
-- 真实 `getConfig` 返回 `typing_ticket`；`sendMessage` 携带真实 `context_token` 无报错。
-- 插件加载：`import('src/index.js')` → `{ name: 'dsh-weixin', inject: ['agents'], Config.type: 'object' }`，`Config({})` 返回完整默认值。
-- `tsc --noEmit`：不适用，本环境无 TypeScript；已改用 JSDoc + `node --test`。
-
-## 已知环境限制
+## 已知环境限制（仍然有效）
 
 - 写入 `~/.dsh/profiles/desktop/node_modules/` 在 workspace-write 模式下被沙箱拒绝；提权到 danger-full-access 后 `node bin/install.mjs --profile desktop` 可直接安装。
-- 探针脚本必须设 `OPENCLAW_STATE_DIR`（vendored accounts.js 读它，不读 `DSH_WEIXIN_STATE_DIR`）；否则 `loadWeixinAccount` 返回 null → `TypeError: Cannot read properties of null (reading 'baseUrl')`。
-- 本环境无 `tsc`；`npm install` 会卡住（需 `--cache <workspace 路径>`，`npm pack` 则正常）。
+- 探针脚本必须设 `OPENCLAW_STATE_DIR`（vendored `accounts.js` 读它，不读 `DSH_WEIXIN_STATE_DIR`）；否则 `loadWeixinAccount` 返回 null → `TypeError: Cannot read properties of null (reading 'baseUrl')`。
+- 本环境无 `tsc`；`npm install` 会卡住（需 `--cache <workspace 路径>`），`npm pack` 正常。
+- 顶层函数不能引用 `apply` 作用域里的变量：被错误边界吞掉后表现为「全部消息无回复」，必须参数透传或提到模块级（已两次踩中，见下方日志）。
+
+## 历史阶段记录（2026-10-13 起，最新在下）
 
 ## 2026-10-13 深夜 — round-6（T10-R2 补强后复验中）
 
@@ -83,9 +78,9 @@
 - 已部署 `node bin/install.mjs --profile desktop`，部署副本 trim 三处一致。
 - **t11（round-6 复核）已派发给 verifier，待结论。**
 
-## 遗留 / 已知事项
+## 遗留 / 已知事项（round-6 当时，已过时——见顶部「未完成 / 待办」）
 
-- 语音完整识别（ASR）未实现：无 silk-wasm 时降级存 `.silk`，已向用户说明需另加 ASR。
+- ~~语音完整识别（ASR）未实现~~ → 已由仓库自带 `bin/asr-bridge.py` 解决（0.3.0 起开箱可用；无 silk-wasm 时仍降级存 `.silk`）。
 - T10-R1（low）：`:127`/`:323` 仍各自重算同一 trim 表达式，属整洁性，判定不值得本轮抽函数。
 - T10-R3（low）：语法合法但语义错误的 CDN URL 被静默接受，属用户配置问题，建议不做。
 - **待用户确认**：插件尚未在真机上重发一轮验证（重启后需用户从微信发一条消息确认双向通路）。
