@@ -211,6 +211,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
 | `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
 | `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 50 条 |
+| `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
@@ -256,6 +257,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `/list` | 列出当前会话下的所有会话线，`▶` 标出正在用的那条 |
 | `/use <序号>` | 切到第 N 条（序号来自 `/list`） |
 | `/clear` | 清空当前会话并重新开始：这条线从 `/list` 里移除，立刻开一条全新的 |
+| `/cancel` | 中断**正在跑的那一轮**（长任务卡住时用）。已经排队的消息仍会继续；回复会被记成「已取消」而不是「模型调用失败」 |
 | `/status` | 查看当前账号和会话状态：账号名、是否暂停、最近收发、白名单人数与来源、会话线数 |
 | `/remind <时间> <内容>` | 定时提醒：到点后机器人直接把内容发到当前会话（如 `/remind 10m 站会`、`/remind 18:30 下班打卡`、`/remind 2026-10-20 09:00 交周报`） |
 | `/remindlist` | 列出本账号还没触发的提醒（含编号） |
@@ -395,6 +397,24 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 按天一个文件，文本截断 200 字符）。设置卡的「消息流水」页签显示最近 50 条（收 ↓ / 发 ↑、账号、时间、
 内容，最新在前），不用翻日志就能确认每个账号都活着。写流水是尽力而为：失败只 warn，绝不影响消息收发。
 `test/journal.test.js` 与 `test/e2e.test.js` 的 messageJournal 用例守着这些行为。
+
+### 工具审计（toolAudit）
+
+日志回答不了「昨天 15:20 是谁让它删了那个目录」：日志是过程流，滚掉就没了。`toolAudit` 开着时
+（默认开），agent 每跑一个工具就往 `<状态目录>/audit/` 追加一行 JSONL（按天一个文件
+`audit-YYYY-MM-DD.jsonl`），记录**哪个工具、什么参数（截断到 500 字符）、哪个账号/会话/发送者触发、
+结果是否带错**。
+
+一行只记一件事，靠 `callId` 配对：`kind: "tool/call"` 记工具名与参数，`kind: "tool/result"` 记
+`ok` 与 `durationMs`。这样文件永远是追加的，不需要回头改历史。几条边界：
+
+- 写审计是观测行为：参数无法 `JSON.stringify`（循环引用、BigInt）时退回 `String()` 也要留下一行；
+  目录不可写、磁盘满只 warn，**绝不影响一轮对话**；
+- 参数是模型产出的原文，可能含密钥或路径——审计文件是本地文件，别直接贴到公开 issue 里；
+- 只记工具调用，不记工具输出内容（输出可能极大，且已在会话记录里）。
+
+`test/tool-audit.test.js` 覆盖写入/截断/撕裂行/失败降级，`test/e2e.test.js` 的 toolAudit 用例覆盖
+「插件真的把它接到磁盘上、关掉就一个文件都不写」。
 
 语音是微信 SILK 格式。插件会尝试用上游的 `silkToWav` 转成 WAV；`silk-wasm` 现在是
 `optionalDependencies` 里的一项（已装则可用；卸载或安装失败不影响插件加载，会走降级路径）。

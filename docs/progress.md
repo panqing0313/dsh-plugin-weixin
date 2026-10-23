@@ -4,19 +4,19 @@
 
 ## 当前状态（2026-10-23）
 
-- **版本**：`0.9.2`（npm 已发布；`package.json`、根目录 tarball、README 三处一致）。
-- **仓库**：`main` 干净；最后一次提交 `19b1a73 feat(progress): stream changed tool notes while a turn runs, rate-limited`（2026-10-20）**尚未发版**。
-- **测试**：`npm test` → `tests 361 / pass 361 / fail 0`（33 个测试文件，约 96s）。
-- **完成度**：按「可运行的生产插件」计约 **95%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
+- **版本**：`0.9.2`（npm 已发布；`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住）。
+- **仓库**：`main` 干净；本轮 5 个 commit 已提交——`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`f81b63f` 文档。相对已发布的 0.9.2 共 **6 个未发版 commit**（含 2026-10-20 的 `19b1a73` 回合内工具流式推送）。
+- **测试**：`npm test` → `tests 389 / pass 389 / fail 0`（约 103s；本轮新增 28 条：出站限速接线 9、`/cancel` 5、工具审计 7、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1）。
+- **完成度**：按「可运行的生产插件」计约 **97%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
 
 - **收发闭环**：文本 / 图片 / 文件 / 入站语音（SILK→WAV→ASR 桥，热调用约 300ms），下载、解密、落盘、转码、降级齐全。
 - **多账号**：逐个扫码接入、各自独立长轮询、账号级 Pause/Resume、账号级白名单覆盖全局、首联系人自动登记、扫码后即时生效（不重启）。
-- **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述。
-- **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ 失败冷却；回合中的工具变化流式推送（最后一个 commit）。
+- **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述；`/cancel` 中断正在跑的那一轮（排队消息仍继续）。
+- **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ **滚动窗口上限**（默认 15 条 / 2 分钟，到顶自动等窗口滑过而不是硬发）+ 失败冷却；回合中的工具变化流式推送。
 - **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
-- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）；设置卡 7 个页签（登录 / 账号 / 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
+- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对）；设置卡 7 个页签（登录 / 账号 / 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
 - **健壮性**：长轮询看门狗（响应头到达后 body 挂死）、归档会话自动恢复、模型调用失败不卡队、二维码 PNG 只用 `node:zlib` 自编码（Windows 可用）。
 
@@ -27,20 +27,16 @@
 - **长时间运行**：断线重连、sync buf 漂移、iLink 丢消息后的自愈，还没有跨天观察记录。
 - **多账号长期并发**：两个账号同时高频收发没跑过；限速是**按账号**的，跨账号互不影响这点未实测。
 - **群聊**：入站 `group_id` 非空路径目前只有单元测试（空 group_id 回归也在其中），真实群消息未验证。
-- **0.9.2 之后那一个 commit**（回合中流式推送工具变化）只在测试里验过，需真机长回合确认不会轰炸用户；确认后再发 0.9.3。
+- **0.9.2 之后那 6 个 commit**：回合中流式推送工具变化、出站限速接线（含 15 条/2 分钟窗口）、`/cancel`、工具审计、状态卡自刷新、发版清单守卫——都只在测试里验过，需真机长回合确认（尤其流式推送不会轰炸用户、限速不会让正常回复变慢）；确认后再发 0.9.3。
 
 ### 二、功能缺口（有明确原因，不是遗漏）
 
 - **出站语音 / 视频**：`silk` 只用于入站；服务端对 BOT 的 `voice_item` 接受但不投递（已实测），所以出站 `.mp3/.wav/.m4a` 一律按 file 附件发，不会变成语音气泡；视频需要编码管线，未做。
-- **长任务取消 `/cancel`**：现在只有进度提示与 `/steer` 插话，没有中断在跑回合的入口（取决于宿主 agent 是否暴露 abort）。
-- **审计日志持久化**：只有 `ctx.logger` 与消息流水；「哪个工具、什么参数、被谁触发」没有落盘。
 - **原生图像理解**：入站图片以本地路径交给 Agent，由 Agent 用 `read_image` 打开——依赖当前模型与工具链，插件不保证。
 
 ### 三、工程与发布
 
-- **依赖源切换**：desktop profile 从 `file:…tgz` 改回 npm registry 版本号，消除「发版同步 `package.json` / `package-lock.json` / `pnpm-lock.yaml` 三处 + 备份 tarball」的负担。
-- **发送频控自护**：约 20 条 / 几分钟会触发账号级封锁 ≥30min；出站分片在接近阈值时应主动合并或延迟（现在只是固定间隔）。
-- **状态卡实时性**：多端登录或服务端会话失效时状态卡不会自己变，现在依赖卡片挂载与登录事件刷新。
+- **依赖源切换（剩操作侧）**：desktop profile 仍指 `file:…tgz`；代码侧已就绪——`bin/release.mjs` preflight 现在会拒绝 `package-lock.json` 与 `package.json` 版本不一致，`--allow-stale-lockfile` 可显式绕过，改 registry semver 后不再有「三处清单同步 + 备份 tarball」的负担。切换本身要动作者的 profile，不在仓库里。
 - **市场收录跟进**：`awesome-dsh-plugin` PR #7426 合并后核对 dsh-market 的搜索结果与条目渲染。
 - **低优先整洁性**（判定不值得单开一轮）：`src/media/inbound.js:127` 与 `:323` 各自重算同一 trim 表达式；语法合法但语义错误的 CDN URL 被静默接受（属用户配置问题）。
 
@@ -1979,3 +1975,87 @@ off：零网络请求、prompt 无链接块）。
   直接回 `SESSION_COMMANDS_HELP`（帮助文本首行改为「发 /help 或 /帮助 可再看一遍」）。命令族由此
   自描述：以后加新命令只需同步 SESSION_COMMANDS_HELP，用户侧就能发现它。
 - 测试：`test/session-commands.test.js` 2 条（内容逐行断言 + `/帮助` 别名 + 不产生 agent 轮次）。
+
+## 长尾补齐一轮：出站限速接线 / `/cancel` / 工具审计 / 发版清单 / 状态卡自刷新（2026-10-23）
+
+用户要求「分任务继续完成，全量验证成功了后才能提交」：把上一轮列出的未完成项拆成任务逐条做，只有
+`npm test` 全绿才提交。五项，全量 389 条测试通过。
+
+### 一、出站限速真的接上了（原先只有库，没有接线）
+
+- **发现**：`src/message/rate-limit.js` 的 `OutboundPacer` 写得很完整，`test/rate-limit.test.js` 也测它，
+  但 **`src/` 里没有任何地方 import 它**。`git log -S "this.pacer" -- src/transport/ilink.js` 与
+  `-S sendIntervalMs -- src/index.js` 都是空的——`docs/progress.md` 里那段「`this.pacer` 普通属性上…
+  Config schema 加 sendIntervalMs/sendCooldownMs」记录的是一个**从未提交的设计**。结果是 0.9.0 的
+  「出站限速」实际没生效，README 与设置卡都在描述一个不存在的行为。
+- **教训**：文档写「已实现」不等于实现。收尾时必须用 `grep`/`git log -S` 验证「文档说的符号真的被引用」，
+  而不是相信上一轮的文字。
+- `src/transport/ilink.js`：构造器建 `this.pacer`（可用 `options.pacer` 注入，`sendIntervalMs`/`sendCooldownMs`
+  分别映射到 `minIntervalMs`/`cooldownMs`）；`send()` 与 `sendMedia()` 都是 `await this.pacer.acquire()` →
+  发送 → 成功 `noteSuccess()` / 失败 `noteFailure()` 后重抛。`sendMedia()` 的 acquire 覆盖「说明文本 + 附件上传」
+  整段（注释写明为什么不是两次）。
+- `src/index.js`：schema 加 `sendIntervalMs`（默认 `DEFAULT_SEND_INTERVAL_MS` = 1200）/ `sendCooldownMs`
+  （默认 30_000），并把两者传给 transport；`src/config-remote.js` 表单加两个字段（毫秒，带上下限）。
+- **新增滚动窗口**：固定间隔挡不住「一分钟内连发 20 条」。`rate-limit.js` 加 `DEFAULT_WINDOW_MS = 120_000`、
+  `DEFAULT_WINDOW_MAX = 15`：`acquire()` 在间隔等待后 prune 窗口，满了就等到最早那条滑出窗口再发，并 warn
+  `outbound send window is full …`。15 条 × 1500 字符 = 22 500 字符，普通长回复不会被这条挡到。
+- 测试：`test/rate-limit.test.js` 17 条（8 条原有 + 9 条新：接线三条用记录型 pacer + stub fetch 断言
+  `acquire/success`、`acquire/failure` 且仍抛 `sendMessage ret=1`；媒体路径同样；配置值真的进到 pacer；
+  窗口四条含「满窗等 8000ms」「过期不计」「失败不占窗口」「默认值 15/120_000」）。
+- **注意**：没有测试构造真的会发网络的 `ILinkTransport`，所以真实 pacing 不会拖慢测试套件。
+
+### 二、`/cancel`：中断正在跑的那一轮
+
+- 缺口：长工具跑（构建、扫描、卡住的子代理）在微信里没有出口。`/steer` 是往已经太慢的那一轮里加话，
+  普通消息则排在它**后面**——用户说「停」，要等它自己跑完才听得见。
+- `src/sessions.js`：`parseSessionCommand` 加 `/cancel`（别名 `/取消`），`SESSION_COMMANDS_HELP` 加一行，
+  `runSessionCommand` 加分支，走 context 里的 `cancelRunningTurn()`（只有 bridge 拿得到活 agent）。
+- `src/agent-bridge.js`：`#cancelRunningTurn` 在 `record.busy !== true` 时回「不需要取消」，宿主没有
+  `cancel` 时诚实回「不支持中断回合」，否则**先置 `record.cancelled = true` 再** `agent.cancel({ kind: 'user' })`
+  （顺序反了会让 abort 先被读成模型失败）；`#awaitReply` 两个轮询循环都在读回复**之前**检查这个标记，
+  命中就返回 `{ text: '', cancelled: true }`；`finally` 里清标记（否则下一轮的回复会被吞）。
+  `src/index.js` 收到 `cancelled` 只记日志、**不发空消息**（微信里会变成空白气泡）。
+- 测试：`test/cancel-turn.test.js` 5 条（解析含别名、空闲时不动手、忙时回执 + `cancel({kind:'user'})` +
+  结果是「已取消」不是「模型调用失败」、标记不泄漏到下一轮、宿主无 `cancel` 时不假报成功）。
+- 假 agent 的 `snapshotEvents` 事件必须带 `type`：我第一版只 push 了 `{ seq, time, data }`，reader 读到
+  `undefined` 类型 → 一轮永远不 settle → 3s 后超时。**假事件流的形状要跟真事件一致**，否则测的是自己的 bug。
+
+### 三、工具审计落盘（`<stateRoot>/audit/`）
+
+- 缺口：`ctx.logger` 是滚掉的过程流，消息流水只有文本进出，所以「昨天 15:20 是谁让它删了那个目录」
+  答不出来。
+- `src/message/audit.js`（新，仿 `journal.js`）：`appendToolAudit` 追加到
+  `<stateRoot>/audit/audit-YYYY-MM-DD.jsonl`，一行一件事，靠 `callId` 配对——`tool/call`（工具名、截断 500
+  字符的参数、账号 / 会话 / 发送者）与 `tool/result`（`ok`、`durationMs`）。文件永远追加，不改历史。
+  参数 `JSON.stringify` 失败（循环引用 / BigInt）退回 `String()` 也要留一行；追加失败只 warn，**绝不抛**。
+- `src/agent-bridge.js`：新增 `onToolAudit` 选项（不传 = 不审计，裸 bridge 不写文件），`record.auditSeq`
+  保证同一次工具调用在多轮轮询里只记一次、也不会把历史事件重复记；`#auditEvents` 在**读回复之前**调用，
+  所以「同一个 poll 里就 settle 的快速回合」也能被记到。`deliver({ senderId })` 把触发者一路带到
+  `#enqueue`/`#runQueuedTurn`；`sessionId` 在**发出审计行时**读 `agent.session.id`（`/new` 可能在排队期间
+  换了会话，审计要记工具真正跑在哪条线）。
+- `src/index.js`：`toolAudit` 配置（默认 true）→ `onToolAudit: (entry) => appendToolAudit(stateRoot, entry, { warn })`；
+  `deliver` 传 `senderId: message.senderId`。`src/config-remote.js` 加同名开关。
+- 测试：`test/tool-audit.test.js` 7 条（写入/读回、截断与不可序列化、撕裂行跳过 + 过滤 + 不可写目录只 warn、
+  一轮只记一次且带归属、错误结果 `ok:false`、无 sink 不影响轮次、默认开关）；e2e 加 1 条 on/off 双态
+  （真的接到磁盘 / 关掉零文件），e2e 的假 agents 因此支持脚本化 `tools`。
+- **没记什么**：不记工具输出内容（可能极大，且已在会话记录里）。参数是模型原文，可能含密钥——审计文件
+  是本地文件，别直接贴进公开 issue。
+
+### 四、发版清单不再漂移
+
+- `package-lock.json` 的两处 `version` 还停在 `0.1.1`，而 `package.json` 是 `0.9.2`。用真 npm 刷新
+  （`npm install --package-lock-only --cache "$PWD/.npmcache"`），顺带把依赖图对齐到 `package.json`。
+- `bin/release.mjs`：新增 `manifestVersionProblems()`，preflight 在两个清单版本不一致时 **die**（并给出
+  刷新命令），`--allow-stale-lockfile` 可显式绕过；`bumpVersion` 同步改锁文件两处版本；`snapshotTextFiles`
+  把锁文件纳入 `--dry-run` 回滚范围；脚本只在被当脚本跑时执行（`import.meta.url === pathToFileURL(argv[1])`），
+  所以测试能 import 这个守卫。
+- 测试：`test/release-lockfile.test.js` 5 条（一致 / 两处都旧 / 只旧一处 / 字段缺失 / 锁文件解析失败）。
+
+### 五、状态卡自己刷新
+
+- 多端登录或服务端会话失效时，设置卡原来只在挂载与登录事件时刷新，会一直显示过期状态。
+- `src/client.js`：`STATUS_POLL_MS = 15000` 的自调度 `setTimeout`（**不用 `setInterval`**，登录轮询的
+  harness 把 setInterval 判为失败），加上 `focus` 与 `visibilitychange`→visible 时立即刷新；`reading`
+  保证不叠请求（跳过而不是排队）；QR 登录轮询持有卡片时后台不读（`sessionKeyRef` 已在那里）；没有
+  `window`/`document` 的宿主（测试 harness）不装定时器与监听；卸载时清定时器与监听。
+- 测试：`test/client-login-poll.test.js` 加 1 条（15000ms 定时器、两个监听、隐藏不读、不叠请求、登录中不抢读）。

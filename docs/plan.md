@@ -52,7 +52,7 @@ Weixin/iLink -> dsh-weixin transport -> DSH Channel API
 
 ## 当前状态与后续方向（2026-10-23 更新）
 
-M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账号上稳定运行；安全默认（白名单默认全拒、幂等、脱敏）落地；原生 UI 含扫码卡片、状态卡与 7 页签设置卡。已发布 npm **0.9.2**（0.9.0 起有定时提醒 / 消息流水 / `/help` / readLinks / 出站限速；0.9.1–0.9.2 是打赏入口与其修复），插件市场 PR 仍等维护者合并 awesome-dsh-plugin#7426。0.9.2 之后还有一个未发版的 commit（回合中流式推送工具变化）。测试 361 全绿。逐项待办见 `docs/progress.md` 顶部「未完成 / 待办」。
+M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账号上稳定运行；安全默认（白名单默认全拒、幂等、脱敏）落地；原生 UI 含扫码卡片、状态卡与 7 页签设置卡。已发布 npm **0.9.2**（0.9.0 起有定时提醒 / 消息流水 / `/help` / readLinks / 出站限速；0.9.1–0.9.2 是打赏入口与其修复），插件市场 PR 仍等维护者合并 awesome-dsh-plugin#7426。0.9.2 之后还有一个未发版的 commit（回合中流式推送工具变化）。测试 389 全绿。逐项待办见 `docs/progress.md` 顶部「未完成 / 待办」。
 
 里程碑之外已经完成的方向（源自对 dsh-im 的学习移植）：
 
@@ -60,12 +60,12 @@ M0–M5 全部达成并超出原计划：文本/媒体/语音闭环在真实账�
 - **Agent 语境**：可选 `sourceContext` 在 prompt 前附 `<weixin_source …/>` 来源块。
 - **设置 UI**：真 tablist + 下载设置原子保存（暂存→保存/还原条）；同一设置卡同时挂在插件页与宿主 Settings 导航（`settings.section`，order 22）。
 - **语音识别开箱可用**：仓库自带 `bin/asr-bridge.py`（双引擎：Apple Silicon 走 mlx-whisper GPU，其它平台走 faster-whisper CPU），用户下载插件后只需 `pip install` 一个引擎、在设置页点一次下载，不再需要自己写服务端。实测热调用 0.29s（mlx/GPU）对 5.3s（Rosetta CPU），中文默认出简体，非语音返回空而不是编造。
-- **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 的依赖钉在 tarball 上，发版须同步更新 package.json/package-lock.json/pnpm-lock.yaml 三处。
+- **发布工程**：图标/hero 资产随包分发（manifest 引用的路径必须同时进 npm files 与安装器 COPY_ENTRIES）；desktop profile 目前仍钉在 tarball 上，但 `package.json` 与 `package-lock.json` 的版本一致性已由发版 preflight 强制，漂移会在发版时被拒绝而不是悄悄发出去。
 
 ### 候选后续
 
-1. **依赖源切换**：desktop profile 从 `file:…tgz` 改为 npm registry 版本号，消除「发版要同步三处清单 + /tmp tarball 备份」的负担。
+1. **依赖源切换**：desktop profile 应改为依赖 registry 上的 semver（`dsh-plugin-weixin@<version>`），而不是 `file:…tgz`，这样就不必再同步三处清单、也不用备份 /tmp tarball。清单漂移现在由发版脚本兜住：`bin/release.mjs` 的 preflight 会核对 `package.json` 与 `package-lock.json` 的两处版本字段，不一致就拒绝发版。
 2. **语音回复**：出站 TTS（SILK 编码已验证可行；注意服务端对 BOT voice_item 接受但不投递，需先验证投递路径）。
-3. **发送频控自护**：约 20 条/几分钟触发账号级封锁 ≥30min——出站分片在接近阈值时主动合并/延迟。
-4. **状态实时性**：GUI 状态卡在多端登录/服务端会话失效时的主动刷新（现在依赖卡片挂载与登录事件）。
-5. **市场收录跟进**：PR #7426 合并后核对 dsh-market 搜索结果与条目渲染。
+3. **市场收录跟进**：PR #7426 合并后核对 dsh-market 搜索结果与条目渲染。
+
+已完成并移出候选（2026-10-23）：出站限速真的接上了线（`sendIntervalMs`/`sendCooldownMs` + 15 条/2 分钟滚动窗口）、`/cancel` 可中断在跑的回合、工具审计 JSONL 落盘、状态卡自刷新。
