@@ -221,36 +221,41 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
     await new Promise((resolve) => setTimeout(resolve, 100))
     server.close()
 
-    const texts = sent.map((s) => s.msg.item_list[0].text_item.text)
-    const targets = sent.map((s) => s.msg.to_user_id)
-    const tokens = sent.map((s) => s.msg.context_token)
+    const replies = sent.map((s) => ({
+      to: s.msg.to_user_id,
+      text: s.msg.item_list[0].text_item.text,
+      token: s.msg.context_token,
+    }))
 
-    // The agent's reply, and one notice for the image that had no CDN
-    // reference. That image is no longer "unsupported": it is a media item
-    // whose download failed, and the notice now names the reason.
-    assert.equal(texts[0], 'pong: hi')
-    assert.equal(texts[1], 'pong: hack', 'first contact must be enrolled and answered')
-    assert.match(texts[2], /下载失败/)
-    assert.match(texts[2], /no CDN reference|CDN/)
+    // Asserted per SENDER, not by index. The transport keeps ONE conversation
+    // in order but lets different conversations run at the same time — that
+    // concurrency is what lets `/cancel` reach the bridge mid-turn — so the
+    // answer to a stranger and the answer to the allowlisted sender can land in
+    // either order. What must hold is who got which answer, on which token.
+    const forSender = (who) => replies.filter((reply) => reply.to === who)
 
-    // Regressions: every outbound message must be addressed to the SAME sender
-    // that produced it (1:1 chats still have no group), and must echo the
-    // inbound token. The enrolled stranger is answered, so their reply goes
-    // back to them, not to the allowlisted sender.
-    assert.equal(targets[0], ALLOWED)
-    assert.equal(targets[1], 'wxid_stranger', 'the enrolled first contact gets their own reply')
-    assert.equal(targets[2], ALLOWED)
-    assert.equal(tokens[0], 'ct1')
-    assert.equal(tokens[1], 'ct2', 'the enrolled first contact gets the same token echo')
-    assert.equal(tokens[2], 'ct3')
+    const allowedReplies = forSender(ALLOWED)
+    assert.equal(allowedReplies.length, 2, `allowlisted sender gets an answer and the image notice: ${JSON.stringify(allowedReplies)}`)
+    const greeting = allowedReplies.find((reply) => reply.text === 'pong: hi')
+    assert.ok(greeting !== undefined, `expected the answer to "hi", got: ${JSON.stringify(allowedReplies)}`)
+    assert.equal(greeting.token, 'ct1', 'the answer echoes the token of the message that caused it')
+    // That image is no longer "unsupported": it is a media item whose download
+    // failed, and the notice names the reason.
+    const notice = allowedReplies.find((reply) => /下载失败/.test(reply.text))
+    assert.ok(notice !== undefined, `expected a download-failure notice, got: ${JSON.stringify(allowedReplies)}`)
+    assert.match(notice.text, /no CDN reference|CDN/)
+    assert.equal(notice.token, 'ct3', 'the notice belongs to the image message, not the text one')
 
-    // The FIRST stranger enrols (first contact = scanner rule) and their
-    // message is answered; the SECOND stranger is refused — the account has
-    // an enrolment now, so late arrivals get nothing.
-    assert.ok(texts.includes('pong: hack'), `expected the first contact to be enrolled and answered, got: ${texts.join(' | ')}`)
+    // The FIRST stranger enrols (first contact = scanner rule) and is answered
+    // on their own conversation; the SECOND stranger is refused, so nothing is
+    // ever sent to them.
+    const strangerReplies = forSender('wxid_stranger')
+    assert.deepEqual(strangerReplies.map((reply) => reply.text), ['pong: hack'], 'the enrolled first contact is answered')
+    assert.deepEqual(strangerReplies.map((reply) => reply.token), ['ct2'], 'the enrolled first contact gets the same token echo')
+    assert.equal(forSender('wxid_second_stranger').length, 0, 'the second stranger is refused and gets no reply')
     assert.ok(warnings.some((w) => w.includes('wxid_second_stranger')), `expected a refusal warning for the second stranger, got: ${warnings.join(' | ')}`)
     // The redelivered 1001 is not answered twice.
-    assert.equal(texts.filter((t) => t === 'pong: hi').length, 1)
+    assert.equal(replies.filter((reply) => reply.text === 'pong: hi').length, 1)
   } finally {
     fs.rmSync(stateRoot, { recursive: true, force: true })
     delete process.env.DSH_WEIXIN_STATE_DIR
