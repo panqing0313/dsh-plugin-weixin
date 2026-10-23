@@ -91,6 +91,15 @@ export const FIELDS = [
         hintEn: "Keep a local journal of recent in/out traffic (shown on the Journal tab) so you can confirm accounts are alive without reading logs.",
       },
       {
+        path: "toolAudit",
+        type: T.boolean,
+        default: true,
+        label: "记录工具审计",
+        labelEn: "Record a tool audit log",
+        hint: "把 agent 每跑一个工具（工具名、截断后的参数、哪个账号/会话/发送者触发、结果是否报错）追加到本地 audit 目录，按天一个 JSONL 文件。想事后查“是谁让它删了那个目录”就靠它。",
+        hintEn: "Append one JSONL line per tool run (name, truncated arguments, which account/conversation/sender caused it, whether the result errored) to a per-day file under the local audit directory. This is what answers “who told it to delete that directory” after the fact.",
+      },
+      {
         path: "readLinks",
         type: T.boolean,
         default: true,

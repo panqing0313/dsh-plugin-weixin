@@ -513,6 +513,12 @@ export function parseSessionCommand(text) {
   }
   const clearMatch = /^\/clear$/i.exec(trimmed)
   if (clearMatch !== null) return { command: 'clear' }
+  // `/cancel`（或 `/取消`）interrupts the turn that is running right now. It is
+  // a command rather than a busy-mode action on purpose: it has to be answerable
+  // WHILE the conversation is busy, which is exactly when a plain message would
+  // be queued behind the turn the user wants to stop.
+  const cancelMatch = /^\/(?:cancel|取消)$/i.exec(trimmed)
+  if (cancelMatch !== null) return { command: 'cancel' }
   const statusMatch = /^\/status$/i.exec(trimmed)
   if (statusMatch !== null) return { command: 'status' }
   const helpMatch = /^\/(?:help|帮助|指令)$/i.exec(trimmed)
@@ -538,6 +544,7 @@ export const SESSION_COMMANDS_HELP = [
   '/list 查看这个微信会话下的所有会话',
   '/use <序号> 切换到第几条',
   '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
+  '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）',
   '/status 查看当前账号和会话的状态（白名单、会话线等）',
   '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
   '/remindlist 查看这个账号还没发出的提醒',
@@ -557,11 +564,15 @@ export const SESSION_COMMANDS_HELP = [
  * @param {string} [accountId] owning bot account; bare key when absent
  * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
  *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] },
- *   reminders?: import('./message/scheduler.js').ReminderScheduler }} [context]
+ *   reminders?: import('./message/scheduler.js').ReminderScheduler,
+ *   cancelRunningTurn?: () => string }} [context]
  *   account-level facts for `/status`, assembled by the inbound handler;
  *   optional so the command works for bare callers too. `reminders` is the
  *   live scheduler for remind commands; without it /remind reports that
- *   scheduling is unavailable rather than crashing.
+ *   scheduling is unavailable rather than crashing. `cancelRunningTurn` is the
+ *   bridge's abort hook for `/cancel`: only the bridge holds the live agent
+ *   handles, so this module asks it to do the interrupting and only relays the
+ *   sentence it returns.
  * @returns {string | undefined}
  */
 export function runSessionCommand(lines, conversationId, text, accountId, context) {
@@ -585,6 +596,13 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     // safer surface is the one that cannot be aimed at the wrong line.
     lines.clear(conversationId, accountId)
     return `已清空当前会话，接下来是一条全新的会话。\n之前的上下文不再使用，也没有别的影响。`
+  }
+  if (command.command === 'cancel') {
+    // The bridge owns the live agent handles; a bare caller (tests, tooling)
+    // has no turn to interrupt and says so instead of pretending.
+    const cancel = context?.cancelRunningTurn
+    if (cancel === undefined) return '当前没有可中断的回合（这个入口拿不到正在运行的会话）。'
+    return cancel()
   }
   if (command.command === 'help') {
     return SESSION_COMMANDS_HELP

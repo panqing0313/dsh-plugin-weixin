@@ -26,6 +26,7 @@ import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
 import { appendJournal } from './message/journal.js'
+import { appendToolAudit } from './message/audit.js'
 import { DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from './message/rate-limit.js'
 
 /**
@@ -93,6 +94,9 @@ export const Config = z.object({
   sendIntervalMs: z.number().min(1).default(DEFAULT_SEND_INTERVAL_MS).description('Minimum interval between two outbound Weixin sends, in milliseconds. Raising it costs latency on a chunked reply; lowering it moves closer to the measured send-ban threshold (about twenty messages in a few minutes).'),
   sendCooldownMs: z.number().min(1).default(DEFAULT_COOLDOWN_MS).description('How long to stop sending after three consecutive send failures, in milliseconds. Hammering a rejecting server is what turns a temporary rejection into an account ban.'),
   messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
+  toolAudit: z.boolean().default(true).description(
+    'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
+  ),
   markdownMode: z
     .union([z.const('strip'), z.const('off')])
     .default('strip')
@@ -298,6 +302,13 @@ export function apply(ctx, config) {
         maxWaitMs: config.maxTurnWaitMs,
         log,
         errLog: warn,
+        // Tool audit lands on disk, not in the log: the log rotates away, and
+        // the question this answers ("who triggered that tool, with what
+        // arguments") is asked after the fact. Wired here rather than inside
+        // the bridge so the bridge stays testable without a state root.
+        ...(config.toolAudit === false
+          ? {}
+          : { onToolAudit: (entry) => appendToolAudit(stateRoot, entry, { warn }) }),
       })
 
       // Voice transcription is opt-in and out of tree: with no bridge configured
@@ -922,6 +933,9 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
         conversationId: message.conversationId,
         accountId,
         text: prompt,
+        // Who caused the turn, for the tool audit: the sender is the only party
+        // an operator can hold responsible for a destructive tool call.
+        senderId: message.senderId,
         busyMessageMode: config.busyMessageMode,
         onProgress: async (note) => {
           await sendChunked(transport, config, {
@@ -980,6 +994,12 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
       // A late reply already went out through onLateReply; sending the empty
       // text here would be a stray message.
       if (reply.late === true) return
+      // A cancelled turn has nothing to say: `/cancel` already sent its own
+      // receipt, and an empty chunk would be a blank bubble in the chat.
+      if (reply.cancelled === true) {
+        fileLog.info(`turn cancelled by user for ${message.conversationId}`)
+        return
+      }
       // Media first, text second: the send already degrades to text when an
       // upload fails, and everything the user is about to see is decided here.
       const outbound = await resolveOutboundReply({

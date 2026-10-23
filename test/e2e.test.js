@@ -67,8 +67,15 @@ const HOST_ONLY_SKIP =
 const ACCOUNT_ID = 'bot1'
 const ALLOWED = 'wxid_abc'
 
-/** Minimal fake of the `agents` service: one turn producing one settled reply. */
-function createFakeAgents({ reply }) {
+/**
+ * Minimal fake of the `agents` service: one turn producing one settled reply.
+ *
+ * `tools` optionally scripts tool activity before the answer, so a test can
+ * assert what a turn with real tool use leaves behind (the audit log). Each
+ * entry is `{ callId, name, arguments }`; a `tool/call` and its `tool/result`
+ * are emitted in order, the shape a real turn produces.
+ */
+function createFakeAgents({ reply, tools }) {
   const agents = new Map()
   return {
     get: (id) => agents.get(id),
@@ -83,6 +90,10 @@ function createFakeAgents({ reply }) {
           ev('user/message', { message })
           ev('turn/start', {})
           setTimeout(() => {
+            for (const tool of tools ?? []) {
+              ev('tool/call', { callId: tool.callId, name: tool.name, arguments: tool.arguments })
+              ev('tool/result', { message: { source: { callId: tool.callId } } })
+            }
             ev('assistant/message', { stream: [{ type: 'text-chunks', texts: [reply, message.content[0].text] }] })
             ev('turn/end', {})
           }, 30)
@@ -576,6 +587,76 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
         assert.equal(outbound.conversationId, ALLOWED)
       } else {
         assert.equal(files.length, 0, 'messageJournal off must not write a journal')
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
+  }
+})
+
+test('toolAudit on: tool runs land in <state>/audit; off: nothing is recorded', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  // The audit is the only place a tool run is attributable after the fact, so
+  // this asserts the WIRING (index.js -> bridge -> disk), not the writer, which
+  // test/tool-audit.test.js already covers in isolation.
+  for (const toolAudit of [true, false]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-audit-${toolAudit}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 5101, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'cta', create_time_ms: 14, item_list: [{ type: 1, text_item: { text: 'run a tool' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolAudit })
+      const fakeAgents = createFakeAgents({
+        reply: 'pong: ',
+        tools: [{ callId: 'call-1', name: 'bash', arguments: { command: 'echo hi' } }],
+      })
+
+      const disposers = []
+      const ctx = {
+        logger: { info: () => {}, warn: () => {} },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? fakeAgents : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      assert.ok(sent.length >= 1, `expected a reply (toolAudit=${toolAudit})`)
+      const auditDir = path.join(stateRoot, 'audit')
+      const files = fs.existsSync(auditDir) ? fs.readdirSync(auditDir) : []
+      if (toolAudit) {
+        assert.ok(files.length >= 1, 'expected an audit file when toolAudit is on')
+        const entries = fs
+          .readFileSync(path.join(auditDir, files[0]), 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line))
+        const call = entries.find((e) => e.kind === 'tool/call')
+        assert.ok(call, 'expected a tool/call line')
+        assert.equal(call.tool, 'bash')
+        assert.equal(call.accountId, ACCOUNT_ID)
+        assert.equal(call.conversationId, ALLOWED)
+        assert.equal(call.senderId, ALLOWED, 'the audit names who caused the call')
+        assert.match(call.args, /echo hi/)
+        const result = entries.find((e) => e.kind === 'tool/result')
+        assert.ok(result, 'expected a tool/result line')
+        assert.equal(result.ok, true)
+      } else {
+        assert.equal(files.length, 0, 'toolAudit off must not write an audit file')
       }
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true })

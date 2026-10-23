@@ -109,6 +109,13 @@ export function parseSteerCommand(text) {
  * @property {number} [pollMs]           Session-log polling interval.
  * @property {SessionLines} [lines]      Session-line index. Defaults to the
  *   on-disk store, so a bridge built without one still supports `/new`.
+ * @property {(entry: { kind: 'tool/call' | 'tool/result', accountId: string,
+ *   conversationId: string, sessionId: string, senderId?: string, tool?: string,
+ *   callId?: string, args?: unknown, ok?: boolean, durationMs?: number,
+ *   at: number }) => void} [onToolAudit] Called once per tool event observed
+ *   during a turn. The plugin wires this to the on-disk audit log; tests use it
+ *   to assert what a turn would have recorded. Absent means "no audit", which
+ *   is the default so a bare bridge writes nothing.
  */
 
 export class AgentBridge {
@@ -126,6 +133,10 @@ export class AgentBridge {
     // Session lines: which of a conversation's sessions the next message goes
     // to. Injectable so tests do not touch the operator's real state root.
     this.lines = options.lines ?? new SessionLines({ warn: (message) => this.errLog(message) })
+    // Tool audit sink. The bridge owns the event stream (it is the only place
+    // that polls the session log), so it is the only place that can say which
+    // tool ran; where the lines go is the caller's decision.
+    this.onToolAudit = options.onToolAudit
     // Conversation id -> the session id its next message must reach. Needed
     // because `deliver` is handed a session id but must still be able to route
     // a late reply and, for a brand-new line, share one in-flight creation.
@@ -134,12 +145,12 @@ export class AgentBridge {
     // How long the post-timeout listener keeps waiting for an answer to hand
     // to onLateReply. Configurable so tests do not have to wait an hour.
     this.lateReplyMaxWaitMs = options.lateReplyMaxWaitMs ?? 60 * 60_000
-    /** @type {Map<string, { agent: any, dispose: () => Promise<void>, busy: boolean }>} */
+    /** @type {Map<string, { agent: any, dispose: () => Promise<void>, busy: boolean, queue: any[], cancelled: boolean }>} */
     this.sessions = new Map()
     /**
      * In-flight attach() creations, so two messages for the same conversation
      * never build two sessions.
-     * @type {Map<string, Promise<{ agent: any, dispose: () => Promise<void>, busy: boolean }>>}
+     * @type {Map<string, Promise<{ agent: any, dispose: () => Promise<void>, busy: boolean, queue: any[], cancelled: boolean }>>}
      */
     this.attachPromises = new Map()
     /**
@@ -193,7 +204,12 @@ export class AgentBridge {
     // and the id to orphan is the one that was active up to now.
     const key = scopedLineKey(accountId, conversationId)
     const previouslyActive = this.conversationTargets.get(key)
-    const reply = runSessionCommand(this.lines, conversationId, text, accountId, statusContext)
+    // `/cancel` needs the live agent handle, which only this class holds; the
+    // command module stays transport-free and just relays the sentence.
+    const reply = runSessionCommand(this.lines, conversationId, text, accountId, {
+      ...statusContext,
+      cancelRunningTurn: () => this.#cancelRunningTurn(key, conversationId, accountId),
+    })
     if (reply === undefined) return undefined
     // `/clear` orphans the line that was active: its session id is no longer
     // in the list and the fresh line has a different id, so the old in-memory
@@ -214,6 +230,46 @@ export class AgentBridge {
     this.conversationTargets.delete(key)
     this.log?.(`session command handled for ${conversationId}: ${String(text).trim()}`)
     return reply
+  }
+
+  /**
+   * Interrupt the turn running on a conversation's active line.
+   *
+   * `/cancel` is answered as a command precisely because it has to work WHILE
+   * the conversation is busy — an ordinary message would be queued behind the
+   * turn the user wants to stop. The host owns the actual abort
+   * (`agent.cancel({ kind: 'user' })`), so this method only decides whether
+   * there is something to interrupt and translates the outcome into one
+   * sentence the user can act on.
+   *
+   * @param {string} key scoped conversation key (account + conversation)
+   * @param {string} conversationId
+   * @param {string} [accountId]
+   * @returns {string} the reply text sent back to WeChat
+   */
+  #cancelRunningTurn(key, conversationId, accountId) {
+    const sessionId = this.conversationTargets.get(key) ?? this.lines.active(conversationId, accountId)
+    const record = sessionId === undefined ? undefined : this.sessions.get(sessionId)
+    if (record === undefined) return '当前没有正在跑的回合，不需要取消。'
+    if (record.busy !== true) return '当前没有正在跑的回合，不需要取消。'
+    const agent = record.agent
+    if (typeof agent?.cancel !== 'function') {
+      // An older host without cancel() would otherwise look like success while
+      // the turn keeps running — say so instead of lying.
+      return '这个宿主版本不支持中断回合，只能等它自己跑完。'
+    }
+    try {
+      // Marked BEFORE the call: the turn's own wait loop polls this flag and
+      // must not race the abort into reporting a model failure.
+      record.cancelled = true
+      agent.cancel({ kind: 'user' })
+    } catch (error) {
+      record.cancelled = false
+      this.errLog(`cancel failed for ${sessionId}: ${String(error)}`)
+      return `取消失败：${String(error)}`
+    }
+    this.log?.(`cancelled the running turn on ${sessionId} for ${conversationId}`)
+    return '已请求取消当前回合。'
   }
 
   /**
@@ -415,7 +471,21 @@ export class AgentBridge {
       // and the refusal is visible in the host log, not lost silently here.
     }
 
-    const record = { agent: handle.agent, dispose: handle.dispose, busy: false, queue: [] }
+    // `cancelled` is set by `/cancel` for the duration of one turn: it tells
+    // the reply wait that the abort it will observe is wanted, so it must not
+    // be reported as a model failure. Cleared when the turn settles.
+    // `auditSeq` is the last event seq already audited, so a poll that sees the
+    // same tool call twice does not write it twice. `auditCalls` pairs a
+    // tool/result back to the tool/call that started it, for the duration.
+    const record = {
+      agent: handle.agent,
+      dispose: handle.dispose,
+      busy: false,
+      queue: [],
+      cancelled: false,
+      auditSeq: -1,
+      auditCalls: new Map(),
+    }
     this.sessions.set(sessionId, record)
     // Resume can resurrect a session this plugin never filed (created by an
     // earlier generation, before grouping existed), so those paths register
@@ -480,9 +550,11 @@ export class AgentBridge {
    * @param {string} params.text
    * @param {(note: string) => Promise<void>|void} [params.onProgress]
    * @param {AbortSignal} [params.signal]
+   * @param {string} [params.senderId] the Weixin user whose message started the
+   *   turn; carried into the tool audit so a line answers "who caused this".
    * @returns {Promise<{ text: string, sessionId: string }>}
    */
-  async deliver({ conversationId, accountId, text, onProgress, signal, busyMessageMode, onLateReply }) {
+  async deliver({ conversationId, accountId, text, onProgress, signal, busyMessageMode, onLateReply, senderId }) {
     const record = await this.attach(conversationId, accountId)
     const sessionId = this.conversationTargets.get(scopedLineKey(accountId, conversationId))
     // Name the line after the first message that runs in it. Done before the
@@ -518,12 +590,13 @@ export class AgentBridge {
         return { text: '（已把补充指令插入正在进行的回复中）', sessionId: record.agent.session?.id ?? sessionId ?? baseSessionIdFor(conversationId) }
       }
       // queue (default): FIFO tail drained when the running turn settles.
-      return await this.#enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply })
+      return await this.#enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply, senderId })
     }
     record.busy = true
     try {
       const createUserMessage = await loadCreateUserMessage()
       const before = this.#lastSeq(record.agent)
+      this.#beginAuditTurn(record, { accountId, conversationId, senderId })
       // followup() wakes the driver for a turn; inject() would only queue
       // context, and steer() would wait for the next step boundary.
       record.agent.followup(
@@ -532,6 +605,9 @@ export class AgentBridge {
       return await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
     } finally {
       record.busy = false
+      // The turn is over, so a stale cancel flag would suppress the NEXT
+      // turn's reply entirely.
+      record.cancelled = false
       await this.#drainQueue({ record, conversationId, onProgress, signal })
     }
   }
@@ -545,9 +621,9 @@ export class AgentBridge {
    * own reply, so the caller delivers the real answer through its normal
    * reply path once the turn runs.
    */
-  async #enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply }) {
+  async #enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply, senderId }) {
     const sessionId = record.agent.session?.id ?? this.conversationTargets.get(scopedLineKey(accountId, conversationId)) ?? baseSessionIdFor(conversationId)
-    const entry = { text, onProgress, signal, onLateReply }
+    const entry = { text, onProgress, signal, onLateReply, senderId, accountId, conversationId }
     entry.done = new Promise((resolve) => { entry.resolveDone = resolve })
     record.queue.push(entry)
     // The receipt must reach WeChat even when the caller ignores onProgress:
@@ -577,6 +653,11 @@ export class AgentBridge {
   async #runQueuedTurn({ record, conversationId, entry }) {
     const createUserMessage = await loadCreateUserMessage()
     const before = this.#lastSeq(record.agent)
+    this.#beginAuditTurn(record, {
+      accountId: entry.accountId,
+      conversationId: entry.conversationId ?? conversationId,
+      senderId: entry.senderId,
+    })
     record.agent.followup(
       createUserMessage({ content: [{ type: 'text', text: entry.text }], source: { kind: 'user' } }),
     )
@@ -601,6 +682,86 @@ export class AgentBridge {
       } finally {
         record.busy = false
       }
+    }
+  }
+
+  /**
+   * Start a fresh audit cursor for a turn that is about to run.
+   *
+   * The cursor is the last event seq already audited, so a poll that sees the
+   * same tool call twice writes one line, and a turn never re-audits the
+   * conversation's earlier history. The meta rides on the record because the
+   * turn is serialized (one busy lock per line) — a queued turn overwrites it
+   * when it starts, which is exactly when the previous turn has finished.
+   *
+   * @param {any} record
+   * @param {{ accountId?: string, conversationId?: string, senderId?: string }} meta
+   */
+  #beginAuditTurn(record, meta) {
+    record.auditSeq = -1
+    record.auditCalls = new Map()
+    record.auditMeta = meta
+  }
+
+  /**
+   * Turn this poll's new events into audit lines.
+   *
+   * Called before the reply is read, so a fast turn that settles in the same
+   * poll still gets its tools audited. One line per `tool/call` (tool, args,
+   * who, when) and one per `tool/result` (ok, duration) joined by `callId`:
+   * two lines rather than one mutable record keeps the file append-only.
+   *
+   * A throwing sink must never fail the turn — the audit is observation.
+   *
+   * @param {any} record
+   * @param {readonly any[]} events snapshotEvents() of the current poll
+   * @param {number} before last seq before the turn started
+   */
+  #auditEvents(record, events, before) {
+    const sink = this.onToolAudit
+    if (sink === undefined) return
+    // The session id is read at emit time, not at turn start: `/new` can switch
+    // the line's active session while a message waits in the queue, and the
+    // audit must name the session the tool actually ran in.
+    const meta = { ...(record.auditMeta ?? {}), sessionId: record.agent?.session?.id ?? '' }
+    for (const event of events ?? []) {
+      if (typeof event?.seq !== 'number') continue
+      if (event.seq <= before || event.seq <= record.auditSeq) continue
+      try {
+        if (event.type === 'tool/call') {
+          const callId = event.data?.callId
+          const tool = typeof event.data?.name === 'string' ? event.data.name : 'tool'
+          if (typeof callId === 'string') {
+            record.auditCalls.set(callId, { tool, at: typeof event.time === 'number' ? event.time : Date.now() })
+          }
+          sink({
+            kind: 'tool/call',
+            at: Date.now(),
+            ...meta,
+            tool,
+            ...(typeof callId === 'string' ? { callId } : {}),
+            args: event.data?.arguments,
+          })
+        } else if (event.type === 'tool/result') {
+          const callId = event.data?.message?.source?.callId
+          const known = typeof callId === 'string' ? record.auditCalls.get(callId) : undefined
+          const error = event.data?.message?.source?.error ?? event.data?.error
+          const durationMs = known !== undefined && typeof event.time === 'number' ? event.time - known.at : undefined
+          sink({
+            kind: 'tool/result',
+            at: Date.now(),
+            ...meta,
+            ...(known === undefined ? {} : { tool: known.tool }),
+            ...(typeof callId === 'string' ? { callId } : {}),
+            ok: error === undefined,
+            ...(durationMs === undefined ? {} : { durationMs }),
+          })
+          if (typeof callId === 'string') record.auditCalls.delete(callId)
+        }
+      } catch (failure) {
+        this.errLog(`tool audit sink failed: ${String(failure)}`)
+      }
+      record.auditSeq = event.seq
     }
   }
 
@@ -657,7 +818,14 @@ export class AgentBridge {
 
     while (Date.now() < deadline) {
       if (signal?.aborted === true) return { text: '（已取消）', sessionId }
+      // `/cancel` set this flag before asking the host to abort. The abort ends
+      // the turn with an error event, and reporting that as "模型调用失败"
+      // would blame the model for something the user asked for — so the flag
+      // wins, and the empty text means the command's own receipt is the only
+      // message the user gets.
+      if (record.cancelled === true) return { text: '', sessionId, cancelled: true }
       const events = record.agent.session?.snapshotEvents?.() ?? []
+      this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
       if (reply.text !== '') return { text: reply.text, sessionId }
       // A failed turn is OVER: no assistant message will ever arrive, and the
@@ -706,7 +874,11 @@ export class AgentBridge {
     const lateDeadline = Date.now() + (this.lateReplyMaxWaitMs ?? 60 * 60_000)
     while (Date.now() < lateDeadline) {
       if (signal?.aborted === true) return { text: '', sessionId, late: true }
+      // A cancelled turn is over; the late wait must not keep polling for a
+      // reply the user explicitly asked not to receive.
+      if (record.cancelled === true) return { text: '', sessionId, late: true }
       const events = record.agent.session?.snapshotEvents?.() ?? []
+      this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
       if (reply.text !== '') {
         try {
