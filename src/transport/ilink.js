@@ -19,6 +19,7 @@ import { getUpdates, sendMessage, getConfig, sendTyping, notifyStart, notifyStop
 import { MessageItemType, MessageState, MessageType, TypingStatus } from '../../vendor/openclaw-weixin/api/types.js'
 import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from '../../vendor/openclaw-weixin/storage/sync-buf.js'
 import { CDN_BASE_URL as DEFAULT_CDN_BASE_URL } from '../../vendor/openclaw-weixin/auth/accounts.js'
+import { OutboundPacer } from '../message/rate-limit.js'
 
 /** Consecutive failures tolerated before the long backoff kicks in. */
 const MAX_CONSECUTIVE_FAILURES = 3
@@ -241,6 +242,10 @@ export class ILinkTransport {
    * @param {(error: SessionRejectedError) => void} [options.onSessionRejected]
    *   Called once when the server refuses the session, so the host can surface
    *   "log in again" somewhere the operator will actually see it.
+   * @param {number} [options.sendIntervalMs]  Floor between two outbound sends.
+   * @param {number} [options.sendCooldownMs]  Cooldown armed by repeated failures.
+   * @param {import('../message/rate-limit.js').OutboundPacer} [options.pacer]
+   *   Test seam: a pre-built pacer (the tests inject a fake clock through it).
    */
   constructor(options) {
     this.accountId = options.accountId
@@ -251,6 +256,16 @@ export class ILinkTransport {
     this.longPollTimeoutMs = options.longPollTimeoutMs ?? 35_000
     this.log = options.log ?? (() => {})
     this.errLog = options.errLog ?? options.log ?? (() => {})
+    // Outbound pacing lives on the transport, not in the send call sites: every
+    // outbound item kind (text chunk, image, video, file) funnels through this
+    // object, so one gate covers a chunked reply plus its media. The defaults
+    // come from the pacer module, which documents the measured ban threshold.
+    this.pacer = options.pacer ?? new OutboundPacer({
+      ...(options.sendIntervalMs === undefined ? {} : { minIntervalMs: options.sendIntervalMs }),
+      ...(options.sendCooldownMs === undefined ? {} : { cooldownMs: options.sendCooldownMs }),
+      log: this.log,
+      warn: this.errLog,
+    })
     this.#onSessionRejected = options.onSessionRejected
     this.syncBufPath = getSyncBufFilePath(this.accountId)
     this.abort = new AbortController()
@@ -425,11 +440,20 @@ export class ILinkTransport {
    */
   async send(message) {
     const item = { type: MessageItemType.TEXT, text_item: { text: message.text ?? '' } }
-    await sendMessage({
-      baseUrl: this.baseUrl,
-      token: this.token,
-      body: this.#body({ conversationId: message.conversationId, item, contextToken: message.contextToken }),
-    })
+    // Pace every send, then tell the pacer what happened: three failures in a
+    // row arm the cooldown that stops a retry storm from becoming a send ban.
+    await this.pacer.acquire()
+    try {
+      await sendMessage({
+        baseUrl: this.baseUrl,
+        token: this.token,
+        body: this.#body({ conversationId: message.conversationId, item, contextToken: message.contextToken }),
+      })
+    } catch (error) {
+      this.pacer.noteFailure()
+      throw error
+    }
+    this.pacer.noteSuccess()
   }
 
   /**
@@ -463,14 +487,27 @@ export class ILinkTransport {
       token: this.token,
       accountId: this.accountId,
     })
-    const result = await sendOutboundMedia({
-      filePath,
-      to: conversationId,
-      contextToken: contextToken ?? this.#fallbackContextToken(),
-      cdnBaseUrl: cdnBaseUrl ?? this.cdnBaseUrl,
-      opts,
-      ...(caption === undefined || caption === '' ? {} : { text: caption }),
-    })
+    // One media call is two server-side sends when a caption is present (the
+    // caption goes as its own text item first), but the pacer gates the pair
+    // as a unit: both go out inside this one acquire, and a failure is
+    // reported once. Media is the heavier half of a reply, so counting it
+    // matters for the rolling ban threshold.
+    await this.pacer.acquire()
+    let result
+    try {
+      result = await sendOutboundMedia({
+        filePath,
+        to: conversationId,
+        contextToken: contextToken ?? this.#fallbackContextToken(),
+        cdnBaseUrl: cdnBaseUrl ?? this.cdnBaseUrl,
+        opts,
+        ...(caption === undefined || caption === '' ? {} : { text: caption }),
+      })
+    } catch (error) {
+      this.pacer.noteFailure()
+      throw error
+    }
+    this.pacer.noteSuccess()
     this.log(`sent ${result.kind} media ${filePath} to ${conversationId}`)
     return result
   }

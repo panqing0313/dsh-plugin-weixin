@@ -14,7 +14,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { OutboundPacer, DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from '../src/message/rate-limit.js'
+import { OutboundPacer, DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS, DEFAULT_WINDOW_MS, DEFAULT_WINDOW_MAX } from '../src/message/rate-limit.js'
 
 /** A controllable clock: `now()` reads it, `advance(ms)` moves it. */
 function fakeClock(start = 0) {
@@ -142,4 +142,169 @@ test('non-positive or missing options fall back to the defaults', async () => {
 
 	assert.equal(pacer.minIntervalMs, DEFAULT_SEND_INTERVAL_MS)
 	assert.equal(pacer.cooldownMs, DEFAULT_COOLDOWN_MS)
+})
+
+// ---------------------------------------------------------------------------
+// Integration: the transport is the one place every outbound item passes
+// through, so the pacer must be gated there and nowhere else. These tests
+// inject a recording pacer and stub fetch: they assert the WIRING (acquire
+// before, success/failure after), while the timing lives in the unit tests
+// above. Without this half, the pacer is a tested module nobody calls.
+// ---------------------------------------------------------------------------
+
+/** A pacer that records the protocol instead of measuring time. */
+function recordingPacer() {
+	const calls = []
+	return {
+		calls,
+		acquire: async () => {
+			calls.push('acquire')
+		},
+		noteSuccess: () => {
+			calls.push('success')
+		},
+		noteFailure: () => {
+			calls.push('failure')
+		},
+	}
+}
+
+/** Run `body` with fetch stubbed to answer the iLink send endpoint. */
+async function withStubbedSend(responseBody, body) {
+	const original = globalThis.fetch
+	globalThis.fetch = async () => new Response(JSON.stringify(responseBody), {
+		status: 200,
+		headers: { 'content-type': 'application/json' },
+	})
+	try {
+		return await body()
+	} finally {
+		globalThis.fetch = original
+	}
+}
+
+test('transport.send acquires the pacer before sending and reports success', async () => {
+	const { ILinkTransport } = await import('../src/transport/ilink.js')
+	const pacer = recordingPacer()
+	const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok', pacer })
+
+	await withStubbedSend({ ret: 0 }, () => transport.send({ conversationId: 'peer', text: 'hello' }))
+
+	assert.deepEqual(pacer.calls, ['acquire', 'success'], 'every text send is gated, and its outcome reported')
+})
+
+test('a rejected send reports failure to the pacer and still throws', async () => {
+	const { ILinkTransport } = await import('../src/transport/ilink.js')
+	const pacer = recordingPacer()
+	const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok', pacer })
+
+	await assert.rejects(
+		withStubbedSend({ ret: 1, errmsg: 'nope' }, () => transport.send({ conversationId: 'peer', text: 'hello' })),
+		/sendMessage ret=1/,
+		'a failed send must surface to the caller, not be swallowed by the pacer',
+	)
+	assert.deepEqual(pacer.calls, ['acquire', 'failure'], 'the failure counter sees every rejected send')
+})
+
+test('transport.sendMedia is gated by the same pacer as text', async () => {
+	const { ILinkTransport } = await import('../src/transport/ilink.js')
+	const pacer = recordingPacer()
+	const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok', pacer })
+
+	// A missing file fails inside the media layer before any upload; what is
+	// asserted is that the gate ran and the failure was reported, because media
+	// is the heavier half of a reply and must count toward the ban threshold.
+	await assert.rejects(transport.sendMedia({ filePath: '/nonexistent/x.png', conversationId: 'peer' }))
+	assert.deepEqual(pacer.calls, ['acquire', 'failure'])
+})
+
+test('the transport builds its pacer from the configured interval and cooldown', async () => {
+	const { ILinkTransport } = await import('../src/transport/ilink.js')
+	const transport = new ILinkTransport({
+		accountId: 'acc',
+		baseUrl: 'http://127.0.0.1:1',
+		token: 'tok',
+		sendIntervalMs: 5,
+		sendCooldownMs: 7,
+	})
+
+	assert.equal(transport.pacer.minIntervalMs, 5, 'sendIntervalMs reaches the pacer')
+	assert.equal(transport.pacer.cooldownMs, 7, 'sendCooldownMs reaches the pacer')
+})
+
+test('an unpaced transport falls back to the measured defaults', async () => {
+	const { ILinkTransport } = await import('../src/transport/ilink.js')
+	const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok' })
+
+	assert.equal(transport.pacer.minIntervalMs, DEFAULT_SEND_INTERVAL_MS)
+	assert.equal(transport.pacer.cooldownMs, DEFAULT_COOLDOWN_MS)
+})
+
+// ---------------------------------------------------------------------------
+// Rolling-window budget: the interval bounds the rate only for short replies.
+// Twenty chunks at the 1200ms floor still go out inside 24s — the exact burst
+// the measured ban punishes — so the pacer also caps how many sends fit in a
+// window and delays past that instead of dropping anything.
+// ---------------------------------------------------------------------------
+
+test('a full window delays the next send until the oldest one ages out', async () => {
+	const clock = fakeClock()
+	const { sleep, sleeps } = fakeSleep(clock)
+	const warnings = []
+	const pacer = new OutboundPacer({
+		minIntervalMs: 1_000,
+		windowMs: 10_000,
+		windowMax: 2,
+		now: clock.now,
+		sleep,
+		warn: (line) => warnings.push(line),
+	})
+
+	await pacer.acquire() // t=0
+	clock.advance(1_000)
+	await pacer.acquire() // t=1000, window now holds two sends
+	clock.advance(1_000)
+	await pacer.acquire() // t=2000: full, so wait until t=10000
+
+	// 10000 - 2000 = 8000ms of waiting, and only the interval sleep before it.
+	assert.deepEqual(sleeps, [8_000])
+	assert.equal(pacer.windowTimes.length, 2, 'the aged-out send left the window and the new one joined it')
+	assert.match(warnings[0], /window is full \(2 sends in 10s\)/)
+})
+
+test('sends older than the window do not count against it', async () => {
+	const clock = fakeClock()
+	const { sleep, sleeps } = fakeSleep(clock)
+	const pacer = new OutboundPacer({ minIntervalMs: 1_000, windowMs: 10_000, windowMax: 2, now: clock.now, sleep })
+
+	await pacer.acquire()
+	clock.advance(10_000) // the first send is now outside the window
+	await pacer.acquire()
+	clock.advance(10_000)
+	await pacer.acquire()
+
+	assert.deepEqual(sleeps, [], 'every send arrived after the window had room again')
+})
+
+test('a failure does not consume window budget', async () => {
+	const clock = fakeClock()
+	const { sleep } = fakeSleep(clock)
+	const pacer = new OutboundPacer({ minIntervalMs: 1_000, windowMs: 10_000, windowMax: 2, now: clock.now, sleep })
+
+	await pacer.acquire()
+	pacer.noteFailure()
+	pacer.noteFailure()
+	pacer.noteFailure()
+	// The cooldown that the third failure armed is the thing that must not be
+	// mistaken for window occupancy: the window still holds exactly one send.
+	assert.equal(pacer.windowTimes.length, 1)
+})
+
+test('the window defaults keep a chunked reply under the ban line', () => {
+	assert.equal(DEFAULT_WINDOW_MAX, 15)
+	assert.equal(DEFAULT_WINDOW_MS, 120_000)
+	const clock = fakeClock()
+	const pacer = new OutboundPacer({ now: clock.now, sleep: async () => {} })
+	assert.equal(pacer.windowMax, DEFAULT_WINDOW_MAX)
+	assert.equal(pacer.windowMs, DEFAULT_WINDOW_MS)
 })

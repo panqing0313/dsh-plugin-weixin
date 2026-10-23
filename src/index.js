@@ -26,6 +26,7 @@ import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
 import { appendJournal } from './message/journal.js'
+import { DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from './message/rate-limit.js'
 
 /**
  * Module-level outbound journal sink, wired once in setup (see sendChunked).
@@ -89,6 +90,8 @@ export const Config = z.object({
   allowedSenders: z.array(z.string()).default([]).description('Weixin user ids allowed to drive the agent. Empty denies everyone.'),
   allowedChats: z.array(z.string()).default([]).description('Optional conversation allowlist. Empty allows any conversation from an allowed sender.'),
   maxMessageLength: z.number().default(1500).description('Maximum characters per outbound Weixin message.'),
+  sendIntervalMs: z.number().min(1).default(DEFAULT_SEND_INTERVAL_MS).description('Minimum interval between two outbound Weixin sends, in milliseconds. Raising it costs latency on a chunked reply; lowering it moves closer to the measured send-ban threshold (about twenty messages in a few minutes).'),
+  sendCooldownMs: z.number().min(1).default(DEFAULT_COOLDOWN_MS).description('How long to stop sending after three consecutive send failures, in milliseconds. Hammering a rejecting server is what turns a temporary rejection into an account ban.'),
   messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
   markdownMode: z
     .union([z.const('strip'), z.const('off')])
@@ -409,6 +412,11 @@ export function apply(ctx, config) {
         // side already trims (vendor .../auth/accounts.js), and so do cwd and
         // accountId above; this keeps the three consistent.
         cdnBaseUrl: config.cdnBaseUrl?.trim() || account.cdnBaseUrl || DEFAULT_CDN_BASE_URL,
+        // Outbound pacing. Both values are schema-validated (positive numbers),
+        // so they can be handed over as-is; the transport falls back to the
+        // pacer module's defaults when a caller omits them (tests, bin/ scripts).
+        sendIntervalMs: config.sendIntervalMs,
+        sendCooldownMs: config.sendCooldownMs,
         log,
         errLog: warn,
         // An expired session stops inbound messaging with no other symptom —
