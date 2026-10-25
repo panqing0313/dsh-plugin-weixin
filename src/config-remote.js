@@ -198,11 +198,11 @@ export const FIELDS = [
       {
         path: "voiceOutbound",
         type: T.boolean,
-        default: true,
+        default: false,
         label: "语音发送",
         labelEn: "Voice messages",
-        hint: "音频附件（wav/mp3/m4a/ogg/flac/silk 等）按微信语音发出，而不是文件。wav/silk 直接转码，其余需要 ffmpeg；语音发送失败会自动降级为文件。",
-        hintEn: "Audio attachments (wav/mp3/m4a/ogg/flac/silk, ...) go out as Weixin voice bubbles instead of files. wav/silk transcode in-process, the rest need ffmpeg; a failed voice send falls back to a file.",
+        hint: "音频附件（wav/mp3/m4a/ogg/flac/silk 等）按微信语音发出而不是文件。实测 iLink 服务端会接受机器人语音（ret=0）但不投递（2026-06 与 2026-10-26 两次实测），打开后附件可能无声消失，故默认关闭；发送被拒时仍会自动降级为文件。",
+        hintEn: "Audio attachments (wav/mp3/m4a/ogg/flac/silk, ...) go out as Weixin voice bubbles instead of files. Measured twice (2026-06, 2026-10-26): the iLink server ACCEPTS a bot voice_item (ret=0) without delivering it, so on-by-default can silently swallow an attachment; a rejected voice send still falls back to a file.",
       },
       {
         path: "busyMessageMode",

@@ -219,7 +219,9 @@ test('transport.sendMedia on a wav goes out as a voice_item through the real pip
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-'))
   const file = path.join(dir, 'tone.wav')
   fs.writeFileSync(file, wavBuffer({ seconds: 0.3 }))
-  const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok' })
+  // Explicit opt-in: the schema default is OFF because the real server accepts
+  // a bot voice_item without delivering it (see sendOutboundVoice docs).
+  const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok', voiceOutbound: true })
   const script = [
     { body: { ret: 0, upload_param: 'UP' } },          // getuploadurl (voice)
     { body: '', headers: { 'x-encrypted-param': 'DP' } }, // CDN upload
@@ -245,7 +247,7 @@ test('a voice send the server rejects degrades to the file path', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-'))
   const file = path.join(dir, 'tone.wav')
   fs.writeFileSync(file, wavBuffer({ seconds: 0.3 }))
-  const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok' })
+  const transport = new ILinkTransport({ accountId: 'acc', baseUrl: 'http://127.0.0.1:1', token: 'tok', voiceOutbound: true })
   const logLines = []
   transport.log = (line) => logLines.push(line)
   const script = [
@@ -285,4 +287,10 @@ test('voiceOutbound:false keeps audio on the plain file path', async () => {
   assert.equal(result.kind, 'file')
   const sendCall = calls.find((c) => c.url.includes('/sendmessage'))
   assert.equal(JSON.parse(sendCall.body).msg.item_list[0].type, 4, 'no voice item when the feature is off')
+})
+
+test('voiceOutbound is off by default, because the server does not deliver bot voice', async () => {
+  const plugin = await import('../src/index.js')
+  assert.equal(plugin.Config({}).voiceOutbound, false, 'an attachment a silent server swallows must not be the default path')
+  assert.equal(plugin.Config({ voiceOutbound: true }).voiceOutbound, true, 'an operator can still opt in')
 })

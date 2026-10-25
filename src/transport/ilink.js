@@ -631,7 +631,11 @@ export class ILinkTransport {
       throw error
     }
     this.pacer.noteSuccess()
-    this.log(`sent ${result.kind} media ${filePath} to ${conversationId}`)
+    // The sendmessage response fields ride along in `result` (voice spreads
+    // them; see sendOutboundVoice). They are the only way to tell "the server
+    // accepted it" from "the server delivered it" from the log alone.
+    const server = typeof result.ret === 'number' ? ` (server ret=${result.ret}${result.errmsg ? `, errmsg=${result.errmsg}` : ''}${result.server_message_id === undefined ? '' : `, server_message_id=${result.server_message_id}`})` : ''
+    this.log(`sent ${result.kind} media ${filePath} to ${conversationId}${server}`)
     return result
   }
 

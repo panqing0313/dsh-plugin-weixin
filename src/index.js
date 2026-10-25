@@ -97,8 +97,8 @@ export const Config = z.object({
   maxMessageLength: z.number().default(1500).description('Maximum characters per outbound Weixin message.'),
   sendIntervalMs: z.number().min(1).default(DEFAULT_SEND_INTERVAL_MS).description('Minimum interval between two outbound Weixin sends, in milliseconds. Raising it costs latency on a chunked reply; lowering it moves closer to the measured send-ban threshold (about twenty messages in a few minutes).'),
   sendCooldownMs: z.number().min(1).default(DEFAULT_COOLDOWN_MS).description('How long to stop sending after three consecutive send failures, in milliseconds. Hammering a rejecting server is what turns a temporary rejection into an account ban.'),
-  voiceOutbound: z.boolean().default(true).description(
-    'Send audio attachments (wav, mp3, m4a, ogg, flac, silk, ...) as Weixin voice messages instead of file attachments. wav and silk are transcoded in-process; the rest need ffmpeg on PATH. A voice send that fails falls back to the plain file path, so audio is degraded, never dropped.',
+  voiceOutbound: z.boolean().default(false).description(
+    'Send audio attachments (wav, mp3, m4a, ogg, flac, silk, ...) as Weixin voice messages instead of file attachments. wav and silk are transcoded in-process; the rest need ffmpeg on PATH. A voice send that FAILS falls back to the plain file path — but the iLink server currently ACCEPTS a bot voice_item (ret=0) without ever delivering it (measured 2026-06 and again 2026-10-26 with a fresh token; upload and send both succeed), so with this on an audio attachment can silently vanish. Off by default until the server actually delivers bot voice.',
   ),
   messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
   toolAudit: z.boolean().default(true).description(
@@ -435,15 +435,29 @@ export function apply(ctx, config) {
         // pacer module's defaults when a caller omits them (tests, bin/ scripts).
         sendIntervalMs: config.sendIntervalMs,
         sendCooldownMs: config.sendCooldownMs,
-        // Audio as voice bubbles. Default on; the transport itself degrades to
-        // a file send when a voice upload/send is rejected.
-        ...(config.voiceOutbound === false ? { voiceOutbound: false } : {}),
+        // Audio as voice bubbles. Default off: the server accepts a bot
+        // voice_item (ret=0) without delivering it, which would swallow the
+        // attachment — an operator opts in (schema description has the
+        // measurements). The transport still degrades to a file send when a
+        // voice upload/send is REJECTED.
+        ...(config.voiceOutbound === true ? { voiceOutbound: true } : {}),
         // `/cancel` must reach the bridge while the turn it targets is still
         // running. Every other message is queued in conversation order by the
         // transport; this one skips the queue for the obvious reason.
         bypassQueue: (message) => message?.type === 'text' && isInterruptCommand(message.text),
-        log,
-        errLog: warn,
+        // Transport internals (send outcomes, voice fallbacks) go to the host
+        // logger AND the weixin log file the operator actually watches. Before
+        // 2026-10-26 only the host logger got them, and diagnosing a "did the
+        // voice even go out?" question meant finding out no transport line had
+        // ever been written anywhere readable.
+        log: (line) => {
+          log(line)
+          fileLog.info(`dsh-weixin: ${line}`)
+        },
+        errLog: (line) => {
+          warn(line)
+          fileLog.warn(`dsh-weixin: ${line}`)
+        },
         // An expired session stops inbound messaging with no other symptom —
         // the plugin looks healthy and simply never replies. Record it on the
         // login controller so the settings card can say "log in again", and put

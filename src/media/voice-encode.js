@@ -28,8 +28,8 @@ async function silkWasm() {
   return createRequire(import.meta.url)('silk-wasm')
 }
 
-/** Sample rates SILK accepts (the codec's own set). */
-const SILK_RATES = new Set([8_000, 12_000, 16_000, 24_000, 32_000, 44_100, 48_000])
+/** Sample rates SILK actually supports (the codec's own set: 8/12/16/24 kHz). silk-wasm *encodes* 32/44.1/48 kHz without complaint, but those streams are outside the codec's spec and WeChat's player expects the 24 kHz family — resample them instead of trusting the passthrough. */
+const SILK_RATES = new Set([8_000, 12_000, 16_000, 24_000])
 
 /** What an unplayable rate gets resampled to. 24 kHz is what WeChat records at. */
 const FALLBACK_RATE = 24_000
