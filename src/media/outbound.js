@@ -20,6 +20,7 @@
  * @module dsh-weixin/media/outbound
  */
 import fs from 'node:fs/promises'
+import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -387,6 +388,110 @@ export async function sendOutboundMedia(params) {
     return { kind, ...(result ?? {}) }
   } catch (error) {
     throw new OutboundMediaError(`upload/send failed: ${String(error?.message ?? error)}`, 'send-failed')
+  }
+}
+
+/**
+ * Send an audio file as a Weixin voice message (SILK `voice_item`).
+ *
+ * The upload half is the same `getuploadurl → AES → CDN` pipeline the vendored
+ * layer runs for files, with `media_type` switched to `UploadMediaType.VOICE`
+ * (4) — the vendor never exposes that combination (its exported wrappers are
+ * image/video/file only), so this module assembles it from the same exported
+ * primitives. The envelope mirrors the transport's `#body` invariants (BOT
+ * type, FINISH state, one item, echoed context token).
+ *
+ * The protocol steps are injectable so tests can run this against fakes:
+ * `transcode`, `upload` and `send` default to the real implementations.
+ *
+ * @param {object} params
+ * @param {string} params.filePath  Audio file (wav/silk native; others via ffmpeg).
+ * @param {string} params.to        Conversation id (`msg.to_user_id`).
+ * @param {string} [params.contextToken]  Echoed inbound token.
+ * @param {string} [params.cdnBaseUrl]
+ * @param {{ baseUrl: string, token: string, accountId?: string, timeoutMs?: number }} params.opts
+ * @param {string} [params.text]    Caption, sent as its own text item first.
+ * @param {string} [params.ffmpegPath]  ffmpeg binary for non-wav/silk inputs.
+ * @param {(filePath: string, options?: { ffmpegPath?: string }) => Promise<{ silk: Uint8Array, durationMs: number, sampleRate: number }>} [params.transcode]
+ * @param {(item: { uploaded: object, durationMs: number, sampleRate: number }) => object} [params.buildItem]
+ * @param {(params: { silk: Uint8Array, to: string, opts: object, cdnBaseUrl?: string }) => Promise<{ downloadEncryptedQueryParam: string, aeskey: string }>} [params.upload]
+ * @param {(params: object) => Promise<object>} [params.send]
+ * @returns {Promise<{ kind: 'voice', serverMessageId?: string }>}
+ * @throws {OutboundMediaError} on transcode, upload or send failure — the
+ *   caller falls back to a plain file send rather than dropping the audio.
+ */
+export async function sendOutboundVoice(params) {
+  const { transcodeToSilk, buildVoiceItem } = await import('./voice-encode.js')
+  const transcode = params.transcode ?? transcodeToSilk
+  const buildItem = params.buildItem ?? buildVoiceItem
+  const [{ getUploadUrl, sendMessage }, { uploadBufferToCdn }, { aesEcbPaddedSize }, { CDN_BASE_URL }, { UploadMediaType, MessageItemType, MessageType, MessageState }] =
+    await Promise.all([
+      import('../../vendor/openclaw-weixin/api/api.js'),
+      import('../../vendor/openclaw-weixin/cdn/cdn-upload.js'),
+      import('../../vendor/openclaw-weixin/cdn/aes-ecb.js'),
+      import('../../vendor/openclaw-weixin/auth/accounts.js'),
+      import('../../vendor/openclaw-weixin/api/types.js'),
+    ])
+  const upload = params.upload ?? (async ({ silk, to, opts, cdnBaseUrl }) => {
+    const filekey = crypto.randomBytes(16).toString('hex')
+    const aeskey = crypto.randomBytes(16)
+    const uploadUrlResp = await getUploadUrl({
+      ...opts,
+      filekey,
+      media_type: UploadMediaType.VOICE,
+      to_user_id: to,
+      rawsize: silk.length,
+      rawfilemd5: crypto.createHash('md5').update(silk).digest('hex'),
+      filesize: aesEcbPaddedSize(silk.length),
+      no_need_thumb: true,
+      aeskey: aeskey.toString('hex'),
+    })
+    const uploadFullUrl = uploadUrlResp.upload_full_url?.trim()
+    const uploadParam = uploadUrlResp.upload_param
+    if (!uploadFullUrl && !uploadParam) {
+      throw new Error('getUploadUrl returned no upload URL (need upload_full_url or upload_param)')
+    }
+    const { downloadParam } = await uploadBufferToCdn({
+      buf: Buffer.from(silk),
+      ...(uploadFullUrl ? { uploadFullUrl } : {}),
+      ...(uploadParam ? { uploadParam } : {}),
+      filekey,
+      cdnBaseUrl: cdnBaseUrl || CDN_BASE_URL,
+      aeskey,
+      label: 'voice',
+    })
+    return { downloadEncryptedQueryParam: downloadParam, aeskey: aeskey.toString('hex') }
+  })
+  const send = params.send ?? sendMessage
+  const { silk, durationMs, sampleRate } = await transcode(params.filePath, { ...(params.ffmpegPath === undefined ? {} : { ffmpegPath: params.ffmpegPath }) })
+  const uploaded = await upload({ silk, to: params.to, opts: params.opts, cdnBaseUrl: params.cdnBaseUrl })
+  const token = params.contextToken
+  /** Mirrors ILinkTransport#body; see that method for the invariants. */
+  const envelope = (item) => ({
+    msg: {
+      from_user_id: '',
+      to_user_id: params.to,
+      client_id: `dsh-weixin-voice-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      message_type: MessageType.BOT,
+      message_state: MessageState.FINISH,
+      item_list: [item],
+      ...(token ? { context_token: token } : {}),
+    },
+  })
+  try {
+    if (params.text) {
+      // Upstream splits caption and media into separate sends (text first);
+      // voice keeps the same rule instead of inventing a mixed item_list.
+      await send({ baseUrl: params.opts.baseUrl, token: params.opts.token, body: envelope({ type: MessageItemType.TEXT, text_item: { text: params.text } }) })
+    }
+    const result = await send({
+      baseUrl: params.opts.baseUrl,
+      token: params.opts.token,
+      body: envelope(buildItem({ uploaded, durationMs, sampleRate })),
+    })
+    return { kind: 'voice', ...(result && typeof result === 'object' ? result : {}) }
+  } catch (error) {
+    throw new OutboundMediaError(`voice upload/send failed: ${String(error?.message ?? error)}`, 'send-failed')
   }
 }
 

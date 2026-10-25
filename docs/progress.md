@@ -1,12 +1,12 @@
 # 开发进度
 
-更新时间：2026-10-23
+更新时间：2026-10-25
 
-## 当前状态（2026-10-23）
+## 当前状态（2026-10-25）
 
 - **版本**：`0.9.3`，2026-10-23 已发布（npm `latest`、tag `v0.9.3`、GitHub release 三者齐全；注册表 `dist.shasum` / `dist.integrity` 与本地 `dsh-plugin-weixin-0.9.3.tgz` 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
-- **仓库**：`main` 干净，**没有未发版 commit**。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）。
-- **测试**：`npm test` → `tests 396 / pass 396 / fail 0`（约 36s；相对 0.9.2 新增 35 条：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
+- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（见 git log 最新一条，待随下次发版）。
+- **测试**：`npm test` → `tests 410 / pass 410 / fail 0`（约 35s；相对 0.9.2 新增 49 条：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 12**。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -14,7 +14,7 @@
 - **收发闭环**：文本 / 图片 / 文件 / 入站语音（SILK→WAV→ASR 桥，热调用约 300ms），下载、解密、落盘、转码、降级齐全。
 - **多账号**：逐个扫码接入、各自独立长轮询、账号级 Pause/Resume、账号级白名单覆盖全局、首联系人自动登记、扫码后即时生效（不重启）。
 - **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述；`/cancel` 中断正在跑的那一轮（排队消息仍继续）。
-- **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ **滚动窗口上限**（默认 15 条 / 2 分钟，到顶自动等窗口滑过而不是硬发）+ 失败冷却；回合中的工具变化流式推送。
+- **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ **滚动窗口上限**（默认 15 条 / 2 分钟，到顶自动等窗口滑过而不是硬发）+ 失败冷却；回合中的工具变化流式推送；**音频附件发成语音气泡**（`voiceOutbound`，wav/silk 进程内转 SILK、其余走 ffmpeg，发送失败自动降级为文件）。
 - **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
 - **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 7 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
@@ -31,7 +31,8 @@
 
 ### 二、功能缺口（有明确原因，不是遗漏）
 
-- **出站语音 / 视频**：`silk` 只用于入站；服务端对 BOT 的 `voice_item` 接受但不投递（已实测），所以出站 `.mp3/.wav/.m4a` 一律按 file 附件发，不会变成语音气泡；视频需要编码管线，未做。
+- **出站语音（本轮已实现，待真机验证）**：音频附件（wav/silk/mp3/m4a/aac/ogg/opus/flac…）现在按 `voice_item` 语音气泡发出（SILK 5 / 24kHz / playtime 秒），`voiceOutbound` 可关；发送失败自动降级为文件而不是丢附件。**尚未在真机上确认气泡形态**——插件外的探针全部 `ret=-2 prepare failed`（疑似缺新鲜 `context_token`，见下文本轮记录），插件路径带着真 token，等真机一测便知；最坏情况就是退回 file 附件。
+- **出站视频**：需要视频编码管线（缩略图 + 时长 + md5），未做。
 - **原生图像理解**：入站图片以本地路径交给 Agent，由 Agent 用 `read_image` 打开——依赖当前模型与工具链，插件不保证。
 
 ### 三、工程与发布
@@ -2118,3 +2119,64 @@ off：零网络请求、prompt 无链接块）。
 - e2e 的一条断言原来是隐性依赖「所有会话串行」的：它按下标取 `sent[0]/[1]/[2]`。派发改成同会话有序、
   跨会话并发之后，两个发送者的回复会交错，这条用例就会偶发失败（同一小时内先绿后红）。改成按
   `to_user_id` 分组断言，谁的回谁的回，顺序无关。
+
+## 出站语音：音频附件发成语音气泡（2026-10-25）
+
+需求来自用户：「我看了一下机器人是可以发语音的，你能发实现这个出站语音功能」。此前 `silk` 只用于
+入站（下载→WAV→ASR），出站侧 `media_type` 枚举里有 `VOICE=4`、wire 上有 `voice_item`，但 vendor
+（Tencent openclaw-weixin 2.4.10，与 npm latest 同版）只实现了 image/file/video 上传，没有任何
+`sendVoice`——所以这是补 vendor 缺失的那一半。
+
+### 探针阶段（全部失败，教训比结论多）
+
+- 先在插件外用脚本直发：3 秒正弦波 → silk-wasm `encode(pcm, 24000)` → 自建 `uploadVoice()`
+  （`getUploadUrl` media_type=4 + `uploadBufferToCdn`，**上传成功**，能拿到 `x-encrypted-param`），
+  再 `sendMessage`。第一版把 item type 写成 4（那是 FILE，VOICE 的 item type 是 3）被拒可以理解；
+  第二版补齐 Codex_iLink 拆解文档里的完整字段
+  `{type:3, voice_item:{media, encode_type:5, bits_per_sample:16, sample_rate:24000, playtime}}`
+  的 6 种变体（含带 text、playtime 用毫秒、加 len）**全部 `sendMessage ret=-2 errmsg=prepare failed`**。
+- 最可疑的变量是 `context_token`：kadaliao 的协议拆解说官方插件**没有 token 就拒发**（文本例外的
+  事实成立——此前的 live-pace 脚本无 token 发文本确实送达）。想拿新 token：日志/流水里 grep 不到
+  （0.9.x 的 file 发送记录过 `contextToken missing … sending without context`，说明历史上无 token
+  也发出去过文件）；用持久化的 `get_updates_buf` 重放 getupdates 40 秒 → `msgs:0`，取不到。
+  **结论：探针环境拿不到新鲜 token，wire 形态只能在插件真机上验证。** 插件路径一直带着真 token，
+  这也是「先落实现、靠降级兜底、真机一测定形态」的依据。
+- 反面教训：探针**绝不能自己 poll getupdates**——cursor 在活着的插件进程手里，乱 poll 会抢消息。
+
+### 实现（5 个文件 + 12 条测试）
+
+- `src/media/voice-encode.js`（新）：`isVoiceCandidate`（扩展名判断）、`parseWavPcm`（RIFF 解析，
+  任意声道平均降混，非 PCM16 抛错转 ffmpeg）、线性插值重采样（目标 24kHz，SILK 支持的速率直接过）、
+  `ffmpegToPcm`（`-ac 1 -ar 24000 -f s16le pipe:1`，覆盖 mp3/m4a/ogg/flac 等）、`transcodeToSilk`
+  （`.silk` 直接透传 + `isSilk` 校验）、`buildVoiceItem`
+  （`encode_type:5, bits_per_sample:16, sample_rate, playtime: max(1, round(ms/1000))`——playtime
+  为 0 微信会渲染成不可播）。
+- `src/media/outbound.js`：新增 `sendOutboundVoice`——SILK 上传走 `getUploadUrl(media_type=VOICE)`
+  + `uploadBufferToCdn`（与图片/文件同一 CDN 管线，AES-128-ECB，aes_key 用 vendor 的
+  base64(hex) 形态）；**说明文字先单独发一条文本**（上游规则：文字与媒体分开两条），信封与
+  transport 的 `#body` 同形（`client_id` 前缀 `dsh-weixin-voice-`，回显 `context_token`）；失败包成
+  `OutboundMediaError('send-failed')` 交调用方降级。上传/发送留 seam（transcode/buildItem/upload/send）
+  供测试注入。
+- `src/transport/ilink.js`：`sendMedia` 在 pacer 闸门内分支——`voiceOutbound !== false` 且
+  `isVoiceCandidate(filePath)` 走语音路径，**失败则记一行日志并退回 `sendOutboundMedia`（文件）**：
+  形态不对的最坏结果是「以文件送达」，绝不是「附件丢了」。
+- `src/index.js` / `src/config-remote.js`：`voiceOutbound`（默认开）进 schema 与设置卡「配置」页签，
+  描述里写明 ffmpeg 依赖与降级行为。
+- `test/voice-outbound.test.js`（12 条）：wav 转码（含立体声降混 + 22050→24000 重采样）、非法 RIFF
+  报错、silk 透传逐字节不变、ffmpeg 解 mp3（无 ffmpeg 环境自动 skip）、`buildVoiceItem` wire 形态
+  （aes_key = base64(ASCII hex)，playtime 秒取整、250ms 也得 1）、`sendOutboundVoice` 信封断言
+  （文本先行、token 回显、message_type/state、client_id 前缀）、seam 注入下发送拒绝 →
+  `OutboundMediaError`、转码失败先于上传、以及三条走真 transport + 逐步脚本化 fetch 的集成：
+  wav → `voice_item(encode_type 5)`；服务端 `ret=-2` → 降级发出 `file_item` 并留日志；
+  `voiceOutbound:false` → 直接文件路径。
+- 过程中抓到一个自己的 bug：`parseWavPcm`/`resamplePcm` 里用 `new Uint8Array(n)` 存中间 PCM，
+  而 `writeInt16LE` 是 Buffer 的方法——纯 Uint8Array 上没有，转码必炸，且因为被「降级为文件」
+  兜住，第一批 transport 集成测试只表现为 `kind:'file'` 而不是报错。教训：**降级兜底会把实现 bug
+  化妆成路由 bug**，新分支的第一条集成测试要同时断言「走了新分支」（本例是 `kind:'voice'`）才能
+  抓住这类问题。
+
+### 状态
+
+单测 12/12 绿，全量 `npm test` 410/410（~35s）。**真机气泡形态未验证**（探针拿不到
+context_token，见上）；发到手机上若仍是文件，日志里会有 `voice send failed (…); sending … as a
+file instead` 一行可定位。视频出站仍需编码管线，未做。

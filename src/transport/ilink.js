@@ -345,6 +345,9 @@ export class ILinkTransport {
    * @param {number} [options.sendCooldownMs]  Cooldown armed by repeated failures.
    * @param {import('../message/rate-limit.js').OutboundPacer} [options.pacer]
    *   Test seam: a pre-built pacer (the tests inject a fake clock through it).
+   * @param {boolean} [options.voiceOutbound]  Audio attachments go out as Weixin
+   *   voice messages (SILK) instead of file attachments. Default true; a failed
+   *   voice send falls back to the file path inside {@link sendMedia}.
    */
   constructor(options) {
     this.accountId = options.accountId
@@ -365,6 +368,7 @@ export class ILinkTransport {
       log: this.log,
       warn: this.errLog,
     })
+    this.voiceOutbound = options.voiceOutbound !== false
     this.#onSessionRejected = options.onSessionRejected
     this.#bypassQueue = options.bypassQueue ?? (() => false)
     this.syncBufPath = getSyncBufFilePath(this.accountId)
@@ -584,7 +588,8 @@ export class ILinkTransport {
    * @throws when the upload or the send fails; the caller degrades to text.
    */
   async sendMedia({ filePath, conversationId, contextToken, cdnBaseUrl, caption }) {
-    const { sendOutboundMedia, mediaSendOptions } = await import('../media/outbound.js')
+    const { sendOutboundMedia, sendOutboundVoice, mediaSendOptions } = await import('../media/outbound.js')
+    const { isVoiceCandidate } = await import('../media/voice-encode.js')
     const opts = mediaSendOptions({
       baseUrl: this.baseUrl,
       token: this.token,
@@ -598,14 +603,29 @@ export class ILinkTransport {
     await this.pacer.acquire()
     let result
     try {
-      result = await sendOutboundMedia({
+      const mediaParams = {
         filePath,
         to: conversationId,
         contextToken: contextToken ?? this.#fallbackContextToken(),
         cdnBaseUrl: cdnBaseUrl ?? this.cdnBaseUrl,
         opts,
         ...(caption === undefined || caption === '' ? {} : { text: caption }),
-      })
+      }
+      // Audio rides the voice path (SILK voice_item) instead of file_item.
+      // A voice failure degrades to the file path rather than dropping the
+      // audio: the shape is newer than every other item kind here, and the
+      // worst case of a bad wire shape must be "arrives as a file", not
+      // "the reply loses its attachment".
+      if (this.voiceOutbound && isVoiceCandidate(filePath)) {
+        try {
+          result = await sendOutboundVoice(mediaParams)
+        } catch (voiceError) {
+          this.log(`voice send failed (${String(voiceError?.message ?? voiceError)}); sending ${filePath} as a file instead`)
+          result = await sendOutboundMedia(mediaParams)
+        }
+      } else {
+        result = await sendOutboundMedia(mediaParams)
+      }
     } catch (error) {
       this.pacer.noteFailure()
       throw error

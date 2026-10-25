@@ -196,6 +196,15 @@ export const FIELDS = [
         hintEn: "Stop sending this long after three consecutive failures; retrying a rejecting server is what escalates a temporary rejection into a ban.",
       },
       {
+        path: "voiceOutbound",
+        type: T.boolean,
+        default: true,
+        label: "语音发送",
+        labelEn: "Voice messages",
+        hint: "音频附件（wav/mp3/m4a/ogg/flac/silk 等）按微信语音发出，而不是文件。wav/silk 直接转码，其余需要 ffmpeg；语音发送失败会自动降级为文件。",
+        hintEn: "Audio attachments (wav/mp3/m4a/ogg/flac/silk, ...) go out as Weixin voice bubbles instead of files. wav/silk transcode in-process, the rest need ffmpeg; a failed voice send falls back to a file.",
+      },
+      {
         path: "busyMessageMode",
         type: T.enum,
         default: "queue",

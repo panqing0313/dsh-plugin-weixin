@@ -97,6 +97,9 @@ export const Config = z.object({
   maxMessageLength: z.number().default(1500).description('Maximum characters per outbound Weixin message.'),
   sendIntervalMs: z.number().min(1).default(DEFAULT_SEND_INTERVAL_MS).description('Minimum interval between two outbound Weixin sends, in milliseconds. Raising it costs latency on a chunked reply; lowering it moves closer to the measured send-ban threshold (about twenty messages in a few minutes).'),
   sendCooldownMs: z.number().min(1).default(DEFAULT_COOLDOWN_MS).description('How long to stop sending after three consecutive send failures, in milliseconds. Hammering a rejecting server is what turns a temporary rejection into an account ban.'),
+  voiceOutbound: z.boolean().default(true).description(
+    'Send audio attachments (wav, mp3, m4a, ogg, flac, silk, ...) as Weixin voice messages instead of file attachments. wav and silk are transcoded in-process; the rest need ffmpeg on PATH. A voice send that fails falls back to the plain file path, so audio is degraded, never dropped.',
+  ),
   messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
@@ -432,6 +435,9 @@ export function apply(ctx, config) {
         // pacer module's defaults when a caller omits them (tests, bin/ scripts).
         sendIntervalMs: config.sendIntervalMs,
         sendCooldownMs: config.sendCooldownMs,
+        // Audio as voice bubbles. Default on; the transport itself degrades to
+        // a file send when a voice upload/send is rejected.
+        ...(config.voiceOutbound === false ? { voiceOutbound: false } : {}),
         // `/cancel` must reach the bridge while the turn it targets is still
         // running. Every other message is queued in conversation order by the
         // transport; this one skips the queue for the obvious reason.
