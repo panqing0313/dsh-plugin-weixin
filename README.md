@@ -16,7 +16,7 @@
 - **账号级白名单** —— 每个账号可以覆盖全局的 `allowedSenders` / `allowedChats`（设置卡里直接改，保存即重挂该账号）；留空则回退全局配置。谁能让你的 Agent 干活，按账号说了算。
 - **会话按账号隔离** —— 每个账号的微信会话有独立的 DSH 会话线（`/new`、`/list`、`/use`），互不串上下文；新会话标题带 `备注名:` 前缀并镜像成宿主侧栏会话名，多账号一眼分得清；不需要的会话线随时删。
 - **一键暂停** —— 某个账号先静默：Pause 立即停掉它的入站轮询（其余账号照常收发），Resume 无缝恢复，都不用重启。
-- **语音开箱即用** —— 入站语音 SILK → WAV 本地转码，ASR 桥识别成文字交给 Agent（热调用约 300ms），识别不了自动降级存文件；**音频附件反向输出为语音气泡**（`voiceOutbound`，wav/silk 进程内转码，mp3/m4a/ogg/flac 等走 ffmpeg，失败自动降级为文件）。
+- **语音开箱即用** —— 入站语音 SILK → WAV 本地转码，ASR 桥识别成文字交给 Agent（热调用约 300ms），识别不了自动降级存文件；音频附件也能转成语音气泡（`voiceOutbound`，默认**关**——实测 iLink 服务端会接受机器人语音 `ret=0` 但不投递，打开前请读[出站语音](#出站语音voiceoutbound)一节）。
 - **管理都在设置卡** —— 账号、会话、25 项配置、语音模型、关于（版本/检查更新/项目链接）全部在 DSH 设置页的微信卡片里完成。
 
 底层用的是微信 **iLink Bot API**（`ilinkai.weixin.qq.com`），传输层来自腾讯官方开源插件
@@ -213,7 +213,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
 | `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 50 条 |
 | `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
-| `voiceOutbound` | `true` | 音频附件按微信语音发出而不是文件：wav/silk 进程内转码，mp3/m4a/ogg/flac 等需要 ffmpeg；发送失败自动降级为文件 |
+| `voiceOutbound` | `false` | 音频附件按微信语音发出而不是文件（wav/silk 进程内转码，其余走 ffmpeg）。**默认关**：实测服务端接受机器人语音（ret=0）但不投递，开着会让附件无声消失；发送被拒时仍会自动降级为文件 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
@@ -359,6 +359,17 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 文件必须在**允许的目录**里：agent 会话的工作目录，或 `~/.dsh/weixin`。路径经 `realpath` 后再判包含，
 符号链接指向目录外也会被拒，`..` 逃逸按原文判定。放宽「引用识别」不改变这个边界——识别只决定
 「要不要尝试发」，能不能读始终由目录检查决定。详见 `docs/security.md`「出站附件」。
+
+### 出站语音（voiceOutbound）
+
+音频附件（`.wav`/`.silk`/`.mp3`/`.m4a`/`.aac`/`.ogg`/`.opus`/`.flac`…）可以按微信**语音气泡**发出而不是文件：wav/silk 在进程内转码成 SILK（24 kHz，其余采样率线性重采样），其余格式调 `ffmpeg` 解码。发送被服务端**拒绝**时自动降级为普通文件附件，音频只会降级、不会丢。
+
+但默认是**关**的，原因要说实话：两次实测（2026-06、2026-10-26，后者带着全新 `context_token`、上传与 `sendmessage` 均成功返回 `ret=0`）显示 **iLink 服务端会接受机器人的 `voice_item` 却不投递给收件人**——消息被服务端静默吞掉，这大概率是账号侧的语音/TTS 能力开关。所以：
+
+- `voiceOutbound: false`（默认）→ 音频附件按文件发，稳定送达；
+- `voiceOutbound: true` → 尝试语音气泡；如果腾讯哪天放开了投递，气泡就会正常出现，风险只是附件可能无声消失。
+
+哪天想试，打开开关让 agent 发一段音频，然后看 `~/.dsh/weixin/logs/openclaw-*.log` 里的 `sent voice media … (server ret=…)` 行：`ret=0` 且手机上没有 = 仍未投递。
 
 ## 入站媒体（微信发来的图片/文件/语音/视频）
 
