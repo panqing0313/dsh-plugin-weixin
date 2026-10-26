@@ -514,13 +514,32 @@ function commitRelease(previousVersion) {
 }
 
 /**
- * Publish, then wait for the registry to actually serve the version.
+ * Writing to stdout must never kill a release.
  *
- * `npm publish` can return success while the upload is still being processed
- * (the HTTP response is 202 and npm says "may take a few minutes to become
- * available"). Querying right away returns the OLD latest and looks like a
- * failure, which is exactly the wrong conclusion to draw — so poll until the
- * version appears.
+ * The publish step is normally driven through `script -q /dev/null`, because
+ * `npm publish` only reveals the one-time-password URL when stdout is a pty.
+ * When the pty goes away mid-run (the wrapper exits, the terminal is closed),
+ * the next `process.stdout.write` throws and takes the whole script with it —
+ * which is exactly how 0.9.7 was uploaded and then never tagged. After the
+ * upload there is nothing left worth crashing over, so every write from here
+ * on is best-effort.
+ */
+function say(text) {
+	try {
+		process.stdout.write(text)
+	} catch {
+		// the terminal is gone; the release itself does not depend on it
+	}
+}
+
+/**
+ * Upload the tarball. Returns true when npm accepted it.
+ *
+ * Deliberately does NOT wait for the registry: `npm publish` can return
+ * success while the upload is still being processed (202, "may take a few
+ * minutes"), so any poll here would delay the tag for minutes while the
+ * window in which a crash loses the tag stays open. Tag and push first, poll
+ * afterwards — see `awaitRegistry`.
  */
 function publish(tarball) {
 	step('Publish to npm')
@@ -537,25 +556,33 @@ function publish(tarball) {
 			'if it asked for a one-time password, run this script from a real terminal —\nthe auth URL is printed masked (***) when stdout is captured.',
 		)
 	}
+	return true
+}
 
-	process.stdout.write('    waiting for the registry to serve the new version')
+/**
+ * Wait until the registry serves the version. Purely informational: the
+ * upload already succeeded, so a slow registry is a note, never a failure.
+ */
+function awaitRegistry() {
+	step('Wait for the registry')
+
+	say('    waiting for the registry to serve the new version')
 	const deadline = Date.now() + 180_000
 	for (;;) {
 		const seen = capture('npm', ['view', `${PKG_NAME}@${version}`, 'version'])
 		if (seen === version) break
 		if (Date.now() > deadline) {
-			process.stdout.write('\n')
+			say('\n')
 			warn(`the registry still does not show ${version} after 3 minutes`)
-			warn('the upload was accepted (npm returned success) — re-check with:')
+			warn('the upload was accepted and the tag is already pushed — re-check with:')
 			note(`npm view ${PKG_NAME} version`)
-			return true
+			return
 		}
-		process.stdout.write('.')
+		say('.')
 		spawnSync('sleep', ['4'])
 	}
-	process.stdout.write('\n')
+	say('\n')
 	ok(`the registry now serves ${version}`)
-	return true
 }
 
 function verifyPublished(tarball) {
@@ -771,8 +798,14 @@ function main() {
 	bumpVersion(previousVersion)
 	const tarball = buildAndVerify()
 	commitRelease(previousVersion)
-	if (publish(tarball)) verifyPublished(tarball)
-	tagAndPush(notes)
+	if (publish(tarball)) {
+		// Tag before waiting for the registry: the upload is already accepted, and
+		// a tag that never gets pushed makes the NEXT release report this work as
+		// new all over again (see the preflight check for untagged versions).
+		tagAndPush(notes)
+		awaitRegistry()
+		verifyPublished(tarball)
+	}
 	installLocally()
 
 	process.stdout.write(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
