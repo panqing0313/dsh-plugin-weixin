@@ -19,6 +19,7 @@
  *    instead of opening a fresh one.
  * @module dsh-weixin/agent-bridge
  */
+import { createHash } from 'node:crypto'
 import { readAssistantReply, describePending } from './session-reader.js'
 import { baseSessionIdFor, scopedLineKey, SessionLines, runSessionCommand } from './sessions.js'
 
@@ -392,9 +393,14 @@ export class AgentBridge {
    *
    * @param {string} conversationId
    * @param {string} [accountId] owning bot account; bare key when absent
+   * @param {{ sessionId?: string, sideMeta?: { parentSession?: string, origin?: string } }} [options]
+   *   `sessionId` attaches an EXPLICIT session instead of the conversation's
+   *   active line (the memory summarizer's side session); `sideMeta` adds
+   *   header-admitted meta (parentSession/origin) so the side session files
+   *   under its conversation instead of the top level.
    */
-  async attach(conversationId, accountId) {
-    const sessionId = this.#activeSessionId(conversationId, accountId)
+  async attach(conversationId, accountId, options = {}) {
+    const sessionId = options.sessionId ?? this.#activeSessionId(conversationId, accountId)
     const existing = this.sessions.get(sessionId)
     if (existing !== undefined) return existing
 
@@ -406,7 +412,7 @@ export class AgentBridge {
     const inflight = this.attachPromises.get(sessionId)
     if (inflight !== undefined) return inflight
 
-    const creation = this.#attachNew(sessionId)
+    const creation = this.#attachNew(sessionId, options.sideMeta)
     this.attachPromises.set(sessionId, creation)
     try {
       return await creation
@@ -415,7 +421,7 @@ export class AgentBridge {
     }
   }
 
-  async #attachNew(sessionId) {
+  async #attachNew(sessionId, sideMeta) {
     const agents = this.#agents()
     if (agents === undefined) throw new Error('the agents service is unavailable')
 
@@ -436,11 +442,11 @@ export class AgentBridge {
           ...(agentOptions === undefined ? {} : { agentOptions }),
         })
       } catch {
-        handle = await this.#create(sessionId, setup, agentOptions)
+        handle = await this.#create(sessionId, setup, agentOptions, sideMeta)
         created = true
       }
     } else {
-      handle = await this.#create(sessionId, setup, agentOptions)
+      handle = await this.#create(sessionId, setup, agentOptions, sideMeta)
       created = true
     }
 
@@ -497,7 +503,7 @@ export class AgentBridge {
     return record
   }
 
-  async #create(sessionId, setup, agentOptions) {
+  async #create(sessionId, setup, agentOptions, sideMeta) {
     const agents = this.#agents()
     if (typeof agents.create !== 'function') throw new Error('the agents service cannot create sessions')
     // The session's cwd must equal the Workspace path byte for byte, because
@@ -517,6 +523,9 @@ export class AgentBridge {
       // one would fail validation ("header origin must be \"subagent\"").
       meta: {
         ...(cwd === undefined ? {} : { cwd }),
+        // Side sessions (memory summarizer) file under their conversation:
+        // origin 'subagent' + a parent is the only admitted child shape.
+        ...(sideMeta === undefined ? {} : sideMeta),
       },
       setup,
       signal: AbortSignal.timeout(this.createTimeoutMs),
@@ -611,6 +620,56 @@ export class AgentBridge {
       // turn's reply entirely.
       record.cancelled = false
       await this.#drainQueue({ record, conversationId, onProgress, signal })
+    }
+  }
+
+  /**
+   * Run one prompt through a SIDE session and return its reply — the memory
+   * summarizer's engine. The side session is keyed deterministically off the
+   * conversation, so successive summaries reuse and resume it instead of
+   * creating a session per call, and its context stays separate from the
+   * conversation the user talks in. NOTHING here sends outbound: the reply is
+   * returned to the caller, who decides what to do with it (write conv
+   * memory), so a summary can never surface as a WeChat message.
+   *
+   * Returns undefined when the side session is still busy — the next turn
+   * threshold simply tries again, and the journal window it summarizes
+   * includes the latest turns either way.
+   *
+   * @param {object} params
+   * @param {string} params.conversationId
+   * @param {string} [params.accountId]
+   * @param {string} params.prompt
+   * @returns {Promise<{ text: string, sessionId: string } | undefined>}
+   */
+  async summarize({ conversationId, accountId, prompt }) {
+    const key = scopedLineKey(accountId, conversationId)
+    const digest = createHash('sha1').update(key).digest('hex').slice(0, 16)
+    const sessionId = `wx-mem-${digest}`
+    const record = await this.attach(conversationId, accountId, {
+      sessionId,
+      sideMeta: {
+        origin: 'subagent',
+        parentSession: this.#activeSessionId(conversationId, accountId),
+      },
+    })
+    if (record.busy) {
+      this.log?.(`memory summary skipped: side session ${sessionId} is busy`)
+      return undefined
+    }
+    record.busy = true
+    try {
+      const createUserMessage = await loadCreateUserMessage()
+      const before = this.#lastSeq(record.agent)
+      this.#beginAuditTurn(record, { accountId, conversationId })
+      record.agent.followup(
+        createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }),
+      )
+      // No onProgress / onLateReply: a summary must stay silent toward WeChat.
+      return await this.#awaitReply({ record, before })
+    } finally {
+      record.busy = false
+      record.cancelled = false
     }
   }
 

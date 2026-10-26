@@ -67,6 +67,7 @@ import {
   addGlobalFact,
   removeGlobalFact,
 } from './memory.js'
+import { createMemorySummarizer } from './memory-summarizer.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -309,6 +310,8 @@ export function apply(ctx, config) {
     const transports = new Map()
     /** @type {AgentBridge | undefined} */
     let bridge
+    /** @type {ReturnType<typeof createMemorySummarizer> | undefined} */
+    let memorySummarizer
     /** @type {AsrBridge | undefined} */
     let asrBridge
     /** @type {string} */
@@ -345,6 +348,16 @@ export function apply(ctx, config) {
         ...(config.toolAudit === false
           ? {}
           : { onToolAudit: (entry) => appendToolAudit(stateRoot, entry, { warn }) }),
+      })
+
+      // The P2 memory summarizer: folds recent turns into conv memory every
+      // memorySummaryTurns settled turns. Reads the CURRENT account config per
+      // call (the card can flip the knobs live); account-scoped per call.
+      memorySummarizer = createMemorySummarizer({
+        bridge,
+        stateRoot,
+        config: () => config,
+        logger: { log: (line) => log(line), errLog: (line) => warn(line) },
       })
 
       // Voice transcription is opt-in and out of tree: with no bridge configured
@@ -517,6 +530,7 @@ export function apply(ctx, config) {
         accountId: account.accountId,
         transport: next,
         bridge,
+        memorySummarizer,
         asrBridge,
         seen,
         log,
@@ -788,7 +802,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, journalInbound }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, journalInbound }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -1157,6 +1171,10 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
       })
       log(`turn settled in ${Date.now() - startedAt}ms for ${message.conversationId}`)
       fileLog.info(`accepted message ${message.id} from ${message.senderId} (conversation ${message.conversationId}); agent turn settled in ${Date.now() - startedAt}ms`)
+      // One settled agent turn = one memory turn. The summarizer counts it,
+      // and every memorySummaryTurns of them fires a background summary into
+      // conv memory — fire-and-forget, it must never delay or fail the reply.
+      memorySummarizer?.afterTurn(accountId, message.conversationId)
       // A late reply already went out through onLateReply; sending the empty
       // text here would be a stray message.
       if (reply.late === true) return

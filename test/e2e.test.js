@@ -1374,3 +1374,61 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
     }
   }
 })
+
+test('memory summarizer: every settled turn counts; at the cadence a side session writes conv memory, never a bubble', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-summarizer-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 6001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-sum', create_time_ms: 31, item_list: [{ type: 1, text_item: { text: '讲个笑话' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true, memorySummaryTurns: 1 })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(String(l)) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: '哈哈： ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+    ctx.__warnings = warnings
+
+    // The user turn settles, then the summarizer fires fire-and-forget on the
+    // side session (the fake echoes its prompt back as the "summary"). Wait
+    // for the conv file to gain the digest, then verify NOTHING extra went
+    // out over WeChat.
+    // conversationId is group_id ?? from_user_id; group_id is '' in the fake
+    // message, so the conversation is keyed by the peer id itself.
+    const convFile = path.join(stateRoot, 'memory', `conv-${ACCOUNT_ID}-${ALLOWED.replace(/[^A-Za-z0-9@._-]/g, '_')}.json`)
+    let conv = null
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      try { conv = JSON.parse(fs.readFileSync(convFile, 'utf8')) } catch { conv = null }
+      if (conv !== null && typeof conv.summary === 'string' && conv.summary !== '') break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    let dirListing = ''
+    try { dirListing = fs.readdirSync(path.join(stateRoot, 'memory')).join(',') } catch (e) { dirListing = `unreadable: ${e.message}` }
+    assert.ok(conv !== null && conv.summary !== '', `no conv summary (sent: ${sent.length}; warnings: ${ctx.__warnings.join(' | ')}; memory dir: ${dirListing})`)
+    assert.equal(conv.updatedTurn, 1, 'exactly one settled turn was counted')
+    assert.match(conv.summary, /只输出摘要本身/, 'the fake echoed the summarizer prompt back — that IS the digest here')
+    assert.equal(sent.length, 1, `the summarizer must never send a WeChat bubble; sent: ${sent.map((m) => JSON.stringify(m.msg.item_list[0]?.text_item?.text ?? m.msg.item_list[0]?.type))}`)
+    const outboundText = sent[0].msg.item_list[0].text_item.text
+    assert.ok(outboundText.startsWith('哈哈： 讲个笑话') || outboundText.includes('讲个笑话'), outboundText)
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
