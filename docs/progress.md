@@ -2465,7 +2465,7 @@ https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.5 ，注册�
   `TODO: describe what changed in this release.` 并直接提交、进入 tarball。先跑一次让它插入占位，
   改写成人话再 `git commit --amend` / 复跑（脚本对「版本已 bump」「README 已覆盖该版本」是幂等的）。
 
-## 配置项中文化 + 默认折叠（2026-10-26，`36b0af6`，待随 0.9.6）
+## 配置项中文化 + 默认折叠（2026-10-26，`36b0af6`，随 0.9.6 发版）
 
 用户反馈：配置项页签的分组标题、字段名、提示全是英文（`Basics` / `Send interval`…），
 而且第一组默认展开、其余八组被挤到折叠线以下。
