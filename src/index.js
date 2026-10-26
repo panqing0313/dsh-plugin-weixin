@@ -69,6 +69,7 @@ import {
   addGlobalFact,
   removeGlobalFact,
   bondLine,
+  listConvMemories,
   setConvRecentSession,
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
@@ -76,6 +77,8 @@ import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './mes
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
+import { ProactiveScheduler } from './message/proactive.js'
+import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -156,6 +159,16 @@ export const Config = z.object({
   lifeState: z.boolean().default(true).description(
     '生活状态：按时间、距上次聊天多久、今天聊了多少，自动推断角色此刻的心情/在做什么/精力，注入到提示词里；「默认助手」模式不注入。',
   ),
+  stickerEnabled: z.boolean().default(true).description(
+    '表情图片：角色模式下模型可以在回复里写 [表情:开心]，插件发一张对应的表情图（图片气泡）。微信协议没有贴纸消息类型，所以只能是图片，不是可点开的原生表情包；关掉则连这个标记也不教给模型。',
+  ),
+  proactiveEnabled: z.boolean().default(false).description(
+    '主动开口：角色模式下，对方一段时间没说话时由它先发一条消息（只在设定的时段内、每条之间有最短间隔、没被回应会退避、每天有上限）。默认关闭——一个工具不该自己找你；「默认助手」模式永远不主动。',
+  ),
+  proactiveMinGapMinutes: z.number().min(10).max(2880).default(180).description('主动消息的最短间隔（分钟）：距对方最后一条消息至少这么久才会开口，也是没被回应时退避的基数。'),
+  proactiveMaxPerDay: z.number().min(1).max(24).default(3).description('每个账号每天最多主动发几条。'),
+  proactiveWindowStart: z.string().default('09:00').description('主动消息的时间窗开始，HH:mm；窗外（含夜里）一律不发。'),
+  proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -346,6 +359,7 @@ export function apply(ctx, config) {
     let cwd
     let reminderScheduler
     let subscriptionScheduler
+    let proactiveScheduler
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -482,6 +496,116 @@ export function apply(ctx, config) {
           }
         },
       })
+
+      // 主动开口: the bot starts a conversation instead of only answering one.
+      // Off by default and companion-only; every gate (time window, minimum
+      // gap, backoff after silence, daily cap, per-tick chance) lives in
+      // planProactive so the rules are testable without a clock or a disk.
+      // Test hook: the e2e suite cannot wait five minutes for the first tick,
+      // and a wall-clock schedule plus an idle roll is not something a test can
+      // assert on. Only a test run sets this, and then the chance gate is wide
+      // open so a single tick always decides.
+      const proactiveTestTickMs = Number(process.env.DSH_WEIXIN_PROACTIVE_TICK_MS ?? '')
+      const proactiveTestMode = Number.isFinite(proactiveTestTickMs) && proactiveTestTickMs > 0
+      proactiveScheduler = new ProactiveScheduler({
+        stateRoot,
+        warn,
+        ...(proactiveTestMode ? { tickMs: Math.max(10, proactiveTestTickMs), tickChance: 1 } : {}),
+        config: () => withSavedConfig(config),
+        candidates: () => {
+          const live = withSavedConfig(config)
+          const modes = readPersonaStore(stateRoot, { warn })
+          const out = []
+          for (const accountId of transports.keys()) {
+            for (const conv of listConvMemories(stateRoot, accountId)) {
+              if (typeof conv.conversationId !== 'string' || conv.conversationId === '') continue
+              const mode = resolveMode(
+                modes,
+                activeModeFor(stateRoot, accountId, conv.conversationId, live.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }),
+              )
+              if (!isCompanionMode(mode)) continue
+              out.push({
+                accountId,
+                conversationId: conv.conversationId,
+                mode,
+                lastInboundAt: Number(conv.bond?.lastMessageAt ?? 0),
+              })
+            }
+          }
+          // Most recently active conversation first: that is the one a person
+          // would reach for first.
+          return out.sort((a, b) => b.lastInboundAt - a.lastInboundAt)
+        },
+        fire: async (candidate, { now }) => {
+          const transport = transports.get(candidate.accountId)
+          if (transport === undefined) return ''
+          const live = withSavedConfig(config)
+          const convMemory = readConvMemory(stateRoot, candidate.accountId, candidate.conversationId, { warn })
+          const life = live.lifeState !== false
+            ? readOrInferLifeState(stateRoot, candidate.accountId, { now, bond: convMemory.bond, warn })
+            : null
+          const personaBlock = buildPersonaBlock(candidate.mode)
+          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false })
+          const lifeBlockText = life === null ? '' : lifeBlock(life)
+          const memoryBlock = live.memoryEnabled === true
+            ? buildMemoryBlock({
+                global: readGlobalMemory(stateRoot, candidate.accountId, { warn }),
+                conv: convMemory,
+                recent: readRecentWindow(stateRoot, candidate.accountId, candidate.conversationId, { turns: 3 }),
+                now,
+              })
+            : ''
+          const state = proactiveScheduler?.status(candidate.accountId)
+          const lastOwn = Array.isArray(state?.recent) && state.recent.length > 0
+            ? state.recent[state.recent.length - 1]
+            : ''
+          const sinceHours = candidate.lastInboundAt > 0
+            ? Math.max(1, Math.round(((now - candidate.lastInboundAt) / 3_600_000) * 10) / 10)
+            : null
+          const prompt = [
+            personaBlock,
+            styleBlock,
+            lifeBlockText,
+            memoryBlock,
+            '<weixin_proactive>',
+            `现在是 ${formatStamp(now)}。${sinceHours === null ? '对方有一阵子没说话了。' : `对方已经 ${sinceHours} 小时没说话了。`}`,
+            '你想主动给对方发一条消息——就像你在微信里随手发的一条：可以说说你此刻在做什么，问问对方怎么样了，或者提起之前聊过的一件事。',
+            '一两句话，口语，别一次问好几个问题，也别追问对方去哪儿了。',
+            '不要说「我主动来找你」「打扰了」这类话，也不要解释你为什么发这条消息。',
+            ...(lastOwn === '' ? [] : [`你上一次主动发的是：「${lastOwn}」，这次别重复。`]),
+            '</weixin_proactive>',
+          ].filter((part) => part !== '').join('\n\n')
+          const result = await bridge.summarize({
+            conversationId: candidate.conversationId,
+            accountId: candidate.accountId,
+            prompt,
+            sessionPrefix: 'wx-pro-',
+          })
+          const text = typeof result?.text === 'string' ? result.text.trim() : ''
+          if (text === '' || text === '（已取消）') return ''
+          const plan = live.stickerEnabled !== false ? takeStickers(text) : { text, stickers: [] }
+          if (live.typingIndicator === true) {
+            await transport.setTyping(true, candidate.conversationId).catch(() => {})
+            await sleep(1200)
+          }
+          try {
+            await sendChunked(transport, config, { conversationId: candidate.conversationId, text: plan.text })
+            for (const stickerId of plan.stickers.slice(0, MAX_STICKERS_PER_REPLY)) {
+              await transport.sendMedia({
+                filePath: stickerPath(stickerId),
+                conversationId: candidate.conversationId,
+                cdnBaseUrl: transport.cdnBaseUrl,
+              }).catch((error) => warn(`proactive sticker ${stickerId} failed: ${String(error)}`))
+            }
+          } finally {
+            if (live.typingIndicator === true) await transport.setTyping(false, candidate.conversationId).catch(() => {})
+          }
+          log(`proactive message sent to ${candidate.conversationId} (${candidate.mode.name})`)
+          fileLog.info(`proactive message sent to ${candidate.conversationId}: ${plan.text.slice(0, 120)}`)
+          return plan.text
+        },
+      })
+      proactiveScheduler.start()
 
     })()
 
@@ -638,6 +762,7 @@ export function apply(ctx, config) {
         agentCwd: cwd,
         reminderScheduler,
         subscriptionScheduler,
+        proactiveScheduler,
         journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
       })
 
@@ -720,6 +845,7 @@ export function apply(ctx, config) {
       cancelled = true
       reminderScheduler?.stop()
       subscriptionScheduler?.stop()
+      proactiveScheduler?.stop()
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
@@ -896,7 +1022,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, journalInbound }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -1277,7 +1403,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // tool: it answers instantly, in one message, and never pretends it slept
     // badly.
     const companion = isCompanionMode(activeMode)
-    const styleBlock = companion ? buildHumanStyleBlock() : ''
+    const styleBlock = companion ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false }) : ''
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
     // those messages in its own history, and the inbound journal write above
@@ -1339,6 +1465,10 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // text (a per-block prepend loop would silently reverse it).
     const blocks = [personaBlock, styleBlock, lifeBlockText, memoryBlock, recallBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
+
+    // The user spoke: clear the proactive backoff. Reset before the turn so a
+    // slow reply cannot count as silence and trigger a second message.
+    proactiveScheduler?.noteInbound(accountId)
 
     // 5. Drive the agent, then send the reply back in chunks.
     if (config.typingIndicator) await transport.setTyping(true, message.conversationId)
@@ -1432,12 +1562,26 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         warn,
         fileLog,
       })
+      // Stickers: the model writes `[表情:开心]` where a person would drop a
+      // sticker (the protocol has no sticker item, so a drawn PNG goes out as an
+      // image bubble instead). Markers are stripped before anything counts
+      // characters, or the bracket would show up in the bubble itself.
+      const stickerPlan = companion && effectiveConfig.current.stickerEnabled !== false
+        ? takeStickers(outbound.text)
+        : { text: outbound.text, stickers: [], dropped: [] }
+      if (stickerPlan.dropped.length > 0) {
+        warn(`dropped sticker marker(s): ${stickerPlan.dropped.join(', ')}`)
+      }
+      if (stickerPlan.stickers.length > MAX_STICKERS_PER_REPLY) {
+        stickerPlan.stickers.length = MAX_STICKERS_PER_REPLY
+      }
+      const replyText = stickerPlan.text
       // P0: a companion answers the way a person types — a beat before the
       // first bubble, then two or three short ones. Everything else (command
       // receipts, errors, progress notes) stays instant, and `default` mode
       // plans delayMs 0 with a single bubble, so a tool never acts alive.
       const pacing = planCompanionReply({
-        text: markdownToPlainText(outbound.text ?? '', resolveMarkdownMode(config)),
+        text: markdownToPlainText(replyText ?? '', resolveMarkdownMode(config)),
         mode: activeMode,
         life,
         config: effectiveConfig.current,
@@ -1445,11 +1589,28 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       if (pacing.delayMs > 0) await sleep(pacing.delayMs)
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
-        text: outbound.text,
+        text: replyText,
         bubbles: pacing.bubbles,
         gapMs: pacing.gapMs,
         contextToken: message.contextToken,
       })
+      // One bubble per sticker, right after the words. A failed sticker costs a
+      // log line: the reply has already been delivered.
+      for (const stickerId of stickerPlan.stickers) {
+        try {
+          await transport.sendMedia({
+            filePath: stickerPath(stickerId),
+            text: '',
+            conversationId: message.conversationId,
+            contextToken: message.contextToken,
+            cdnBaseUrl: transport.cdnBaseUrl,
+          })
+          fileLog.info(`sent sticker ${stickerId} to ${message.conversationId}`)
+        } catch (error) {
+          warn(`sticker ${stickerId} failed: ${String(error)}`)
+          fileLog.info(`sticker ${stickerId} failed: ${String(error)}`)
+        }
+      }
       await sendProducedFiles({
         config,
         transport,

@@ -1614,3 +1614,166 @@ test('local recall: an old line comes back only when the message asks for it', a
     delete process.env.DSH_WEIXIN_STATE_DIR
   }
 })
+
+test('stickers: a [表情:x] marker becomes an image bubble, not text', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-sticker-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+
+  const key = Buffer.from('0123456789abcdef', 'utf8')
+  const { encryptAesEcb } = await import('../vendor/openclaw-weixin/cdn/aes-ecb.js')
+  const uploads = []
+  const cdn = http.createServer((req, res) => {
+    uploads.push(req.url)
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'x-encrypted-param': 'DL-STICKER' })
+      res.end(encryptAesEcb(Buffer.from('sticker bytes'), key))
+    })
+  })
+  await new Promise((resolve) => cdn.listen(0, '127.0.0.1', resolve))
+  const cdnBaseUrl = `http://127.0.0.1:${cdn.address().port}/c2c`
+
+  try {
+    const { server, baseUrl, sent, uploadUrls } = await startFakeILinkWithUpload([
+      [
+        { message_id: 8001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-sticker', create_time_ms: 51, item_list: [{ type: 1, text_item: { text: '晚安啦' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+    fs.writeFileSync(
+      path.join(stateRoot, 'openclaw-weixin', 'accounts', `${ACCOUNT_ID}.json`),
+      JSON.stringify({ token: 'tok', baseUrl, cdnBaseUrl }),
+      { mode: 0o600 },
+    )
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({
+      allowedSenders: [ALLOWED],
+      accountId: ACCOUNT_ID,
+      personaDefaultMode: 'girlfriend',
+      memoryEnabled: false,
+      replyDelayMaxMs: 0,
+      bubbleGapMs: 0,
+    })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(String(l)) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? fixedReplyAgents('晚安～[表情:困了]') : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (!sent.some((m) => m.msg?.item_list?.[0]?.type === 2) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    const types = sent.map((m) => m.msg?.item_list?.[0]?.type)
+    assert.ok(types.includes(2), `no image bubble; types=${JSON.stringify(types)} warnings=${warnings.join(' | ')}`)
+    const textItem = sent.find((m) => m.msg?.item_list?.[0]?.type === 1)?.msg.item_list[0].text_item
+    assert.ok(textItem, 'the words still go out as text')
+    assert.equal(textItem.text, '晚安～', 'the marker must be stripped from the bubble')
+    assert.doesNotMatch(textItem.text, /\[表情:/)
+    const imageItem = sent.find((m) => m.msg?.item_list?.[0]?.type === 2)?.msg.item_list[0].image_item
+    assert.ok(imageItem.media.encrypt_query_param, 'the image item carries the CDN download param')
+    assert.ok(uploadUrls.length >= 1, 'the sticker was uploaded, not linked')
+    assert.equal(uploadUrls[0].media_type, 1, 'an image upload, not a file')
+  } finally {
+    await new Promise((resolve) => cdn.close(resolve))
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
+test('proactive: a companion speaks first without being asked, and says it once', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-proactive-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  // The real schedule is a five-minute tick plus an idle roll; a test cannot
+  // wait for either. The hook makes one tick decisive.
+  process.env.DSH_WEIXIN_PROACTIVE_TICK_MS = '20'
+
+  try {
+    // A conversation that already has a bond, last active four hours ago —
+    // exactly the state planProactive calls "they have been quiet long enough".
+    const fourHoursAgo = Date.now() - 4 * 3_600_000
+    const convDir = path.join(stateRoot, 'memory')
+    fs.mkdirSync(convDir, { recursive: true })
+    const convFile = path.join(convDir, `conv-${ACCOUNT_ID}-${ALLOWED.replace(/[^A-Za-z0-9@._-]/g, '_')}.json`)
+    fs.writeFileSync(
+      convFile,
+      JSON.stringify({
+        conversationId: ALLOWED,
+        summary: '',
+        facts: [],
+        updatedTurn: 2,
+        bond: {
+          firstDay: '2026-10-01',
+          lastDate: '2026-10-26',
+          mood: '平静',
+          msgs: 12,
+          msgsToday: 0,
+          lastMessageAt: fourHoursAgo,
+        },
+      }),
+    )
+
+    // No inbound message at all: the whole point is that it speaks unprompted.
+    const { server, baseUrl, sent } = await startFakeILink([])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({
+      allowedSenders: [ALLOWED],
+      accountId: ACCOUNT_ID,
+      personaDefaultMode: 'girlfriend',
+      memoryEnabled: true,
+      proactiveEnabled: true,
+      // The wall clock decides the default window; a test that only runs by
+      // day would fail at night, so widen it to the whole day.
+      proactiveWindowStart: '00:00',
+      proactiveWindowEnd: '23:59',
+      replyDelayMaxMs: 0,
+      bubbleGapMs: 0,
+      typingIndicator: false,
+    })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(String(l)) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? fixedReplyAgents('你睡了吗？我这儿刚下过雨') : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (sent.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    assert.equal(sent.length, 1, `expected exactly one unprompted message; sent=${JSON.stringify(sent.map((m) => m.msg?.item_list?.[0]?.text_item?.text))} warnings=${warnings.join(' | ')}`)
+    assert.equal(sent[0].msg.item_list[0].type, 1)
+    assert.equal(sent[0].msg.item_list[0].text_item.text, '你睡了吗？我这儿刚下过雨')
+    const stateFile = path.join(convDir, `proactive-${ACCOUNT_ID.replace(/[^A-Za-z0-9@._-]/g, '_')}.json`)
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    assert.equal(state.count, 1, 'the day counter moved')
+    assert.deepEqual(state.recent, ['你睡了吗？我这儿刚下过雨'], 'so the next one can avoid repeating it')
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+    delete process.env.DSH_WEIXIN_PROACTIVE_TICK_MS
+  }
+})

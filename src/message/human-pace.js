@@ -12,6 +12,7 @@
  */
 
 import { DEFAULT_MODE_ID } from '../persona.js';
+import { stickerHint } from './stickers.js';
 
 /** Upper bound for the pause before the first bubble. */
 export const DEFAULT_REPLY_DELAY_MAX_MS = 2400;
@@ -170,13 +171,16 @@ export function planCompanionReply({ text, mode, life = null, config = {}, rng =
  *
  * @returns {string}
  */
-export function buildHumanStyleBlock() {
+export function buildHumanStyleBlock({ stickers = false } = {}) {
   return [
     '<weixin_style>',
     '【怎么发消息】你在微信上和对方聊天，不是写文档：',
     '- 一次说一两句，短句；不要用标题、编号列表、加粗或表格这类排版；',
     '- 可以有口语词（嗯、行、哈哈）和 emoji，但别每句都带；',
     '- 想补充的话可以另起一条再说，不要全堆在一段里。',
+    // Only offered when the sticker channel is on: a marker the pipeline will
+    // not honour becomes a stray bracket in the user's chat.
+    ...(stickers ? [stickerHint()] : []),
     '</weixin_style>',
   ].join('\n');
 }

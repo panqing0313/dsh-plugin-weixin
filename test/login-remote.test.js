@@ -439,7 +439,9 @@ test('personaOverview attaches the affinity line to each conversation', async ()
     const c = controller()
     const { bumpTurnAndBond } = await import('../src/memory.js')
     const { setConvSummary } = await import('../src/memory.js')
-    bumpTurnAndBond(root, 'bot1', 'conv-heat', { now: new Date('2026-10-26T09:00:00').getTime() })
+    // Seeded from the real clock: personaOverview renders the bond line with
+    // `now`, so a pinned calendar day would read as 「第 2 天」 after midnight.
+    bumpTurnAndBond(root, 'bot1', 'conv-heat', { now: Date.now() })
     setConvSummary(root, 'bot1', 'conv-heat', '聊过天气')
     const overview = await c.personaOverview({ accountId: 'bot1' })
     const conv = overview.memory.conversations.find((entry) => entry.conversationId === 'conv-heat')

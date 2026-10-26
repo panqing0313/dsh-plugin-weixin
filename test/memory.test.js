@@ -218,7 +218,7 @@ test('bondLine renders the one-liner; buildMemoryBlock leads with it', () => {
 	assert.equal(bondLine(bond, now), '我们认识第 26 天 · 聊过 42 条消息 · 此刻：聊得很热络')
 	assert.equal(bondLine(undefined, now), '')
 	assert.equal(bondLine({ firstDay: 'nope', msgs: 1 }, now), '')
-	const block = buildMemoryBlock({ conv: { summary: '', facts: [], updatedTurn: 1, bond }, recent: [] })
+	const block = buildMemoryBlock({ conv: { summary: '', facts: [], updatedTurn: 1, bond }, recent: [], now })
 	assert.ok(block.startsWith('<weixin_memory>\n【我们】我们认识第 26 天'), block)
 	const bare = buildMemoryBlock({ conv: { summary: 's', facts: [], updatedTurn: 1 }, recent: [] })
 	assert.ok(!bare.includes('【我们】'), bare)

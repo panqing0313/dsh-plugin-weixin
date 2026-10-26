@@ -1,12 +1,12 @@
 # 开发进度
 
-更新时间：2026-10-26
+更新时间：2026-10-27
 
 ## 当前状态（2026-10-26）
 
 - **版本**：`0.9.7`，2026-10-26 已发布（npm `latest`、tag `v0.9.7`、GitHub release 三者齐全；注册表 `dist.shasum` `d9c57ddf…` / `dist.integrity` `sha512-xQMIszgs…`、`gitHead` `c3fb808` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
 - **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
-- **测试**：`npm test` → `tests 519 / pass 519 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。
+- **测试**：`npm test` → `tests 546 / pass 546 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -21,6 +21,8 @@
 - **入口**：同一张卡片注册在三个位置——插件页（`plugins.bundle.config`）、宿主设置导航（`settings.section`，排在 dsh-im 之后）、以及**左侧栏的「微信」页**（`sidebar.panellist` 行 + `main` 键控面板，同一 id `dsh-weixin`）；面板页自带滚动、24/28px 边距与 920px 阅读宽度（卡片原本按 ~520px 对话框设计）。
 - **个性化与记忆**：`/mode` 切换对话模式（**12 个内置角色**：默认助手/女友/男友/朋友/贾维斯/**小鲸娘/御姐/知心大姐姐/暖男/可爱闺女/猫娘/傲娇** + **三个游戏模式** 海龟汤/成语接龙/文字冒险 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回；角色与游戏分组显示）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词、**亲密度**（认识天数/消息数/确定性心情，进提示词 `/status` `/memory` 与设置卡，且只对陪聊模式显示）；设置卡「个性化」页签可视管理，并**按会话**显示「模式 · 此刻状态 · 认识多久」。
 - **陪聊节奏与生活状态**：非「默认助手」模式下回复按人来的节奏走——首条停 0.2–2.4s 抖动（累时 ×1.35）、长回复拆 2–3 条气泡（条间 0.4–1.1s）、收尾短句单独成条；心情/在做什么/精力由「几点 + 隔了多久 + 今天聊了多少条」确定性推断（不调模型，5 分钟节流落盘 `memory/life-<账号>.json`），精力低时提示词里要求回得更短更慢。**「默认助手」不延迟、不分条、不注入状态**，`/status` `/memory` 的感情行同样只在陪聊模式出现。
+- **表情图片**：内置 12 张表情图（`assets/stickers/`，`scripts/make-stickers.py` 可重出图），陪聊模式下模型写 `[表情:困了]` 就把标记摘掉、改走图片通道发原生图片气泡（微信协议没有贴纸类型，这是能做到的最近形态）；未知名字/超两张自动丢弃并记警告，全角冒号与尾缀粒子都能识别。
+- **主动开口**：`proactiveEnabled`（默认关）开着时，陪聊模式的会话在对方安静够久后自己先发一条——每 5 分钟看一次候选，闸门依次是「时段 → 最短间隔 → 未被回应的指数退避（上限一天）→ 每日上限 → 35% 骰子」；内容由侧会话带着人设/状态/记忆生成（含「你上次发过什么，别重复」），空文本整条不发，对方一说话退避立即清零。**「默认助手」永远不主动。**
 - **定时主动消息**：`/subscribe <时间> <提示词>`（每天/每周X/裸 HH:mm/一次性）到点开侧会话让 agent 带着人设与记忆生成一条再走标准出站管线（分片/限速继承），`/subscribelist` `/subscribecancel`；错过的到点 30 分钟内补发一次、否则丢弃，一次性到期自动移除；每账号上限 20 条。`/remind` 保持零模型消耗不变，两者互补。
 - **即时总结与导出**：`/summary` 现场让侧会话总结这段会话（不写回摘要，纯「看一眼」）；`/export [天数]` 把最近 N 天流水渲染成 Markdown——短的直接回复，长的落盘 `<stateRoot>/exports/`；设置卡消息流水页签的导出按钮走同一渲染，改为浏览器下载。
 - **免打扰时段**：`quietHoursEnabled` + `quietHoursStart`/`quietHoursEnd`（默认 23:00–07:00，支持跨午夜）。时段内到点的 `/remind` 与 `/subscribe` 全部重新排期到时段结束：提醒保留在盘上、订阅不消耗次数，夜里不响、早上不丢。
@@ -2562,3 +2564,22 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - 注册表：`dist-tags.latest = 0.9.7`；`dist.shasum d9c57ddf6a2dfcca5f28f70f74ff12c5a55bb72b`（与本地 `shasum -a 1` 一致）、`dist.integrity sha512-xQMIszgsKGvK3GiCSLnEZZ3vtG4bN8NiUOPsmS5NhLlJNEZWP7SqKB/KLGtHulqOCRuh2xhO9TtpIS401PzLZA==`、`gitHead c3fb808`；tag `v0.9.7`；release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.7 。
 - **教训**：脚本在「轮询注册表等新版本出现」这一步会因 npm 的异步处理（`Your package is being processed and may take a few minutes`）超时退出，此时 publish 其实已经成功、但后面的 **tag / push / 钉 profile 依赖** 三步都没跑。`npm view version` 还会短暂返回旧版本（`dist-tags` 已更新）——发布后要分别核对 `dist-tags`、`versions --json`、`dist.shasum`，并确认 tag 与 profile 依赖都落地。
 - 补做的事：`git tag -a v0.9.7` + 推送分支与 tag、`gh release create v0.9.7 --notes-file /tmp/notes-097.md`；profile `dsh-plugin-weixin` `^0.9.6 → ^0.9.7` + App 自带 pnpm `install --prefer-offline` 刷锁。
+
+## 表情图片与主动开口（2026-10-27，待随 0.9.8 发版）
+
+### 行为
+
+- **表情图片**（`src/message/stickers.js` + `assets/stickers/*.png`）：微信 `MessageItemType` 里没有贴纸类型（只有 1 文本 / 2 图片 / 3 语音 / 4 文件 / 5 视频），所以原生表情包发不出去。改为「内置图库 + 标记挑选」：陪聊模式的 `<weixin_style>` 块多一行 `可用：开心、哈哈…；一次最多一张`，模型写 `[表情:困了]`，出站前 `takeStickers` 把标记从正文摘掉、返回 id 列表，再由回复路径逐个 `transport.sendMedia`（与手动发图同一条图片通道，`media_type: 1`，原生图片气泡）。同一 id 只发一次；超过 `MAX_STICKERS_PER_REPLY`（2）或名字不在目录里的一律删除并记 `dropped`（正文里不会留下 `[表情:???]`）。素材由 `scripts/make-stickers.py`（Pillow）生成，360×420 透明 PNG，4–6 KB/张。
+- **主动开口**（`src/message/proactive.js`）：`ProactiveScheduler` 每 5 分钟 tick 一次，候选 = 所有在线账号 × `listConvMemories` 里**非默认助手**模式的会话（按 `bond.lastMessageAt` 降序）。能不能发是纯函数 `planProactive` 决定的，顺序：`disabled` → `outside-window`（`proactiveWindowStart/End`，填反回落默认 09:00–23:00）→ `too-soon`（距对方最后一条 < `proactiveMinGapMinutes`）→ `backoff`（`min(minGap × 2^misses, 24h)`）→ `daily-cap`（`proactiveMaxPerDay`，跨天按 `dayString` 重置）→ `tick-chance`（35%）→ 发。内容是侧会话（`sessionPrefix: 'wx-pro-'`）生成的：人设 + 节奏提示 + 生活状态 + 记忆 + `<weixin_proactive>`（现在几点、对方已经几小时没说话、一两句话、别追问去哪儿、不要说「我主动来找你」、附上次自己发的那条要求别重复）。发完 `recordSent` 写 `memory/proactive-<账号>.json`：`{day, count, lastAt, misses, recent}`。
+- **接线**：`src/index.js` 在 subscriptionScheduler 之后构造并 `start()`，teardown 里 `stop()`；入站处理器在推进 agent **之前**调 `noteInbound`（注释写明理由：慢回复不能被当成沉默）。
+
+### 坑与教训
+
+- 心情/时段这类判定如果读 `Date.now()`，测试就会「只在写它的那天通过」：本轮把三处硬编码日期改成「今天」（`test/quiet-hours.test.js` 的 `at()`、`test/login-remote.test.js` 的 bond 播种、`test/memory.test.js` 给 `buildMemoryBlock` 传 `now`）。过零点跑全量会同时挂这三条，值得记住。
+- e2e 里 5 分钟 tick + 35% 骰子没法等也测不准：加了 `DSH_WEIXIN_PROACTIVE_TICK_MS`（只在测试里设），同时把 tick 间隔压到 20ms、把 `tickChance` 开到 1，一次 tick 必然做决定。生产代码不读这个变量。
+- 发出去的标记必须先摘再算字数：`pacing` 现在基于 `replyText`（已摘标记）计算延迟与分条，否则 `[表情:困了]` 会被算进正文长度，还可能把一张图挤进气泡里。
+- `tick()` 的返回值要带**最后一个候选的拒绝原因**，否则日志只有「没发」而看不出是退避还是窗外。
+
+### 测试
+
+- `test/stickers.test.js` 11 条（每张图是真 PNG、标记摘除与顺序、上限与 `dropped`、同 id 去重、未知名字、别名与尾缀粒子、全角冒号、连续空行折叠、hint 覆盖每张图）；`test/proactive.test.js` 14 条（五个闸门逐个、跨天重置、骰子、反窗口回落、状态读写与坏 JSON、调度器先说一次→退避→`noteInbound` 解除、空回复不发不计、fire 抛异常被吞且记 miss）；e2e 新增 `stickers`（标记变 `image_item`、`getuploadurl` 用 media_type 1）与 `proactive`（没有 inbound 也自己发一条、只发一条、状态文件记了内容）。全量 `npm test` → 546/546。

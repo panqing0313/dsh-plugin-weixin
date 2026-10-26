@@ -9,7 +9,16 @@ import { ReminderScheduler } from '../src/message/scheduler.js'
 import { SubscriptionScheduler, parseSubscriptionWhen } from '../src/message/subscriptions.js'
 
 /** Local wall-clock helpers: the quiet window is a LOCAL time concept. */
-const at = (h, m, s = 0) => new Date(2026, 9, 26, h, m, s, 0).getTime()
+/**
+ * A clock time on TODAY's date. A fixed calendar day would make these tests
+ * pass only on the day they were written: the subscription case below compares
+ * against "today 23:30".
+ */
+const at = (h, m, s = 0) => {
+  const d = new Date()
+  d.setHours(h, m, s, 0)
+  return d.getTime()
+}
 const overnight = { quietHoursEnabled: true, quietHoursStart: '23:00', quietHoursEnd: '07:00' }
 
 /** A quiet gate that defers exactly one trigger, then reports not-quiet. */
