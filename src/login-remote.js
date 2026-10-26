@@ -18,10 +18,26 @@ import {
 } from "../vendor/openclaw-weixin/auth/accounts.js";
 import { logger } from "../vendor/openclaw-weixin/util/logger.js";
 import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
-import { stateDir } from "./state.js";
 import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist, setAccountLabel, setAccountPaused } from "./account-registry.js";
-import { readSavedConfig } from "./state.js";
+import { readSavedConfig, stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
+import {
+    readGlobalMemory,
+    listConvMemories,
+    addGlobalFact,
+    removeGlobalFact,
+    clearConvMemory,
+} from "./memory.js";
+import {
+    listActiveOverrides,
+    readGlobalDefaultMode,
+    readPersonaStore,
+    setActiveMode,
+    writeGlobalDefaultMode,
+    writePersonaStore,
+    clearActiveMode,
+    MAX_CUSTOM_MODES,
+} from "./persona.js";
 import { qrDataUrl } from "./qr-png.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -395,6 +411,128 @@ export class WeixinLoginController extends TypertRemoteService {
         return removed ? { removed: true } : { removed: false, error: "\u6ca1\u6709\u8fd9\u4e2a\u7f16\u53f7" };
     }
 
+    // ── Persona + memory: the 个性化 tab's backend ─────────────────────────
+    // All methods read/write the same on-disk stores the WeChat-side /mode
+    // and /remember commands use, so card edits and chat edits always agree.
+
+    /** Everything the 个性化 tab renders for one account. */
+    async personaOverview(options) {
+        const opts = options ?? {};
+        const account = typeof opts.accountId === "string" && opts.accountId.trim() !== "" ? opts.accountId.trim() : "";
+        const root = stateDir();
+        const modes = readPersonaStore(root, { warn: (m) => logger.warn(m) });
+        return {
+            modes: modes.map((m) => ({ id: m.id, name: m.name, prompt: m.prompt, builtin: m.builtin === true })),
+            globalDefault: readGlobalDefaultMode(root, { warn: (m) => logger.warn(m) }),
+            overrides: listActiveOverrides(root, { warn: (m) => logger.warn(m) }),
+            memory: account === "" ? null : {
+                facts: readGlobalMemory(root, account, { warn: (m) => logger.warn(m) }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
+                conversations: listConvMemories(root, account, { warn: (m) => logger.warn(m) }),
+            },
+        };
+    }
+
+    /**
+     * Create or update a custom mode. Builtins are configuration the code
+     * ships with — the card may not edit them (and cannot delete them), so a
+     * persona can always be switched back to something known-good.
+     */
+    async personaModeSave(options) {
+        const opts = options ?? {};
+        const root = stateDir();
+        const warn = (m) => logger.warn(m);
+        const modes = readPersonaStore(root, { warn });
+        const name = typeof opts.name === "string" ? opts.name.trim() : "";
+        const prompt = typeof opts.prompt === "string" ? opts.prompt : "";
+        if (name === "") throw new RemoteError("mode name is required");
+        const id = typeof opts.id === "string" ? opts.id.trim() : "";
+        if (id === "") {
+            const customs = modes.filter((m) => m.builtin !== true).length;
+            if (customs >= MAX_CUSTOM_MODES) throw new RemoteError(`\u81ea\u5b9a\u4e49\u6a21\u5f0f\u6700\u591a ${MAX_CUSTOM_MODES} \u4e2a`);
+            // Fresh ids: derived from nothing the user controls is safest, but
+            // the card shows the id nowhere — a slug of the name is fine and
+            // stays stable across edits.
+            const freshId = `custom-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "mode"}-${Date.now().toString(36)}`;
+            if (modes.some((m) => m.id === freshId)) throw new RemoteError("mode id collision, retry");
+            modes.push({ id: freshId, name, prompt, builtin: false });
+        } else {
+            const existing = modes.find((m) => m.id === id);
+            if (existing === undefined) throw new RemoteError("\u6ca1\u6709\u8fd9\u4e2a\u6a21\u5f0f");
+            if (existing.builtin === true) throw new RemoteError("\u5185\u7f6e\u6a21\u5f0f\u4e0d\u80fd\u4fee\u6539");
+            existing.name = name;
+            existing.prompt = prompt;
+        }
+        writePersonaStore(root, modes, { warn });
+        return { ok: true };
+    }
+
+    /** Remove a CUSTOM mode; builtin refuses. Overrides pointing at it fall back to the default at read time (resolveMode). */
+    async personaModeRemove(modeId) {
+        const id = String(modeId ?? "").trim();
+        const root = stateDir();
+        const warn = (m) => logger.warn(m);
+        const modes = readPersonaStore(root, { warn });
+        const existing = modes.find((m) => m.id === id);
+        if (existing === undefined) throw new RemoteError("\u6ca1\u6709\u8fd9\u4e2a\u6a21\u5f0f");
+        if (existing.builtin === true) throw new RemoteError("\u5185\u7f6e\u6a21\u5f0f\u4e0d\u80fd\u5220\u9664");
+        writePersonaStore(root, modes.filter((m) => m.id !== id), { warn });
+        return { ok: true };
+    }
+
+    /** The account-wide default mode; '' clears (the schema `personaDefaultMode` rules again). */
+    async personaDefaultSet(modeId) {
+        const id = String(modeId ?? "").trim();
+        const root = stateDir();
+        if (id !== "") {
+            const modes = readPersonaStore(root, { warn: (m) => logger.warn(m) });
+            if (modes.some((m) => m.id === id) === false) throw new RemoteError("\u6ca1\u6709\u8fd9\u4e2a\u6a21\u5f0f");
+        }
+        writeGlobalDefaultMode(root, id, { warn: (m) => logger.warn(m) });
+        return { ok: true, globalDefault: id };
+    }
+
+    /** Drop one conversation's override so it follows the default again. */
+    async personaOverrideClear(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const conversationId = String(opts.conversationId ?? "").trim();
+        if (accountId === "" || conversationId === "") throw new RemoteError("accountId and conversationId are required");
+        clearActiveMode(stateDir(), accountId, conversationId, { warn: (m) => logger.warn(m) });
+        return { ok: true };
+    }
+
+    /** Same store /remember writes: numbered like /memory shows them. */
+    async memoryFactAdd(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const text = typeof opts.text === "string" ? opts.text : "";
+        if (accountId === "") throw new RemoteError("accountId is required");
+        const result = addGlobalFact(stateDir(), accountId, text, { warn: (m) => logger.warn(m) });
+        if (result.added === true) return { ok: true };
+        return { ok: false, reason: result.reason };
+    }
+
+    /** Index is 1-based, matching what /memory and this card print. */
+    async memoryFactRemove(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const index = Number(opts.index);
+        if (accountId === "") throw new RemoteError("accountId is required");
+        if (Number.isInteger(index) === false) throw new RemoteError("index is required");
+        const removed = removeGlobalFact(stateDir(), accountId, index, { warn: (m) => logger.warn(m) });
+        return { removed: removed.removed === true, text: removed.removed === true ? removed.text : undefined };
+    }
+
+    /** Wipe one conversation's summary/facts (the journal keeps flowing). */
+    async memoryConvClear(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const conversationId = String(opts.conversationId ?? "").trim();
+        if (accountId === "" || conversationId === "") throw new RemoteError("accountId and conversationId are required");
+        clearConvMemory(stateDir(), accountId, conversationId, { warn: (m) => logger.warn(m) });
+        return { ok: true };
+    }
+
     /** Message journal for the settings card: newest first, optional account filter. */    /** Message journal for the settings card: newest first, optional account filter. */
     async journal(options) {
         const opts = options ?? {};
@@ -591,4 +729,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel", "donateQr"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);

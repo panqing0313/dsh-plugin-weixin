@@ -552,6 +552,18 @@ export function parseSessionCommand(text) {
   if (remindListMatch !== null) return { command: 'remindlist' }
   const remindCancelMatch = /^\/remindcancel\s+(\S+)$/i.exec(trimmed)
   if (remindCancelMatch !== null) return { command: 'remindcancel', id: remindCancelMatch[1] }
+  // Persona + memory commands (personalization round). Parsing stays pure:
+  // each one is ANSWERED by a handler the inbound handler provides under
+  // context.persona, because the store and the mode table live with the
+  // plugin's state root, not in this module.
+  const modeMatch = /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i.exec(trimmed)
+  if (modeMatch !== null) return { command: 'mode', arg: modeMatch[1]?.trim() }
+  const rememberMatch = /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i.exec(trimmed)
+  if (rememberMatch !== null) return { command: 'remember', arg: rememberMatch[1]?.trim() ?? '' }
+  const forgetMatch = /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i.exec(trimmed)
+  if (forgetMatch !== null) return { command: 'forget', arg: forgetMatch[1]?.trim() }
+  const memoryMatch = /^\/(?:memory|记忆)$/i.exec(trimmed)
+  if (memoryMatch !== null) return { command: 'memory' }
   return undefined
 }
 
@@ -566,6 +578,10 @@ export const SESSION_COMMANDS_HELP = [
   '/use <序号> 切换到第几条',
   '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
   '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）',
+  '/mode [名称] 查看或切换对话模式（如 女友/男友/朋友；切换会开一条新会话线）',
+  '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）',
+  '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）',
+  '/memory 查看记住的内容和这段会话的记忆',
   '/status 查看当前账号和会话的状态（白名单、会话线等）',
   '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
   '/remindlist 查看这个账号还没发出的提醒',
@@ -586,14 +602,18 @@ export const SESSION_COMMANDS_HELP = [
  * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
  *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] },
  *   reminders?: import('./message/scheduler.js').ReminderScheduler,
- *   cancelRunningTurn?: () => string }} [context]
+ *   cancelRunningTurn?: () => string,
+ *   persona?: { mode?: (arg?: string) => string, remember?: (arg?: string) => string,
+ *     forget?: (arg?: string) => string, memory?: () => string }} [context]
  *   account-level facts for `/status`, assembled by the inbound handler;
  *   optional so the command works for bare callers too. `reminders` is the
  *   live scheduler for remind commands; without it /remind reports that
  *   scheduling is unavailable rather than crashing. `cancelRunningTurn` is the
  *   bridge's abort hook for `/cancel`: only the bridge holds the live agent
  *   handles, so this module asks it to do the interrupting and only relays the
- *   sentence it returns.
+ *   sentence it returns. `persona` bundles the four handlers for /mode,
+ *   /remember, /forget and /memory — the store lives at the state root, which
+ *   only the inbound handler knows.
  * @returns {string | undefined}
  */
 export function runSessionCommand(lines, conversationId, text, accountId, context) {
@@ -624,6 +644,15 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     const cancel = context?.cancelRunningTurn
     if (cancel === undefined) return '当前没有可中断的回合（这个入口拿不到正在运行的会话）。'
     return cancel()
+  }
+  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory') {
+    // All four answered by the inbound handler's persona bundle: it knows the
+    // state root, the mode table and the memory files. A bare caller says so
+    // instead of pretending it stored something.
+    const persona = context?.persona
+    const handler = persona === undefined ? undefined : persona[command.command]
+    if (typeof handler !== 'function') return '个性化功能在这个入口不可用（拿不到模式与记忆的存储）。'
+    return handler(command.arg)
   }
   if (command.command === 'help') {
     return SESSION_COMMANDS_HELP

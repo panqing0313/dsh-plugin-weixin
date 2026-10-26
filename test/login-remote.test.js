@@ -42,6 +42,7 @@ process.env.TMPDIR = TMP_ROOT
 const { WeixinLoginController } = await import('../src/login-remote.js')
 const { configureWeixinStateDir } = await import('../src/state.js')
 const { resolveStateDir: vendorStateDir } = await import('../vendor/openclaw-weixin/storage/state-dir.js')
+const { setActiveMode } = await import('../src/persona.js')
 
 after(() => {
   if (previousLogDir === undefined) delete process.env.DSH_WEIXIN_LOG_DIR
@@ -341,4 +342,102 @@ test('an expired QR code is replaced, and the refresh budget is finite', async (
   } finally {
     server.restore()
   }
+})
+
+// ── Persona + memory remote methods (the 个性化 tab's backend) ──────────────
+// These drive the SAME on-disk stores the WeChat-side /mode and /remember
+// commands use, so the guards here are about agreement: what the card saves
+// is what a conversation reads, builtins stay untouchable, and the numbered
+// memory list the card shows matches what /forget would remove.
+
+test('personaOverview seeds the builtin modes and reports overrides and memory', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.ok(overview.modes.length >= 4, 'the four builtins are seeded on first read')
+    assert.ok(overview.modes.every((m) => m.builtin === true))
+    assert.equal(overview.globalDefault, '')
+    assert.deepEqual(overview.overrides, [])
+    assert.deepEqual(overview.memory, { facts: [], conversations: [] })
+    assert.ok(fs.existsSync(path.join(root, 'persona-modes.json')), 'the catalog is seeded on disk')
+  })
+})
+
+test('personaModeSave creates a custom mode, edits it, and refuses builtins', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    await c.personaModeSave({ name: '导师', prompt: '像严师一样说话' })
+    let overview = await c.personaOverview({ accountId: 'bot1' })
+    const created = overview.modes.find((m) => m.name === '导师')
+    assert.ok(created, 'the custom mode is in the catalog')
+    assert.equal(created.builtin, false)
+    assert.ok(created.id.startsWith('custom-'))
+
+    await c.personaModeSave({ id: created.id, name: '严师', prompt: '更像严师了' })
+    overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.modes.find((m) => m.id === created.id)?.name, '严师')
+    assert.equal(overview.modes.length, overview.modes.filter((m) => m.id === created.id).length + overview.modes.length - 1)
+
+    // RemoteError(code, message…): this file's convention puts the human text
+    // in the code slot, so assert there (asserting .message would only see
+    // 'RemoteError').
+    const refuse = async (fn, text) => assert.rejects(fn, (err) => String(err.code ?? err.message).includes(text))
+    await refuse(() => c.personaModeSave({ id: 'girlfriend', name: 'x', prompt: 'y' }), '内置模式不能修改')
+    await refuse(() => c.personaModeRemove('girlfriend'), '内置模式不能删除')
+    await c.personaModeRemove(created.id)
+    overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.modes.find((m) => m.id === created.id), undefined)
+    assert.ok(overview.modes.some((m) => m.id === 'girlfriend'), 'builtins survive a custom removal')
+  })
+})
+
+test('personaDefaultSet + personaOverrideClear agree with what /mode would read', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    await c.personaDefaultSet('girlfriend')
+    assert.equal((await c.personaOverview({ accountId: 'bot1' })).globalDefault, 'girlfriend')
+    await assert.rejects(() => c.personaDefaultSet('no-such-mode'), (err) => String(err.code ?? err.message).includes('没有这个模式'))
+
+    // The stored default is what activeModeFor resolves for a bare conversation.
+    const { activeModeFor } = await import('../src/persona.js')
+    assert.equal(activeModeFor(root, 'bot1', 'conv1', 'default'), 'girlfriend')
+
+    // A per-conversation override wins, and the card can clear it back.
+    setActiveMode(root, 'bot1', 'conv1', 'friend', { warn: () => {} })
+    assert.equal(activeModeFor(root, 'bot1', 'conv1', 'default'), 'friend')
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.deepEqual(overview.overrides, [{ accountId: 'bot1', conversationId: 'conv1', modeId: 'friend' }])
+    await c.personaOverrideClear({ accountId: 'bot1', conversationId: 'conv1' })
+    assert.equal(activeModeFor(root, 'bot1', 'conv1', 'default'), 'girlfriend')
+    assert.equal((await c.personaOverview({ accountId: 'bot1' })).globalDefault, 'girlfriend')
+  })
+})
+
+test('memoryFactAdd/Remove round trip with 1-based indexes like /memory prints', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    assert.deepEqual(await c.memoryFactAdd({ accountId: 'bot1', text: '我对花生过敏' }), { ok: true })
+    assert.deepEqual(await c.memoryFactAdd({ accountId: 'bot1', text: '我对花生过敏' }), { ok: false, reason: 'duplicate' })
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.deepEqual(overview.memory.facts.map((f) => f.text), ['我对花生过敏'])
+    assert.deepEqual(overview.memory.facts.map((f) => f.index), [1])
+    const removed = await c.memoryFactRemove({ accountId: 'bot1', index: 1 })
+    assert.equal(removed.removed, true)
+    assert.equal(removed.text, '我对花生过敏')
+    assert.equal((await c.memoryFactRemove({ accountId: 'bot1', index: 5 })).removed, false)
+  })
+})
+
+test('memoryConvClear wipes the conversation summary the card lists', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { setConvSummary, listConvMemories } = await import('../src/memory.js')
+    await setConvSummary(root, 'bot1', 'conv9', '聊过晚饭和过敏的事', { warn: () => {} })
+    let overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.memory.conversations.length, 1)
+    assert.equal(overview.memory.conversations[0].conversationId, 'conv9', 'the stored id is authoritative, not the safeName')
+    await c.memoryConvClear({ accountId: 'bot1', conversationId: 'conv9' })
+    overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.deepEqual(overview.memory.conversations, [], 'an emptied memory is not listed at all')
+  })
 })

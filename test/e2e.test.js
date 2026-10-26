@@ -201,7 +201,7 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
+    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: false })
 
     const disposers = []
     const warnings = []
@@ -277,7 +277,7 @@ test('sourceContext on: the agent prompt carries a weixin_source block; off: it 
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, sourceContext })
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, sourceContext, memoryEnabled: false })
 
       const disposers = []
       const warnings = []
@@ -556,7 +556,7 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, messageJournal })
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, messageJournal, memoryEnabled: false })
 
       const disposers = []
       const warnings = []
@@ -1304,5 +1304,73 @@ test('a file the agent writes during the turn is sent even when the reply never 
     await new Promise((resolve) => cdn.close(resolve))
     fs.rmSync(stateRoot, { recursive: true, force: true })
     delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
+test('persona + memory: the prompt carries the mode block and the stored facts; off: neither', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  for (const memoryEnabled of [true, false]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-persona-${memoryEnabled}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      // A fact the user "remembered" before this message, and the girlfriend
+      // mode as the account default — both must reach the prompt as blocks
+      // ahead of the user's text.
+      fs.mkdirSync(path.join(stateRoot, 'memory'), { recursive: true })
+      fs.writeFileSync(path.join(stateRoot, 'memory', `global-${ACCOUNT_ID}.json`), JSON.stringify({
+        facts: [{ text: '我对花生过敏', at: 1700000000000 }],
+      }))
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona', create_time_ms: 21, item_list: [{ type: 1, text_item: { text: '晚上吃啥好' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled })
+
+      const disposers = []
+      const warnings = []
+      const ctx = {
+        logger: { info: () => {}, warn: (l) => warnings.push(l) },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      assert.ok(sent.length >= 1, `expected a reply (memoryEnabled=${memoryEnabled}; warnings: ${warnings.join(' | ')})`)
+      const prompt = sent[0].msg.item_list[0].text_item.text
+      if (memoryEnabled) {
+        // Persona first, then memory, then the user text — one tag each.
+        const personaAt = prompt.indexOf('<weixin_persona mode="女友">')
+        const memoryAt = prompt.indexOf('<weixin_memory>')
+        const textAt = prompt.indexOf('晚上吃啥好')
+        assert.ok(personaAt !== -1, prompt)
+        assert.ok(memoryAt !== -1, prompt)
+        assert.ok(personaAt < memoryAt && memoryAt < textAt, `order wrong: persona=${personaAt} memory=${memoryAt} text=${textAt}`)
+        assert.match(prompt, /会关心他的身体和心情/, 'the shipped girlfriend prompt body')
+        assert.match(prompt, /【长期记忆 · 关于用户】\n- 我对花生过敏/)
+        assert.match(prompt, /【最近消息】\n用户：晚上吃啥好/, 'the journal window folds in this very message')
+      } else {
+        // Memory off removes only the memory block — the persona mode table is
+        // a separate feature with its own switch (the mode itself).
+        assert.ok(prompt.includes('<weixin_persona mode="女友">'), prompt)
+        assert.ok(!prompt.includes('weixin_memory'), prompt)
+        assert.match(prompt, /晚上吃啥好/)
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
   }
 })

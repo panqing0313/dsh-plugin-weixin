@@ -372,6 +372,10 @@ test('/help lists every command with what it does', async () => {
     assert.match(reply, /\/remind <时间> <内容>/)
     assert.match(reply, /\/remindlist/)
     assert.match(reply, /\/remindcancel/)
+    assert.match(reply, /\/mode \[名称\]/)
+    assert.match(reply, /\/remember <内容>/)
+    assert.match(reply, /\/forget \[编号或关键词\]/)
+    assert.match(reply, /\/memory 查看记住的内容/)
     assert.deepEqual(sessionsOpened, [], '/help must not cost a model turn')
   })
 })
@@ -381,5 +385,111 @@ test('/帮助 is an alias for /help', async () => {
     fake.deliver('/帮助', 'm1')
     await waitFor(() => fake.outbound.length > 0, 'the help reply')
     assert.match(fake.outbound[0].text, /会话指令/)
+  })
+})
+
+test('/mode bare lists the modes with the current one marked', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/mode', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the mode list reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /当前对话模式：默认助手/)
+    assert.match(reply, /→默认助手（不扮演角色）/)
+    assert.match(reply, /女友/)
+    assert.match(reply, /男友/)
+    assert.match(reply, /朋友/)
+    assert.deepEqual(sessionsOpened, [], '/mode must not cost a model turn')
+  })
+})
+
+test('/mode 女友 switches, pins the override, and opens a fresh session line', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/mode 女友', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the switch reply')
+    assert.match(fake.outbound[0].text, /已切换到「女友」模式，并开启了一条新会话线/)
+    // The override landed in the state root as its own file.
+    const overrides = JSON.parse(fs.readFileSync(path.join(root, 'persona-active.json'), 'utf8'))
+    assert.equal(Object.values(overrides)[0], 'girlfriend')
+    // A follow-up /mode marks 女友 as current.
+    fake.deliver('/mode', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the second mode list')
+    assert.match(fake.outbound[1].text, /当前对话模式：女友/)
+    // Unknown names list what exists instead of guessing.
+    fake.deliver('/mode 不存在的模式', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the unknown-mode reply')
+    assert.match(fake.outbound[2].text, /没有叫「不存在的模式」的模式/)
+    assert.match(fake.outbound[2].text, /默认、女友、男友、朋友/)
+    // /mode 默认 pins default (it must NOT clear the override: the global
+    // default may itself be a persona).
+    fake.deliver('/mode 默认', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the back-to-default reply')
+    assert.match(fake.outbound[3].text, /已切回默认助手模式，并开启了一条新会话线/)
+    const after = JSON.parse(fs.readFileSync(path.join(root, 'persona-active.json'), 'utf8'))
+    assert.equal(Object.values(after)[0], 'default')
+    assert.deepEqual(sessionsOpened, [], 'no mode command may cost a model turn')
+  })
+})
+
+test('/mode by English id also works (girlfriend)', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/mode girlfriend', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the switch reply')
+    assert.match(fake.outbound[0].text, /已切换到「女友」模式/)
+  })
+})
+
+test('/remember stores a fact, /memory shows it, /forget removes it', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/remember', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the usage reply')
+    assert.match(fake.outbound[0].text, /用法：\/remember <要记住的内容>/)
+    fake.deliver('/remember 我对花生过敏', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the stored reply')
+    assert.match(fake.outbound[1].text, /已记住：我对花生过敏/)
+    const store = JSON.parse(fs.readFileSync(path.join(root, 'memory', 'global-bot1.json'), 'utf8'))
+    assert.deepEqual(store.facts.map((f) => f.text), ['我对花生过敏'])
+    fake.deliver('/remember 我对花生过敏', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the duplicate reply')
+    assert.match(fake.outbound[2].text, /这条已经记过了/)
+    fake.deliver('/memory', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the memory view')
+    assert.match(fake.outbound[3].text, /1\. 我对花生过敏/)
+    assert.match(fake.outbound[3].text, /长期记忆：/)
+    assert.match(fake.outbound[3].text, /本会话记忆：还没有摘要/)
+    fake.deliver('/forget 5', 'm5')
+    await waitFor(() => fake.outbound.length > 4, 'the bad index reply')
+    assert.match(fake.outbound[4].text, /没有第 5 条/)
+    fake.deliver('/forget 1', 'm6')
+    await waitFor(() => fake.outbound.length > 5, 'the forget reply')
+    assert.match(fake.outbound[5].text, /已忘掉：我对花生过敏/)
+    assert.deepEqual(sessionsOpened, [], 'no memory command may cost a model turn')
+  })
+})
+
+test('/forget by keyword: single hit forgets, several hits ask for the number', async () => {
+  await withPlugin(async ({ root, fake }) => {
+    fake.deliver('/remember 我对花生过敏', 'm1')
+    fake.deliver('/remember 我住在杭州', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'both facts stored')
+    fake.deliver('/forget 杭州', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the single-hit reply')
+    assert.match(fake.outbound[2].text, /已忘掉：我住在杭州/)
+    fake.deliver('/remember 花生油也别碰', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'second peanut fact stored')
+    fake.deliver('/forget 花生', 'm5')
+    await waitFor(() => fake.outbound.length > 4, 'the ambiguous reply')
+    assert.match(fake.outbound[4].text, /用编号指明删哪条/)
+    assert.match(fake.outbound[4].text, /1\. 我对花生过敏/)
+    fake.deliver('/forget 没这个词', 'm6')
+    await waitFor(() => fake.outbound.length > 5, 'the miss reply')
+    assert.match(fake.outbound[5].text, /没有找到含「没这个词」的记忆/)
+  })
+})
+
+test('a switching a mode does not disturb an ordinary queued message flow', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/mode 朋友', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the switch reply')
+    assert.match(fake.outbound[0].text, /已切换到「朋友」模式/)
   })
 })

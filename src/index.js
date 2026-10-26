@@ -49,6 +49,24 @@ import { isAccountPaused, touchAccount, allowlistForAccount, readRegistry, enrol
 // turn is still running; the predicate lives beside the parser so the two
 // cannot drift apart.
 import { isInterruptCommand } from './sessions.js'
+// Persona modes + conversation memory: the prompt seam and the /mode,
+// /remember, /forget, /memory handlers both need the same store.
+import {
+  buildPersonaBlock,
+  readPersonaStore,
+  resolveMode,
+  activeModeFor,
+  setActiveMode,
+  DEFAULT_MODE_ID,
+} from './persona.js'
+import {
+  buildMemoryBlock,
+  readGlobalMemory,
+  readConvMemory,
+  readRecentWindow,
+  addGlobalFact,
+  removeGlobalFact,
+} from './memory.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -101,6 +119,17 @@ export const Config = z.object({
     'Send audio attachments (wav, mp3, m4a, ogg, flac, silk, ...) as Weixin voice messages instead of file attachments. wav and silk are transcoded in-process; the rest need ffmpeg on PATH. A voice send that FAILS falls back to the plain file path — but the iLink server currently ACCEPTS a bot voice_item (ret=0) without ever delivering it (measured 2026-06 and again 2026-10-26 with a fresh token; upload and send both succeed), so with this on an audio attachment can silently vanish. Off by default until the server actually delivers bot voice.',
   ),
   messageJournal: z.boolean().default(true).description('Record recent inbound and outbound messages (message journal, shown on the settings card).'),
+  personaDefaultMode: z.string().default(DEFAULT_MODE_ID).description(
+    'The conversation style used when a Weixin chat has not picked one with /mode. Built-in modes: default (plain assistant), girlfriend 女友, boyfriend 男友, friend 朋友; custom modes are edited on the settings card\'s 个性化 tab. An unknown id here quietly falls back to default.',
+  ),
+  memoryEnabled: z.boolean().default(true).description(
+    'Inject a <weixin_memory> block into every prompt: global facts saved with /remember, the conversation\'s rolling summary (refreshed automatically every memorySummaryTurns turns), and the last few messages of this chat. /memory shows what is stored, /forget deletes. Turning this off stops the injection AND the /remember /forget commands.',
+  ),
+  memorySummaryTurns: z.number().min(1).default(10).description(
+    'How often (in agent turns per conversation) the background summarizer rewrites the conversation summary. The summarizer runs as a hidden side turn after a real turn finishes; it never sends anything to WeChat. 1 disables nothing — set memoryEnabled false for that.',
+  ),
+  memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
+  memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
   ),
@@ -771,6 +800,92 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
   // first-contact enrolment takes effect on the very message that triggered
   // it, without touching the per-handler `accountConfig` capture above.
   const effectiveConfig = { current: accountConfig }
+  // Persona + memory command handlers (/mode /remember /forget /memory), one
+  // bundle per conversation. Every call re-reads its store: the settings card
+  // can edit the mode table or the operator can /forget between two messages,
+  // and answering from a cached snapshot would quietly lie. Memory commands
+  // honour memoryEnabled being off; /mode does not — the mode table and the
+  // memory store are separate features.
+  const personaCommands = (conversationId) => {
+    const memoryOn = () => effectiveConfig.current.memoryEnabled !== false
+    const modeConfig = () => effectiveConfig.current
+    return {
+      mode: (arg) => {
+        const store = readPersonaStore(stateRoot, { warn })
+        const currentId = activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })
+        if (arg === undefined || arg === '') {
+          const current = resolveMode(store, currentId)
+          return [
+            `当前对话模式：${current?.name ?? currentId}。`,
+            ...store.map((m) => `${m.id === currentId ? '→' : '　'}${m.id === DEFAULT_MODE_ID ? '默认助手（不扮演角色）' : m.name} — /mode ${m.name === '' ? m.id : m.name}`),
+          ].join('\n')
+        }
+        // Users type the display name (女友), not the id (girlfriend) — match
+        // either, case-insensitively. The default mode additionally answers to
+        // the bare 「默认」, which is what a user says when they mean "no
+        // persona" (its display name 默认助手 is clunky to type).
+        const wanted = arg.trim().toLowerCase()
+        const matches = (m) => m.id.toLowerCase() === wanted
+          || m.name.toLowerCase() === wanted
+          || (m.id === DEFAULT_MODE_ID && wanted === '默认')
+        const match = store.find(matches)
+        if (match === undefined) {
+          return `没有叫「${arg}」的模式。可用：${store.map((m) => (m.id === DEFAULT_MODE_ID ? '默认' : m.name)).join('、')}`
+        }
+        if (match.id === currentId) return `已经是「${match.name}」模式了，没有变化。`
+        // Pin even `default`: the global default may be a persona, and "this
+        // conversation back to the plain assistant" is exactly what /mode 默认
+        // should mean here.
+        setActiveMode(stateRoot, accountId, conversationId, match.id, { warn })
+        // A mode switch opens a fresh session line (the approved behaviour):
+        // the previous persona is already in the old transcript, and starting
+        // clean is what makes the switch feel real. Same mechanics as /new.
+        bridge.lines.create(conversationId, accountId)
+        return `${match.id === DEFAULT_MODE_ID ? '已切回默认助手' : `已切换到「${match.name}」`}模式，并开启了一条新会话线。\n（之前的会话保留，/list 可以切回）`
+      },
+      remember: (arg) => {
+        if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'
+        if (arg === undefined || String(arg).trim() === '') return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏'
+        const result = addGlobalFact(stateRoot, accountId, arg, { warn, maxFacts: modeConfig().memoryGlobalMaxFacts })
+        if (result.added === true) return `已记住：${arg}\n（/memory 可以查看全部，/forget <编号> 可以删除）`
+        if (result.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
+        if (result.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
+        return '没存上，写入记忆文件失败了（详见日志）。'
+      },
+      forget: (arg) => {
+        if (memoryOn() === false) return '记忆功能当前是关闭的。'
+        const facts = readGlobalMemory(stateRoot, accountId, { warn }).facts
+        if (facts.length === 0) return '长期记忆还是空的，没有可忘掉的。'
+        if (arg === undefined || String(arg).trim() === '') {
+          return ['长期记忆（/forget <编号> 删除某一条）：', ...facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n')
+        }
+        const asIndex = Number(arg)
+        if (Number.isInteger(asIndex) === true) {
+          const removed = removeGlobalFact(stateRoot, accountId, asIndex, { warn })
+          return removed.removed === true ? `已忘掉：${removed.text}` : `没有第 ${asIndex} 条（现在共 ${facts.length} 条）。`
+        }
+        const keyword = String(arg).toLowerCase()
+        const hits = facts.map((f, i) => ({ index: i + 1, text: f.text })).filter((f) => f.text.toLowerCase().includes(keyword))
+        if (hits.length === 0) return `没有找到含「${arg}」的记忆。`
+        if (hits.length === 1) {
+          const removed = removeGlobalFact(stateRoot, accountId, hits[0].index, { warn })
+          return removed.removed === true ? `已忘掉：${removed.text}` : '没删掉，写入记忆文件失败了（详见日志）。'
+        }
+        return ['好几个都带这个词，用编号指明删哪条：', ...hits.map((h) => `${h.index}. ${h.text}`)].join('\n')
+      },
+      memory: () => {
+        if (memoryOn() === false) return '记忆功能当前是关闭的。'
+        const facts = readGlobalMemory(stateRoot, accountId, { warn }).facts
+        const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
+        const recent = readRecentWindow(stateRoot, accountId, conversationId, { warn })
+        const parts = []
+        parts.push(facts.length === 0 ? '长期记忆：还没有，用 /remember 教我。' : ['长期记忆：', ...facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
+        parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
+        parts.push(`最近消息窗口：${recent.length} 条`)
+        return parts.join('\n\n')
+      },
+    }
+  }
   return async (message) => {
     if (config.messageJournal === true && message.type === 'text') {
       journalInbound?.({
@@ -874,6 +989,7 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
         senders: effectiveConfig.current.allowedSenders ?? [],
       },
       reminders: reminderScheduler,
+      persona: personaCommands(message.conversationId),
     })
     if (commandReply !== undefined) {
       await sendChunked(transport, config, {
@@ -952,6 +1068,28 @@ function createInboundHandler({ config, accountId, transport, bridge, asrBridge,
     if (config.sourceContext === true) {
       prompt = weixinSourceBlock(message) + (prompt === '' ? '' : `\n\n${prompt}`)
     }
+
+    // Persona + memory: the same seam, right before the user's text. Persona
+    // (who the assistant is talking as) precedes memory (what it keeps
+    // knowing). Both re-read their stores per message — the settings card can
+    // switch a mode or /forget can run between two messages. A persona only
+    // changes tone; every builtin prompt says so, and the block is skipped
+    // entirely for `default` so a stock deployment spends zero extra tokens.
+    // Memory injects global facts, the conversation summary, and a recent
+    // window folded from the journal, each section omitted when empty.
+    const personaModes = readPersonaStore(stateRoot, { warn })
+    const personaBlock = buildPersonaBlock(resolveMode(personaModes, activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
+    const memoryBlock = effectiveConfig.current.memoryEnabled === true
+      ? buildMemoryBlock({
+          global: readGlobalMemory(stateRoot, accountId, { warn }),
+          conv: readConvMemory(stateRoot, accountId, message.conversationId, { warn }),
+          recent: readRecentWindow(stateRoot, accountId, message.conversationId, { warn }),
+        })
+      : ''
+    // Prepend in ONE join so the order stays persona → memory → user text
+    // (a per-block prepend loop would silently reverse it).
+    const blocks = [personaBlock, memoryBlock].filter((block) => block !== '')
+    if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 5. Drive the agent, then send the reply back in chunks.
     if (config.typingIndicator) await transport.setTyping(true, message.conversationId)

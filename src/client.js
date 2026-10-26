@@ -166,6 +166,95 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journal:result`, create: _statusResult },
 				},
+
+				{
+					id: `${PKG}#weixin/personaOverview`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaOverview",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaOverview:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaOverview:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/personaModeSave`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaModeSave",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaModeSave:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaModeSave:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/personaModeRemove`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaModeRemove",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "modeId", wire: "modeId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaModeRemove:p0`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaModeRemove:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/personaDefaultSet`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaDefaultSet",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "modeId", wire: "modeId", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaDefaultSet:p0`, create: _str } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaDefaultSet:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/personaOverrideClear`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaOverrideClear",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaOverrideClear:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaOverrideClear:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryFactAdd`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryFactAdd",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryFactAdd:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryFactAdd:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryFactRemove`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryFactRemove",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryFactRemove:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryFactRemove:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryConvClear`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryConvClear",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryConvClear:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryConvClear:result`, create: _statusResult },
+				},
 				{
 					id: `${PKG}#weixin/removeSession`,
 					service: "weixinLoginController",
@@ -1635,6 +1724,175 @@ window.__ModuleLoader__.load({
 						"在微信里用 /remind 安排；这里取消立即生效。")));
 			}
 
+
+		/** 个性化: persona modes + memory, the same stores the WeChat-side commands use. */
+		function PersonaSection({ ctx, t }) {
+			const [overview, setOverview] = react.useState(null);
+			const [accounts, setAccounts] = react.useState([]);
+			const [accountId, setAccountId] = react.useState("");
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+			const [notice, setNotice] = react.useState("");
+			const [editing, setEditing] = react.useState(null); // { id, name, prompt } | null
+			const [draftName, setDraftName] = react.useState("");
+			const [draftPrompt, setDraftPrompt] = react.useState("");
+			const [factDraft, setFactDraft] = react.useState("");
+
+			const load = async () => {
+				setBusy(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.personaOverview({ accountId }));
+					setError("");
+					setOverview(r);
+				} catch (e) {
+					setError(String(e?.code ?? e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			react.useEffect(() => {
+				// Accounts feed the memory picker only; a failure just means the
+				// plugin is not bound yet and the picker stays empty.
+				callRemote(() => ctx.remote.weixin.status()).then((s) => {
+					const list = Array.isArray(s?.accounts) ? s.accounts : [];
+					setAccounts(list);
+					setAccountId((current) => current || (list[0]?.accountId ?? ""));
+				}).catch(() => {});
+			}, []);
+
+			react.useEffect(() => {
+				load();
+			}, [accountId]);
+
+			const run = async (fn, okText) => {
+				setBusy(true);
+				setNotice("");
+				try {
+					await fn();
+					if (okText) setNotice(okText);
+					await load();
+				} catch (e) {
+					setNotice(String(e?.code ?? e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const saveMode = () => run(async () => {
+				await callRemote(() => ctx.remote.weixin.personaModeSave(editing?.id ? { id: editing.id, name: draftName, prompt: draftPrompt } : { name: draftName, prompt: draftPrompt }));
+				setEditing(null);
+				setDraftName("");
+				setDraftPrompt("");
+			}, t("Saved.", "已保存。"));
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Persona & memory", "个性化与记忆")),
+				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) }, t("Refresh", "刷新")));
+
+			if (error && overview === null) {
+				return createElement("div", { style: panelStyle }, head,
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "\u26a0"),
+						createElement("span", null, error)));
+			}
+
+			const modes = overview?.modes ?? [];
+			const overrides = overview?.overrides ?? [];
+			const memory = overview?.memory;
+			const textareaStyle = { ...inputStyle, flex: "1 1 auto", minHeight: 72, resize: "vertical" };
+
+			// ── Modes ──
+			const defaultOptions = [{ id: "", label: t("Follow the Options default", "跟随配置项默认") }, ...modes.map((m) => ({ id: m.id, label: m.name }))];
+			const modeRows = modes.map((m) => createElement("div", {
+				key: m.id,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.labelPrimary } },
+					m.name,
+					m.builtin === true ? createElement("span", { style: { color: C.labelTertiary, marginLeft: 4 } }, t("built-in", "内置")) : null),
+				createElement("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.labelTertiary } },
+					(m.prompt || "").split("\n")[0] || t("(no prompt — plain assistant)", "（无提示词——普通助手）")),
+				m.builtin === true ? null : createElement("button", { onClick: () => { setEditing(m); setDraftName(m.name); setDraftPrompt(m.prompt); }, disabled: busy, style: buttonStyleFor(busy) }, t("Edit", "编辑")),
+				m.builtin === true ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.personaModeRemove(m.id))), disabled: busy, style: buttonStyleFor(busy) }, t("Delete", "删除"))));
+
+			const modesPanel = createElement("div", { key: "modes", style: panelStyle },
+				head,
+				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
+					createElement("label", { style: { fontSize: 12, color: C.labelSecondary, flex: "0 0 auto" } }, t("Default mode", "默认模式")),
+					createElement("select", {
+						value: overview?.globalDefault ?? "",
+						onChange: (e) => run(() => callRemote(() => ctx.remote.weixin.personaDefaultSet(e.target.value)), t("Default updated. New conversations follow it at once.", "默认已更新，新会话立即生效。")),
+						disabled: busy,
+						style: inputStyle,
+					}, defaultOptions.map((o) => createElement("option", { key: o.id, value: o.id }, o.label)))),
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } }, modeRows),
+				createElement("p", { style: captionStyle }, t(
+					"Switch per conversation from WeChat with /mode 女友; switching opens a fresh session line.",
+					"在微信里用 /mode 女友 按会话切换；切换会开一条新会话线。")),
+				editing !== null || draftName !== "" ? null : createElement("button", { onClick: () => { setEditing({ id: "" }); setDraftName(""); setDraftPrompt(""); }, disabled: busy, style: buttonStyleFor(busy) }, t("Add a mode", "新增模式")),
+				editing === null ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
+					createElement("input", { value: draftName, onChange: (e) => setDraftName(e.target.value), placeholder: t("Mode name, e.g. 导师", "模式名称，如 导师"), style: inputStyle }),
+					createElement("textarea", { value: draftPrompt, onChange: (e) => setDraftPrompt(e.target.value), placeholder: t("How it should talk. This changes tone only — facts and tasks stay accurate.", "它该怎么说话。只改语气——事实与任务仍然准确。"), style: textareaStyle }),
+					createElement("div", { style: { display: "flex", gap: 8 } },
+						createElement("button", { onClick: saveMode, disabled: busy || draftName.trim() === "", style: buttonStyleFor(busy || draftName.trim() === "") }, t("Save", "保存")),
+						createElement("button", { onClick: () => { setEditing(null); setDraftName(""); setDraftPrompt(""); }, disabled: busy, style: buttonStyleFor(busy) }, t("Cancel", "取消")))));
+
+			// ── Overrides ──
+			const overrideRows = overrides.map((o) => createElement("div", {
+				key: `${o.accountId}|${o.conversationId}`,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, o.accountId),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere", color: C.labelTertiary } }, o.conversationId),
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelPrimary } }, o.modeId),
+				createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.personaOverrideClear({ accountId: o.accountId, conversationId: o.conversationId })), t("Cleared.", "已清除。")), disabled: busy, style: buttonStyleFor(busy) }, t("Clear", "清除"))));
+
+			const overridesPanel = createElement("div", { key: "overrides", style: panelStyle },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0 } }, t("Per-conversation overrides", "会话级覆盖")),
+				overrides.length === 0
+					? createElement("p", { style: hintStyle }, t("None — every conversation follows the default mode.", "没有——所有会话都跟随默认模式。"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, overrideRows));
+
+			// ── Memory ──
+			const factRows = (memory?.facts ?? []).map((f) => createElement("div", {
+				key: f.index,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, `${f.index}.`),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, f.text),
+				createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryFactRemove({ accountId, index: f.index }))), disabled: busy, style: buttonStyleFor(busy) }, t("Forget", "删除"))));
+
+			const convRows = (memory?.conversations ?? []).map((c) => createElement("div", {
+				key: c.conversationId ?? c.summary.slice(0, 12),
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
+					c.conversationId === null ? t("(older conversation)", "（较早会话）") : c.conversationId,
+					c.summary ? ` — ${c.summary}` : ""),
+				c.conversationId === null ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryConvClear({ accountId, conversationId: c.conversationId }))), disabled: busy, style: buttonStyleFor(busy) }, t("Clear", "清空"))));
+
+			const memoryPanel = accountId === "" ? null : createElement("div", { key: "memory", style: panelStyle },
+				createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+					createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Memory", "记忆")),
+					accounts.length > 1 ? createElement("select", { value: accountId, onChange: (e) => setAccountId(e.target.value), disabled: busy, style: { ...inputStyle, flex: "0 0 auto", width: "auto" } },
+						accounts.map((a) => createElement("option", { key: a.accountId, value: a.accountId }, a.label || a.accountId))) : null),
+				createElement("div", { style: { display: "flex", gap: 8, marginTop: 6 } },
+					createElement("input", { value: factDraft, onChange: (e) => setFactDraft(e.target.value), placeholder: t("Remember across conversations, e.g. 我对花生过敏", "跨会话记住一件事，如 我对花生过敏"), style: inputStyle }),
+					createElement("button", { onClick: () => run(async () => { await callRemote(() => ctx.remote.weixin.memoryFactAdd({ accountId, text: factDraft })); setFactDraft(""); }), disabled: busy || factDraft.trim() === "", style: buttonStyleFor(busy || factDraft.trim() === "") }, t("Remember", "记住"))),
+				factRows.length === 0
+					? createElement("p", { style: hintStyle }, t("No long-term facts yet. In WeChat: /remember …", "还没有长期记忆。在微信里：/remember …"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, factRows),
+				convRows.length > 0 ? createElement("p", { style: { ...captionStyle, marginTop: 8 } }, t("Conversation summaries (auto, every N turns — see Options)", "会话摘要（自动，每 N 回合——见配置项）")) : null,
+				convRows.length === 0 ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, convRows));
+
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+				modesPanel,
+				overridesPanel,
+				memoryPanel,
+				notice ? createElement("p", { style: hintStyle }, notice) : null);
+		}
+
 		/** Message journal: recent in/out traffic across accounts, newest first. */
 		function JournalSection({ ctx, t }) {
 			const [entries, setEntries] = react.useState(null);
@@ -2654,6 +2912,7 @@ window.__ModuleLoader__.load({
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t }) },
 					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
+					{ id: "persona", label: t("Persona", "个性化"), body: createElement(PersonaSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
 				const [tab, setTab] = react.useState(0);
