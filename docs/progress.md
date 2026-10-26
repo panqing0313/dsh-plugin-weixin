@@ -2565,7 +2565,7 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **教训**：脚本在「轮询注册表等新版本出现」这一步会因 npm 的异步处理（`Your package is being processed and may take a few minutes`）超时退出，此时 publish 其实已经成功、但后面的 **tag / push / 钉 profile 依赖** 三步都没跑。`npm view version` 还会短暂返回旧版本（`dist-tags` 已更新）——发布后要分别核对 `dist-tags`、`versions --json`、`dist.shasum`，并确认 tag 与 profile 依赖都落地。
 - 补做的事：`git tag -a v0.9.7` + 推送分支与 tag、`gh release create v0.9.7 --notes-file /tmp/notes-097.md`；profile `dsh-plugin-weixin` `^0.9.6 → ^0.9.7` + App 自带 pnpm `install --prefer-offline` 刷锁。
 
-## 表情图片与主动开口（2026-10-27，待随 0.9.8 发版）
+## 表情图片与主动开口（2026-10-27，随 0.9.8 发版）
 
 ### 行为
 
@@ -2584,7 +2584,7 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 - `test/stickers.test.js` 11 条（每张图是真 PNG、标记摘除与顺序、上限与 `dropped`、同 id 去重、未知名字、别名与尾缀粒子、全角冒号、连续空行折叠、hint 覆盖每张图）；`test/proactive.test.js` 14 条（五个闸门逐个、跨天重置、骰子、反窗口回落、状态读写与坏 JSON、调度器先说一次→退避→`noteInbound` 解除、空回复不发不计、fire 抛异常被吞且记 miss）；e2e 新增 `stickers`（标记变 `image_item`、`getuploadurl` 用 media_type 1）与 `proactive`（没有 inbound 也自己发一条、只发一条、状态文件记了内容）。全量 `npm test` → 546/546。
 
-## 记忆模型 v2 与表情包扩容（2026-10-27，待随 0.9.8 发版）
+## 记忆模型 v2 与表情包扩容（2026-10-27，随 0.9.8 发版）
 
 ### 行为
 
