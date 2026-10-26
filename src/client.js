@@ -2159,7 +2159,9 @@ window.__ModuleLoader__.load({
 					setGroups(r?.groups ?? []);
 					setDraft(next);
 					setConfigPath(r?.configFile ?? "");
-					setOpenGroup((current) => current || r?.groups?.[0]?.group || "");
+					// Groups start collapsed: the form is long, and a pre-opened
+					// first section pushed the other eight below the fold on every
+					// visit. Reloading keeps whichever section is open now.
 					return r;
 				} catch {
 					// The remote may not be mounted yet; the card shows the
@@ -2279,7 +2281,7 @@ window.__ModuleLoader__.load({
 									onChange: () => set(option.value),
 									style: { accentColor: C.primaryFill, cursor: "pointer" },
 								}),
-								createElement("span", {}, t(option.label, option.labelEn)))));
+								createElement("span", {}, t(option.labelEn, option.label)))));
 				} else if (field.type === "stringList" || field.type === "text") {
 					control = createElement("textarea", {
 						value,
@@ -2300,7 +2302,7 @@ window.__ModuleLoader__.load({
 							onChange: (event) => set(event.target.value),
 							style: { ...inputStyle, flex: "0 0 auto", width: 160 },
 						}),
-						field.unit ? createElement("span", { style: captionStyle }, t(field.unit, field.unitEn)) : null);
+						field.unit ? createElement("span", { style: captionStyle }, t(field.unitEn, field.unit)) : null);
 				} else {
 					control = createElement("input", {
 						type: "text",
@@ -2316,7 +2318,7 @@ window.__ModuleLoader__.load({
 					},
 					createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
 						createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary } },
-							t(field.label, field.labelEn)),
+							t(field.labelEn, field.label)),
 						// Where the value comes from decides what a reset will
 						// do, so it is shown rather than inferred.
 						field.source === "saved"
@@ -2337,7 +2339,7 @@ window.__ModuleLoader__.load({
 								}, t("Reset", "恢复默认"))
 							: null),
 					control,
-					createElement("p", { style: captionStyle }, t(field.hint, field.hintEn)),
+					createElement("p", { style: captionStyle }, t(field.hintEn, field.hint)),
 					changed
 						? createElement("p", { style: { ...captionStyle, color: C.warn } }, t("Not saved yet.", "尚未保存。"))
 						: null);
@@ -2361,7 +2363,7 @@ window.__ModuleLoader__.load({
 								},
 							},
 							createElement("span", { style: { color: C.labelTertiary, fontSize: 11 } }, open ? "▾" : "▸"),
-							createElement("span", { style: panelTitleStyle }, t(group.group, group.groupEn)),
+							createElement("span", { style: panelTitleStyle }, t(group.groupEn, group.group)),
 							createElement("span", { style: { ...captionStyle, marginLeft: "auto" } },
 								`${(group.fields ?? []).length}`)),
 						open ? createElement("div", {}, ...(group.fields ?? []).map(renderField)) : null);

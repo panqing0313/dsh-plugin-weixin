@@ -42,20 +42,43 @@ const createElement = (type, props, ...children) => ({ type, props: props ?? {},
  * stable.
  */
 function createHooks() {
-  const slots = []
-  let cursor = 0
+  // Slots live per component instance, not in one flat list. A flat list only
+  // works while the rendered tree keeps its shape: switching tabs replaces one
+  // section with another, and the newcomer's second `useState` would read a
+  // leftover slot from the section that just unmounted. React keys hooks per
+  // instance, so this fake does too — the key is the component's position in the
+  // tree plus its name, which differs whenever a different component takes the
+  // spot (that is exactly the tab-switch case).
+  const frames = new Map()
+  let currentFrame = null
   let pendingEffects = []
   let root = null
   let tree = null
   let renderPass = false
   let dirty = false
 
+  const frameFor = (key) => {
+    let frame = frames.get(key)
+    if (!frame) {
+      frame = { slots: [], cursor: 0 }
+      frames.set(key, frame)
+    }
+    return frame
+  }
+
+  /** Take the next hook slot of the component being rendered. */
+  const nextSlot = () => {
+    const frame = currentFrame
+    const index = frame.cursor
+    frame.cursor += 1
+    return { frame, index }
+  }
+
   const sameDeps = (a, b) =>
     a !== undefined && b !== undefined && a.length === b.length && a.every((v, i) => Object.is(v, b[i]))
 
   /** Render once and hand back the element tree. */
   const paint = () => {
-    cursor = 0
     pendingEffects = []
     renderPass = true
     try {
@@ -87,24 +110,35 @@ function createHooks() {
   }
 
   /** Call every function component in the tree, then keep the host elements. */
-  const renderTree = (node) => {
+  const renderTree = (node, path = 'root') => {
     // The root is handed over as the component itself, so accept a bare function
     // as well as an element whose `type` is one.
-    if (typeof node === 'function') return renderTree(node({}))
+    if (typeof node === 'function') return renderComponent(node, {}, path)
     if (node === null || node === undefined || typeof node !== 'object') return node
-    if (Array.isArray(node)) return node.map(renderTree)
-    if (typeof node.type === 'function') return renderTree(node.type(node.props ?? {}))
+    if (Array.isArray(node)) return node.map((child, index) => renderTree(child, `${path}.${index}`))
+    if (typeof node.type === 'function') return renderComponent(node.type, node.props ?? {}, path)
     // A host element is kept, but its children still have to be rendered: this is
     // what reaches LoginSection and AsrSection, which are nested inside it.
-    return { ...node, children: (node.children ?? []).map(renderTree) }
+    return { ...node, children: (node.children ?? []).map((child, index) => renderTree(child, `${path}.${index}`)) }
+  }
+
+  const renderComponent = (component, props, path) => {
+    const previous = currentFrame
+    currentFrame = frameFor(`${path}#${component.name || 'anonymous'}`)
+    currentFrame.cursor = 0
+    try {
+      return renderTree(component(props), path)
+    } finally {
+      currentFrame = previous
+    }
   }
 
   const api = {
     createElement,
     useState(initial) {
-      const i = cursor++
-      if (!slots[i]) slots[i] = { value: typeof initial === 'function' ? initial() : initial }
-      const slot = slots[i]
+      const { frame, index } = nextSlot()
+      if (!frame.slots[index]) frame.slots[index] = { value: typeof initial === 'function' ? initial() : initial }
+      const slot = frame.slots[index]
       return [
         slot.value,
         (next) => {
@@ -116,21 +150,21 @@ function createHooks() {
       ]
     },
     useRef(initial) {
-      const i = cursor++
-      if (!slots[i]) slots[i] = { current: initial }
-      return slots[i]
+      const { frame, index } = nextSlot()
+      if (!frame.slots[index]) frame.slots[index] = { current: initial }
+      return frame.slots[index]
     },
     useCallback(fn, deps) {
-      const i = cursor++
-      const slot = slots[i]
-      if (!slot || !sameDeps(slot.deps, deps)) slots[i] = { fn, deps }
-      return slots[i].fn
+      const { frame, index } = nextSlot()
+      const slot = frame.slots[index]
+      if (!slot || !sameDeps(slot.deps, deps)) frame.slots[index] = { fn, deps }
+      return frame.slots[index].fn
     },
     useEffect(fn, deps) {
-      const i = cursor++
-      const slot = slots[i]
+      const { frame, index } = nextSlot()
+      const slot = frame.slots[index]
       const changed = !slot || !sameDeps(slot.deps, deps)
-      slots[i] = { deps }
+      frame.slots[index] = { deps }
       if (changed) pendingEffects.push(fn)
     },
   }
@@ -639,4 +673,63 @@ test('the left sidebar panel opens the same card inside the page gutter', async 
   for (const label of ['微信账号', '会话', '配置项', '统计', '个性化', '关于']) {
     assert.ok(text.includes(label), `the panel page must show the card's "${label}" tab, got: ${text}`)
   }
+})
+
+test('the options form speaks the UI language, and starts folded', async () => {
+  // The form used to call `t(field.label, field.labelEn)` while the locale
+  // helper is `(en, zh)` — so a Chinese UI showed every group heading, field
+  // label and hint in English. English text is not visibly wrong to a source
+  // assertion, so this renders the form and checks the words.
+  const host = fakeHost([])
+  host.weixinConfig = {
+    namespace: 'weixinConfig',
+    list: async () => ({
+      configFile: '/tmp/config.json',
+      groups: [
+        {
+          group: '基本',
+          groupEn: 'Basics',
+          fields: [{
+            path: 'sendIntervalMs',
+            type: 'number',
+            label: '发送间隔',
+            labelEn: 'Send interval',
+            hint: '两条消息之间至少等这么久',
+            hintEn: 'Minimum gap between two messages',
+            unit: '毫秒',
+            unitEn: 'ms',
+            value: 800,
+            defaultValue: 800,
+            source: 'default',
+          }],
+        },
+        { group: '权限', groupEn: 'Access', fields: [] },
+      ],
+    }),
+    save: async () => ({ groups: [] }),
+    reset: async () => ({ groups: [] }),
+  }
+  const card = await mountCard(host)
+  await card.click('配置项')
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const folded = textOf(card.render())
+  assert.ok(folded.includes('基本'), `the group heading must be Chinese, got: ${folded}`)
+  assert.ok(folded.includes('权限'), 'every group heading is listed')
+  assert.ok(!folded.includes('Basics'), `English headings must not leak into a Chinese UI, got: ${folded}`)
+  assert.ok(!folded.includes('发送间隔'), 'groups start folded: no field is rendered until one is opened')
+
+  // Open the first group: the field label, its unit and its hint are all Chinese.
+  let groupButton = null
+  walk(card.render(), (node) => {
+    if (groupButton || node.type !== 'button') return
+    if (textOf(node).includes('基本')) groupButton = node
+  })
+  assert.ok(groupButton, 'the group heading is a button the operator can open')
+  await groupButton.props.onClick()
+  const opened = textOf(card.render())
+  assert.ok(opened.includes('发送间隔'), `the field label must be Chinese, got: ${opened}`)
+  assert.ok(opened.includes('两条消息之间至少等这么久'), 'the hint is translated too')
+  assert.ok(opened.includes('毫秒'), 'the unit is translated too')
+  assert.ok(!opened.includes('Send interval'), 'no English label survives in a Chinese UI')
 })
