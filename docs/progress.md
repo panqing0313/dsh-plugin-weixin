@@ -6,7 +6,7 @@
 
 - **版本**：`0.9.7`，2026-10-26 已发布（npm `latest`、tag `v0.9.7`、GitHub release 三者齐全；注册表 `dist.shasum` `d9c57ddf…` / `dist.integrity` `sha512-xQMIszgs…`、`gitHead` `c3fb808` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
 - **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
-- **测试**：`npm test` → `tests 546 / pass 546 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。
+- **测试**：`npm test` → `tests 559 / pass 559 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；待随 0.9.8 发版。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -2583,3 +2583,34 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 ### 测试
 
 - `test/stickers.test.js` 11 条（每张图是真 PNG、标记摘除与顺序、上限与 `dropped`、同 id 去重、未知名字、别名与尾缀粒子、全角冒号、连续空行折叠、hint 覆盖每张图）；`test/proactive.test.js` 14 条（五个闸门逐个、跨天重置、骰子、反窗口回落、状态读写与坏 JSON、调度器先说一次→退避→`noteInbound` 解除、空回复不发不计、fire 抛异常被吞且记 miss）；e2e 新增 `stickers`（标记变 `image_item`、`getuploadurl` 用 media_type 1）与 `proactive`（没有 inbound 也自己发一条、只发一条、状态文件记了内容）。全量 `npm test` → 546/546。
+
+## 记忆模型 v2 与表情包扩容（2026-10-27，待随 0.9.8 发版）
+
+### 行为
+
+- **结构化记忆**（`src/memory.js`）：`readGlobalMemory` 现在返回 `{facts, profile, events, digest, digestAt}`。`sanitizeProfile` 只认 `call/schedule/likes/dislikes/dates` 五个字段（字符串截 200、列表 ≤10、日期必须 `YYYY-MM-DD`）；`sanitizeEvents` 会丢掉 `when` 早于今天−2 天的事件（`EVENT_GRACE_DAYS`）并截断到 20 条；事实多了 `weight`（1–5，`clampWeight`）。新 API：`saveProfile`（卡片显式编辑，语义是**替换**它提到的那个字段/列表）、`addEvent`/`removeEvent`/`completeEvent`、`setDigest`、`replaceFacts`（只有整理会调）、`formatProfile`/`formatEvents`。
+- **注入顺序与预算**（`buildMemoryBlock`）：`【我们】bond` → `【长期记忆 · 关于用户】`（digest 打头，然后档案行，再按 weight 降序塞事实，逐行扣 `maxChars`，放不下就 break）→ `【事件与待办】` → `【本会话记忆】` → `【最近消息】`。`budget = max(160, maxChars)`。
+- **抽取**（`src/memory-summarizer.js`）：摘要 prompt 改成要求**一个 JSON 对象**（`summary` / `facts` / `events` / `profile`），`parseMemoryReply` 取最外层 `{…}` 解析；成功后写 conv 摘要、按每条事实 `addGlobalFact(weight: 4)`、`addEvent`、`saveProfile(mergeProfile(...))`。**解析失败回退**成把整段文本当摘要（旧侧会话、不听话的模型都不会丢摘要）。
+- **整理**（`consolidate`）：事实 ≥ `CONSOLIDATE_MIN_FACTS`（10）且距 `digestAt` ≥ 6 小时才跑；prompt 要求 `{"digest": "≤200 字人物小传", "facts": [{"text","weight"}]}`，成功后 `setDigest` + `replaceFacts`；非 JSON 只记日志、保留旧小传；`consolidating` Set 防并发。
+- **记忆专用模型**：`memoryProvider`/`memoryModel` → `memoryRoute()`；`createMemorySummarizer({route})` 把它传给 `bridge.summarize({route})`；`AgentBridge.#setup(routeOverride)` 用它覆盖默认 route，`#attachNew(sessionId, sideMeta, route)` 透传；侧会话 id 由 `key|provider/model` 派生（**换模型必须新开侧会话**，已建会话改不了 route）。
+- **卡片**：`personaOverview.memory` 增加 `profile/events(带 index 与 done)/digest/digestAt`；新增远程方法 `memoryProfileSave`/`memoryEventAdd`/`memoryEventDone`/`memoryEventRemove`；个性化页签的记忆面板加了档案编辑（称呼/作息/喜欢/不喜欢 + 保存档案）、小传只读展示、事件列表（完成/删除）与添加行。
+- **/memory**：按 bond → 人物小传 → 关于你的档案 → 事件与待办 → 长期记忆 → 本会话记忆 → 最近消息窗口 输出。
+- **表情包 36 张**（`scripts/make-stickers.py`）：`BASE`(12 重画) + `CUTE`(12) + 三个角色包（`neko` 4 / `whale-girl` 4 / `daughter` 4）。`stickers.js` 拆成 `BASE_STICKERS`/`CUTE_STICKERS`/`MODE_STICKERS`，API 变成 `stickersForMode(modeId)`、`resolveSticker(name, modeId)`、`takeStickers(text, {max, modeId})`、`stickerHint(modeId)`；调用点全部传当前模式 id（回复路径、proactive fire、styleBlock）。
+
+### 坑与教训
+
+- `#attachNew` 里写 `options.route` 而 `options` 是 `attach` 的参数 → 普通消息全部 `ReferenceError: options is not defined`（被 `turn failed:` 捕获）。签名必须显式带 `route`：`#attachNew(sessionId, sideMeta, route)`。
+- 生成图标的 `python3` 带 PIL 才是 `python3.13`（conda），系统 `python3` 没有 Pillow。
+- 装饰坐标必须在脸圆半径内，否则被裁成游离小点；`bow` 一开始用三角多边形，缩小后像冰淇淋/翅膀 → 改成三个圆（左右环 + 结）；`pat` 用两条弧像划痕 → 改成手掌圆角矩形 + 三根手指；`d.ellipse(..., fill=(0,0,0,0))` 想挖月牙会**真的把脸挖个洞**（RGBA 直接替换像素）。
+- `buildMemoryBlock` 的 `maxChars` 有 160 的下限（`max(160, maxChars)`），所以「紧预算只留 digest」的测试要拿一段比 160 更长的 digest 来卡。
+- consolidation 用例必须用**被测账号**播种 journal（`seedJournal(conv, account)`），否则 recent window 为空、summarizeNow 直接 return。
+- 卡片测试里 `saveProfile` 是**替换**语义（显式编辑），模型抽取是 `mergeProfile` 的**并集**语义 —— 这两条别混，测试各钉一条。
+
+### 测试
+
+- `test/stickers.test.js` 16 条（36 张真 PNG、三包计数、`stickersForMode` 过滤、角色包必须对应真实内置模式、猫贴纸在非猫模式解析不出来、hint 只列本模式）。
+- `test/memory.test.js` 16 条（新增：档案 merge 只认已知字段 + 列表显式替换 + 日期校验；事件空/重复/完成/删除/越界/过期剪枝；digest 领衔 + 重要度排序 + 紧预算只留 digest）。
+- `test/memory-summarizer.test.js` 11 条（新增：JSON 回复落 summary/facts(weight 4)/events/profile；代码围栏可解析、纯文本回退；12 条事实触发整理并 6 小时内不再触发；`route` 透传）。
+- `test/login-remote.test.js` 18 条（新增：档案保存、事件增删改、小传只读、参数校验）。
+- `test/client-remote.test.js` 17 条（新增 4 个描述符，排序数组按字母插好）；e2e 的 summarizer 用例更新断言（fake 回声里含 JSON 模板，摘要取自模板样例）。
+- 全量 `npm test` → **559/559**（~47s）。
