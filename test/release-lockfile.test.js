@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { manifestVersionProblems } from '../bin/release.mjs'
+import { manifestVersionProblems, VERSION_FILES, snapshotTextFiles } from '../bin/release.mjs'
 
 /**
  * The release script's preflight guard, exercised on fixture manifests.
@@ -76,4 +76,22 @@ test('an unreadable lockfile cannot be waved through', (t) => {
 	const { problems } = manifestVersionProblems(root)
 	assert.equal(problems.length, 1)
 	assert.match(problems[0], /^package-lock\.json cannot be read as JSON: /)
+})
+
+/**
+ * A dry run must leave the tree exactly as it found it, and that promise is a
+ * snapshot of the files the bump rewrites. It once missed `src/client.js`, so a
+ * green "tree unchanged" line hid a bumped PLUGIN_VERSION. Pinning the file list
+ * keeps the bump and the snapshot from drifting apart again.
+ */
+test('the dry-run snapshot covers every file the version bump rewrites', () => {
+  const root = path.resolve(import.meta.dirname, '..')
+  const snapshot = snapshotTextFiles(root)
+  assert.deepEqual(snapshot.map((f) => f.path), VERSION_FILES)
+  for (const file of snapshot) {
+    assert.ok(file.text.length > 0, `${file.path} must be readable so a dry run can restore it`)
+  }
+  // The client constant is rewritten by the bump, so it must be snapshotted.
+  assert.ok(VERSION_FILES.includes('src/client.js'), 'src/client.js carries PLUGIN_VERSION')
+  assert.match(snapshot.find((f) => f.path === 'src/client.js').text, /const PLUGIN_VERSION = "\d+\.\d+\.\d+";/)
 })

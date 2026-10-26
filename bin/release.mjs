@@ -722,9 +722,17 @@ function main() {
 	process.stdout.write(`release:  https://github.com/${repo}/releases/tag/v${version}\n`)
 }
 
+/**
+ * Every file `bumpVersion` rewrites. One list for both jobs: the dry run's
+ * snapshot and, by eye, the bump itself. It was two lists once — the snapshot
+ * forgot `src/client.js`, so a dry run reported "tree unchanged" while leaving
+ * the card's PLUGIN_VERSION bumped.
+ */
+export const VERSION_FILES = ['package.json', 'package-lock.json', 'src/client.js', 'README.md']
+
 /** Read the files the version bump rewrites, so a dry run can put them back. */
-function snapshotTextFiles() {
-	return ['package.json', 'package-lock.json', 'README.md'].map((p) => ({ path: p, text: fs.readFileSync(path.join(ROOT, p), 'utf8') }))
+export function snapshotTextFiles(root = ROOT) {
+	return VERSION_FILES.map((p) => ({ path: p, text: fs.readFileSync(path.join(root, p), 'utf8') }))
 }
 
 function restoreTextFiles(snapshot) {
