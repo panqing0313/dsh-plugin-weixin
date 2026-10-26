@@ -24,6 +24,8 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
   assert.match(card[0], /createElement\\?\(RemindersSection, \{ ctx, t \}\\?\)/, 'the reminders tab must render its own section')
   assert.match(card[0], /id: "journal"/, 'the journal tab must exist beside the other tabs')
   assert.match(card[0], /createElement\(JournalSection, \{ ctx, t \}\)/, 'the journal tab must render its own section')
+  assert.match(card[0], /id: "stats"/, 'the stats tab must exist beside the other tabs')
+  assert.match(card[0], /createElement\(StatsSection, \{ ctx, t \}\)/, 'the stats tab must render its own section')
   assert.match(card[0], /id: "persona"/, 'the persona tab must exist beside the other tabs')
   assert.match(card[0], /createElement\(PersonaSection, \{ ctx, t \}\)/, 'the persona tab must render its own section')
   assert.match(card[0], /id: "about"/, 'the About tab must exist beside the other tabs')

@@ -65,6 +65,7 @@ function donateQrDataUrl() {
 import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
 import { readJournalRange, renderChatMarkdown } from "./message/chat-export.js";
+import { computeStats } from "./message/stats.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -584,6 +585,19 @@ export class WeixinLoginController extends TypertRemoteService {
         return { count: entries.length, chars: markdown.length, markdown };
     }
 
+    /**
+     * 统计页签: in/out counts, a daily series, the 24-hour distribution and the
+     * busiest conversations — computed from the journal on every read, so it
+     * can never disagree with the journal tab next to it.
+     */
+    async stats(options) {
+        const opts = options ?? {};
+        const daysRaw = Number(opts.days);
+        const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(Math.floor(daysRaw), 90) : 14;
+        const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
+        return computeStats(stateDir(), { days, accountId });
+    }
+
     async pause(accountId) {
         const id = String(accountId ?? "").trim();
         if (!id) throw new RemoteError("account id is required");
@@ -771,4 +785,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);

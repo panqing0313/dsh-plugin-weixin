@@ -177,6 +177,17 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journalExport:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/stats`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "stats",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/stats:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/stats:result`, create: _statusResult },
+				},
 
 				{
 					id: `${PKG}#weixin/personaOverview`,
@@ -2010,6 +2021,111 @@ window.__ModuleLoader__.load({
 						"最新在前，最近 50 条。\u2191 机器人发出，\u2193 收到。")));
 			}
 
+		/**
+		 * 统计页签. Reads journal-derived stats: totals, a per-day series, the
+		 * 24-hour distribution and the busiest conversations. Bars are plain
+		 * divs — inline styles only, so the card has no charting dependency.
+		 */
+		function StatsSection({ ctx, t }) {
+			const [stats, setStats] = react.useState(null);
+			const [days, setDays] = react.useState(14);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+
+			const load = async () => {
+				setBusy(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.stats({ days }));
+					setError("");
+					setStats(r);
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			react.useEffect(() => {
+				load();
+			}, [days]);
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Statistics", "统计")),
+				createElement("select", {
+					value: String(days),
+					onChange: (e) => setDays(Number(e.target.value)),
+					disabled: busy,
+					style: { ...inputStyle, flex: "0 0 auto", width: "auto" },
+				},
+					[7, 14, 30].map((n) => createElement("option", { key: n, value: String(n) }, t(`Last ${n} days`, `最近 ${n} 天`)))),
+				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) }, t("Refresh", "刷新")));
+
+			if (error) {
+				return createElement("div", { style: panelStyle }, head,
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "\u26a0"),
+						createElement("span", null, error)));
+			}
+
+			const total = stats?.total ?? { in: 0, out: 0, all: 0 };
+			const daily = Array.isArray(stats?.daily) ? stats.daily : [];
+			const hours = Array.isArray(stats?.hours) ? stats.hours : [];
+			const conversations = Array.isArray(stats?.conversations) ? stats.conversations : [];
+			const maxDaily = Math.max(1, ...daily.map((d) => d.all));
+			const maxHour = Math.max(1, ...hours);
+
+			const summaryRow = createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, lineHeight: "18px", color: C.labelSecondary } },
+				createElement("span", null, t("Total", "总计"), ": ", createElement("strong", { style: { color: C.labelPrimary } }, String(total.all))),
+				createElement("span", null, "\u2193 ", t("received", "收到"), ": ", createElement("strong", { style: { color: C.labelPrimary } }, String(total.in))),
+				createElement("span", null, "\u2191 ", t("sent", "发出"), ": ", createElement("strong", { style: { color: C.labelPrimary } }, String(total.out))));
+
+			const dayBars = daily.map((d) => createElement("div", {
+				key: d.day,
+				style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, lineHeight: "16px", color: C.labelSecondary },
+			},
+				createElement("span", { style: { flex: "0 0 88px", color: C.labelTertiary } }, d.day.slice(5)),
+				createElement("div", { style: { flex: "1 1 auto", height: 8, borderRadius: RADIUS.pill, background: C.moduleFill ?? "transparent", border: `1px solid ${C.border}`, overflow: "hidden" } },
+					createElement("div", { style: { width: `${Math.round((d.all / maxDaily) * 100)}%`, height: "100%", background: C.primaryFill } })),
+				createElement("span", { style: { flex: "0 0 56px", textAlign: "right", color: C.labelPrimary } }, `${d.all}`),
+				createElement("span", { style: { flex: "0 0 72px", color: C.labelTertiary } }, `\u2193${d.in} \u2191${d.out}`)));
+
+			// 24-hour distribution: 24 thin columns.
+			const hourBars = hours.map((count, hour) => createElement("div", {
+				key: hour,
+				title: `${String(hour).padStart(2, "0")}:00 — ${count}`,
+				style: { flex: "1 1 0", display: "flex", flexDirection: "column", justifyContent: "flex-end", height: 48 },
+			},
+				createElement("div", { style: { height: `${Math.round((count / maxHour) * 100)}%`, minHeight: count > 0 ? 2 : 0, background: C.primaryFill, borderRadius: 2 } })));
+			const hourAxis = createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.labelTertiary } },
+				createElement("span", null, "00"), createElement("span", null, "06"), createElement("span", null, "12"), createElement("span", null, "18"), createElement("span", null, "23"));
+
+			const convRows = conversations.map((c) => createElement("div", {
+				key: `${c.accountId}|${c.conversationId}`,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, c.accountId),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, c.conversationId),
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelPrimary } }, String(c.all)),
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, `\u2193${c.in} \u2191${c.out}`)));
+
+			return createElement("div", { style: panelStyle }, head,
+				summaryRow,
+				total.all === 0
+					? createElement("p", { style: hintStyle }, t("No messages in this window yet.", "这个时间窗口里还没有消息。"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+						createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, dayBars),
+						createElement("div", null,
+							createElement("p", { style: { ...captionStyle, marginBottom: 4 } }, t("By hour of day", "按小时分布")),
+							createElement("div", { style: { display: "flex", gap: 2, alignItems: "flex-end" } }, hourBars),
+							hourAxis),
+						conversations.length === 0 ? null : createElement("div", null,
+							createElement("p", { style: { ...captionStyle, marginBottom: 4 } }, t("Busiest conversations", "最活跃的会话")),
+							createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, convRows))),
+				createElement("p", { style: captionStyle },
+					t("Computed live from the message journal. \u2191 sent by the bot, \u2193 received.",
+						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")));
+			}
+
 		function ConfigSection({ ctx, t }) {
 			const [groups, setGroups] = react.useState([]);
 			const [draft, setDraft] = react.useState({});
@@ -2966,6 +3082,7 @@ window.__ModuleLoader__.load({
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t }) },
+					{ id: "stats", label: t("Stats", "统计"), body: createElement(StatsSection, { ctx, t }) },
 					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
 					{ id: "persona", label: t("Persona", "个性化"), body: createElement(PersonaSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },

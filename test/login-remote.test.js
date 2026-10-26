@@ -394,6 +394,33 @@ test('journalExport renders the journal window as markdown', async () => {
   })
 })
 
+test('stats reports the journal window as numbers the card can chart', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { appendJournal } = await import('../src/message/journal.js')
+    appendJournal(root, { dir: 'in', accountId: 'bot1', conversationId: 'c1', text: '早', at: Date.now() })
+    appendJournal(root, { dir: 'out', accountId: 'bot1', conversationId: 'c1', text: '早呀', at: Date.now() })
+    appendJournal(root, { dir: 'in', accountId: 'bot2', conversationId: 'c2', text: '别家', at: Date.now() })
+
+    const r = await c.stats({ days: 7 })
+    assert.equal(r.days, 7)
+    assert.equal(r.daily.length, 7)
+    assert.equal(r.total.all, 3)
+    assert.equal(r.hours.length, 24)
+    assert.equal(r.conversations.length, 2)
+
+    const mine = await c.stats({ days: 7, accountId: 'bot1' })
+    assert.equal(mine.total.all, 2)
+    assert.equal(mine.conversations.length, 1)
+
+    // The day count is clamped, and nonsense falls back to the default.
+    const clamped = await c.stats({ days: 500 })
+    assert.equal(clamped.days, 90)
+    const fallback = await c.stats({})
+    assert.equal(fallback.days, 14)
+  })
+})
+
 test('personaOverview seeds the builtin modes and reports overrides and memory', async () => {
   await withStateRoot(async (root) => {
     const c = controller()

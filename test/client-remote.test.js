@@ -235,6 +235,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/resume',
         'weixin/sessions',
         'weixin/startLogin',
+        'weixin/stats',
         'weixin/status',
         'weixin/submitVerifyCode',
         'weixin/useSession',
