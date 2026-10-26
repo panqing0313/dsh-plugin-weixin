@@ -24,6 +24,15 @@ export const DEFAULT_MEMORY_GLOBAL_MAX_CHARS = 1500;
 export const DEFAULT_MEMORY_CONV_MAX_CHARS = 1200;
 export const DEFAULT_MEMORY_RECENT_TURNS = 5;
 export const DEFAULT_MEMORY_RECENT_TEXT_CHARS = 160;
+/** How much of the injected block the account-level memory may occupy. */
+export const DEFAULT_MEMORY_PROFILE_MAX_CHARS = 600;
+/** Events kept on disk: a to-do list that grows forever stops being read. */
+export const DEFAULT_MEMORY_EVENT_MAX = 20;
+/** An undated event is a note; a dated one is dropped this many days late. */
+export const EVENT_GRACE_DAYS = 2;
+export const DEFAULT_FACT_WEIGHT = 3;
+export const FACT_WEIGHT_MIN = 1;
+export const FACT_WEIGHT_MAX = 5;
 const MEMORY_DIR = 'memory';
 
 const noopWarn = () => {};
@@ -63,6 +72,11 @@ function writeJsonSafe(file, value, warn, label) {
     }
 }
 
+function clampWeight(value) {
+    if (typeof value !== 'number' || Number.isFinite(value) === false) return DEFAULT_FACT_WEIGHT;
+    return Math.min(FACT_WEIGHT_MAX, Math.max(FACT_WEIGHT_MIN, Math.round(value)));
+}
+
 function sanitizeFacts(raw) {
     if (Array.isArray(raw) !== true) return [];
     const facts = [];
@@ -70,15 +84,76 @@ function sanitizeFacts(raw) {
         const text = typeof entry === 'string' ? entry : (entry !== null && typeof entry === 'object' ? entry.text : undefined);
         if (typeof text !== 'string' || text.trim() === '') continue;
         const at = entry !== null && typeof entry === 'object' && typeof entry.at === 'number' ? entry.at : 0;
-        facts.push({ text: text.trim(), at });
+        const weight = clampWeight(entry !== null && typeof entry === 'object' ? entry.weight : undefined);
+        facts.push({ text: text.trim(), at, weight });
     }
     return facts;
 }
 
+/**
+ * The structured profile: the handful of fields a person keeps about someone
+ * they talk to every day. Free-text facts still exist for everything else; this
+ * is the part worth a stable slot in the prompt.
+ */
+function sanitizeProfile(value) {
+    const empty = { call: '', schedule: '', likes: [], dislikes: [], dates: [] };
+    if (value === null || typeof value !== 'object') return empty;
+    const raw = value;
+    const text = (v) => (typeof v === 'string' ? v.trim().slice(0, 200) : '');
+    const list = (v) => (Array.isArray(v) ? v.map(text).filter((item) => item !== '').slice(0, 10) : []);
+    const dates = Array.isArray(raw.dates)
+        ? raw.dates
+            .map((entry) => (entry !== null && typeof entry === 'object'
+                ? { label: text(entry.label), date: text(entry.date) }
+                : undefined))
+            .filter((entry) => entry !== undefined && entry.label !== '' && /^\d{4}-\d{2}-\d{2}$/.test(entry.date))
+            .slice(0, 10)
+        : [];
+    return { call: text(raw.call), schedule: text(raw.schedule), likes: list(raw.likes), dislikes: list(raw.dislikes), dates };
+}
+
+function profileIsEmpty(profile) {
+    return profile.call === '' && profile.schedule === ''
+        && profile.likes.length === 0 && profile.dislikes.length === 0 && profile.dates.length === 0;
+}
+
+/**
+ * Dated events and to-dos. A date that has been in the past for longer than
+ * EVENT_GRACE_DAYS is pruned on read: keeping "明天体检" around a week later is
+ * worse than forgetting it.
+ */
+function sanitizeEvents(raw, now) {
+    if (Array.isArray(raw) !== true) return [];
+    const today = dayString(now);
+    const kept = [];
+    for (const entry of raw) {
+        const text = entry !== null && typeof entry === 'object' ? entry.text : undefined;
+        if (typeof text !== 'string' || text.trim() === '') continue;
+        const when = entry !== null && typeof entry === 'object' && typeof entry.when === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(entry.when)
+            ? entry.when
+            : '';
+        if (when !== '' && when < dayString(Date.parse(`${today}T00:00:00`) - EVENT_GRACE_DAYS * 86_400_000)) continue;
+        kept.push({
+            text: text.trim().slice(0, 200),
+            when,
+            done: entry !== null && typeof entry === 'object' && entry.done === true,
+            at: entry !== null && typeof entry === 'object' && typeof entry.at === 'number' ? entry.at : 0,
+        });
+    }
+    return kept.slice(-DEFAULT_MEMORY_EVENT_MAX);
+}
+
 /** The account-level fact list: [{text, at}], oldest first. */
-export function readGlobalMemory(stateRoot, accountId, { warn = noopWarn } = {}) {
+export function readGlobalMemory(stateRoot, accountId, { warn = noopWarn, now = Date.now() } = {}) {
     const parsed = readJsonSafe(globalMemoryPath(stateRoot, accountId), {}, warn, 'global memory');
-    return { facts: sanitizeFacts(parsed.facts) };
+    return {
+        facts: sanitizeFacts(parsed.facts),
+        profile: sanitizeProfile(parsed.profile),
+        events: sanitizeEvents(parsed.events, now),
+        digest: typeof parsed.digest === 'string' ? parsed.digest.trim() : '',
+        digestAt: typeof parsed.digestAt === 'number' ? parsed.digestAt : 0,
+    };
 }
 
 /**
@@ -92,6 +167,7 @@ export function addGlobalFact(stateRoot, accountId, text, {
     now = Date.now(),
     maxFacts = DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
     maxChars = DEFAULT_MEMORY_GLOBAL_MAX_CHARS,
+    weight = DEFAULT_FACT_WEIGHT,
 } = {}) {
     const trimmed = String(text ?? '').trim();
     if (trimmed === '') return { added: false, reason: 'empty' };
@@ -104,7 +180,7 @@ export function addGlobalFact(stateRoot, accountId, text, {
     if (memory.facts.reduce((sum, fact) => sum + fact.text.length, 0) + trimmed.length > maxChars) {
         return { added: false, reason: 'cap' };
     }
-    memory.facts.push({ text: trimmed, at: now });
+    memory.facts.push({ text: trimmed, at: now, weight: clampWeight(weight) });
     return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
         ? { added: true }
         : { added: false, reason: 'write-failed' };
@@ -121,6 +197,117 @@ export function removeGlobalFact(stateRoot, accountId, index, { warn = noopWarn 
     return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
         ? { removed: true, text: fact.text }
         : { removed: false, reason: 'write-failed' };
+}
+
+/**
+ * Merge a patch into the structured profile. Only the five known fields are
+ * accepted, each clamped, so a model that invents `{"gender": ...}` cannot grow
+ * the file sideways.
+ */
+export function saveProfile(stateRoot, accountId, patch, { warn = noopWarn } = {}) {
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    const merged = sanitizeProfile({ ...sanitizeProfile(current.profile), ...(patch ?? {}) });
+    current.profile = merged;
+    return writeJsonSafe(file, current, warn, 'global memory')
+        ? { ok: true, profile: merged }
+        : { ok: false, profile: merged };
+}
+
+/** Lines a profile renders to, shared by the prompt block, /memory and the card. */
+export function formatProfile(profile) {
+    const lines = [];
+    if (profile === null || typeof profile !== 'object') return lines;
+    if (profile.call !== '') lines.push(`- 称呼：${profile.call}`);
+    if (profile.schedule !== '') lines.push(`- 作息：${profile.schedule}`);
+    if (profile.likes.length > 0) lines.push(`- 喜欢：${profile.likes.join('、')}`);
+    if (profile.dislikes.length > 0) lines.push(`- 不喜欢：${profile.dislikes.join('、')}`);
+    if (profile.dates.length > 0) {
+        lines.push(`- 重要日期：${profile.dates.map((entry) => `${entry.label} ${entry.date}`).join('；')}`);
+    }
+    return lines;
+}
+
+/** Lines the event list renders to. */
+export function formatEvents(events) {
+    if (Array.isArray(events) !== true) return [];
+    return events.map((event) => {
+        const box = event.done === true ? '✅' : '·';
+        return event.when === '' ? `- ${box} ${event.text}` : `- ${box} [${event.when}] ${event.text}`;
+    });
+}
+
+/**
+ * Add a dated (or undated) event / to-do. Returns { added } or
+ * { added: false, reason } — same refuse-rather-than-forget rule as facts.
+ */
+export function addEvent(stateRoot, accountId, { text, when = '' } = {}, { warn = noopWarn, now = Date.now() } = {}) {
+    const trimmed = String(text ?? '').trim();
+    if (trimmed === '') return { added: false, reason: 'empty' };
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    const events = sanitizeEvents(current.events, now);
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(String(when)) ? String(when) : '';
+    if (events.some((event) => event.text === trimmed && event.when === day)) {
+        return { added: false, reason: 'duplicate' };
+    }
+    if (events.length >= DEFAULT_MEMORY_EVENT_MAX) return { added: false, reason: 'cap' };
+    events.push({ text: trimmed.slice(0, 200), when: day, done: false, at: now });
+    current.events = events;
+    return writeJsonSafe(file, current, warn, 'global memory')
+        ? { added: true }
+        : { added: false, reason: 'write-failed' };
+}
+
+/** Remove an event by its 1-based number (what /memory prints). */
+export function removeEvent(stateRoot, accountId, index, { warn = noopWarn, now = Date.now() } = {}) {
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    const events = sanitizeEvents(current.events, now);
+    const position = Number(index);
+    if (Number.isInteger(position) === false || position < 1 || position > events.length) {
+        return { removed: false, reason: 'no-such-index' };
+    }
+    const [event] = events.splice(position - 1, 1);
+    current.events = events;
+    return writeJsonSafe(file, current, warn, 'global memory')
+        ? { removed: true, text: event.text }
+        : { removed: false, reason: 'write-failed' };
+}
+
+/** Mark an event done (it stays visible, struck through in the card). */
+export function completeEvent(stateRoot, accountId, index, { warn = noopWarn, now = Date.now() } = {}) {
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    const events = sanitizeEvents(current.events, now);
+    const position = Number(index);
+    if (Number.isInteger(position) === false || position < 1 || position > events.length) {
+        return { done: false, reason: 'no-such-index' };
+    }
+    events[position - 1].done = true;
+    current.events = events;
+    return writeJsonSafe(file, current, warn, 'global memory')
+        ? { done: true, text: events[position - 1].text }
+        : { done: false, reason: 'write-failed' };
+}
+
+/** Write the consolidated 人物小传 (and remember when it was written). */
+export function setDigest(stateRoot, accountId, text, { warn = noopWarn, now = Date.now() } = {}) {
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    const trimmed = String(text ?? '').trim().slice(0, 1200);
+    if (trimmed === '') return false;
+    current.digest = trimmed;
+    current.digestAt = now;
+    return writeJsonSafe(file, current, warn, 'global memory');
+}
+
+/** Replace the whole fact list — the consolidation pass owns this operation. */
+export function replaceFacts(stateRoot, accountId, facts, { warn = noopWarn } = {}) {
+    const file = globalMemoryPath(stateRoot, accountId);
+    const current = readJsonSafe(file, {}, warn, 'global memory');
+    current.facts = sanitizeFacts(facts);
+    return writeJsonSafe(file, current, warn, 'global memory');
 }
 
 /** The conversation-level store: rolling summary + durable per-chat facts. */
@@ -358,16 +545,53 @@ export function readRecentWindow(stateRoot, accountId, conversationId, {
  * with nothing at all injects nothing, so turning memory on costs zero
  * tokens until there is something to remember.
  */
-export function buildMemoryBlock({ global, conv, recent, now = Date.now(), includeBond = true } = {}) {
+export function buildMemoryBlock({
+    global,
+    conv,
+    recent,
+    now = Date.now(),
+    includeBond = true,
+    maxChars = DEFAULT_MEMORY_GLOBAL_MAX_CHARS,
+} = {}) {
     const sections = [];
     // The bond line ("认识第 N 天 · 此刻：…") is an emotional frame, so a stock
     // assistant conversation leaves it out — see `isCompanionMode`.
     const bondText = includeBond ? bondLine(conv?.bond, now) : '';
     if (bondText !== '') sections.push(`【我们】${bondText}`);
-    const globalFacts = global?.facts ?? [];
-    if (globalFacts.length > 0) {
-        sections.push(['【长期记忆 · 关于用户】', ...globalFacts.map((fact) => `- ${fact.text}`)].join('\n'));
+
+    const profile = sanitizeProfile(global?.profile);
+    const digest = typeof global?.digest === 'string' ? global.digest.trim() : '';
+    const facts = Array.isArray(global?.facts) ? global.facts : [];
+    const events = Array.isArray(global?.events) ? global.events : [];
+
+    // Long-term memory shares ONE character budget: the digest is the
+    // compressed truth and goes first, the profile slots are fixed-size, and
+    // whatever is left buys facts by importance. A chattier memory therefore
+    // squeezes the fact list — it never inflates the prompt.
+    let budget = Math.max(160, Math.floor(maxChars));
+    const longLines = [];
+    if (digest !== '') {
+        longLines.push(digest);
+        budget -= digest.length;
     }
+    for (const line of formatProfile(profile)) {
+        if (line.length > budget) break;
+        longLines.push(line);
+        budget -= line.length;
+    }
+    const ranked = [...facts].sort((a, b) => (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
+        || (b.at ?? 0) - (a.at ?? 0));
+    for (const fact of ranked) {
+        const line = `- ${fact.text}`;
+        if (line.length > budget) break;
+        longLines.push(line);
+        budget -= line.length;
+    }
+    if (longLines.length > 0) sections.push(['【长期记忆 · 关于用户】', ...longLines].join('\n'));
+
+    const eventLines = formatEvents(events);
+    if (eventLines.length > 0) sections.push(['【事件与待办】', ...eventLines].join('\n'));
+
     if (conv !== undefined) {
         const lines = [];
         if (typeof conv.summary === 'string' && conv.summary.trim() !== '') lines.push(`摘要：${conv.summary.trim()}`);

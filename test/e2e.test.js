@@ -1545,7 +1545,9 @@ test('memory summarizer: every settled turn counts; at the cadence a side sessio
     try { dirListing = fs.readdirSync(path.join(stateRoot, 'memory')).join(',') } catch (e) { dirListing = `unreadable: ${e.message}` }
     assert.ok(conv !== null && conv.summary !== '', `no conv summary (sent: ${sent.length}; warnings: ${ctx.__warnings.join(' | ')}; memory dir: ${dirListing})`)
     assert.equal(conv.updatedTurn, 1, 'exactly one settled turn was counted')
-    assert.match(conv.summary, /只输出摘要本身/, 'the fake echoed the summarizer prompt back — that IS the digest here')
+    // The fake echoes the prompt back; the prompt contains the JSON template,
+    // so the summarizer parses that and stores its sample summary text.
+    assert.match(conv.summary, /摘要/, 'the fake echoed the summarizer prompt back — that IS the digest here')
     assert.ok(conv.bond && conv.bond.msgs === 1 && typeof conv.bond.firstDay === 'string' && typeof conv.bond.mood === 'string' && conv.bond.mood !== '', `the affinity bond rode the same write: ${JSON.stringify(conv.bond)}`)
     assert.equal(sent.length, 1, `the summarizer must never send a WeChat bubble; sent: ${sent.map((m) => JSON.stringify(m.msg.item_list[0]?.text_item?.text ?? m.msg.item_list[0]?.type))}`)
     const outboundText = sent[0].msg.item_list[0].text_item.text

@@ -69,6 +69,8 @@ import {
   addGlobalFact,
   removeGlobalFact,
   bondLine,
+  formatEvents,
+  formatProfile,
   listConvMemories,
   setConvRecentSession,
 } from './memory.js'
@@ -142,6 +144,8 @@ export const Config = z.object({
   ),
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
+  memoryProvider: z.string().default('').description('Provider for the memory model (summaries, fact extraction and consolidation). Empty follows the conversation model — the summaries then cost exactly what a normal turn costs.'),
+  memoryModel: z.string().default('').description('Model id for the memory model. Only used together with memoryProvider; a cheaper model here keeps background memory work off the expensive route.'),
   memoryRecentTurns: z.number().min(0).default(5).description(
     'How many recent user/assistant messages, at most, the memory block repeats back to the model. Only used when a conversation line is COLD (a brand new session: first message, /new, /mode switch, or a line whose session no longer holds the history) — a resumed line already carries those messages in its own history, so repeating them every turn would spend tokens on nothing. 0 turns the window off entirely.',
   ),
@@ -396,10 +400,19 @@ export function apply(ctx, config) {
       // The P2 memory summarizer: folds recent turns into conv memory every
       // memorySummaryTurns settled turns. Reads the CURRENT account config per
       // call (the card can flip the knobs live); account-scoped per call.
+      // The memory model (optional): background summaries, fact extraction and
+      // consolidation run on a cheaper route when one is configured, so a
+      // chatty day of persona upkeep cannot spend the conversation's model.
+      const memoryRoute = () => {
+        const provider = String(config.memoryProvider ?? '').trim()
+        const model = String(config.memoryModel ?? '').trim()
+        return provider !== '' && model !== '' ? { provider, model } : undefined
+      }
       memorySummarizer = createMemorySummarizer({
         bridge,
         stateRoot,
         config: () => config,
+        route: memoryRoute,
         logger: { log: (line) => log(line), errLog: (line) => warn(line) },
       })
 
@@ -545,7 +558,7 @@ export function apply(ctx, config) {
             ? readOrInferLifeState(stateRoot, candidate.accountId, { now, bond: convMemory.bond, warn })
             : null
           const personaBlock = buildPersonaBlock(candidate.mode)
-          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false })
+          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id })
           const lifeBlockText = life === null ? '' : lifeBlock(life)
           const memoryBlock = live.memoryEnabled === true
             ? buildMemoryBlock({
@@ -583,7 +596,9 @@ export function apply(ctx, config) {
           })
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') return ''
-          const plan = live.stickerEnabled !== false ? takeStickers(text) : { text, stickers: [] }
+          const plan = live.stickerEnabled !== false
+            ? takeStickers(text, { modeId: candidate.mode?.id })
+            : { text, stickers: [] }
           if (live.typingIndicator === true) {
             await transport.setTyping(true, candidate.conversationId).catch(() => {})
             await sleep(1200)
@@ -1174,13 +1189,19 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       },
       memory: () => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
-        const facts = readGlobalMemory(stateRoot, accountId, { warn }).facts
+        const store = readGlobalMemory(stateRoot, accountId, { warn })
         const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
         const recent = readRecentWindow(stateRoot, accountId, conversationId, { warn })
         const parts = []
-        const bond = companionHere() ? bondLine(readConvMemory(stateRoot, accountId, conversationId, { warn }).bond) : ''
+        const bond = companionHere() ? bondLine(conv.bond) : ''
         if (bond !== '') parts.push(bond)
-        parts.push(facts.length === 0 ? '长期记忆：还没有，用 /remember 教我。' : ['长期记忆：', ...facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
+        if (store.digest !== '') parts.push(`人物小传：${store.digest}`)
+        const profileLines = formatProfile(store.profile)
+        if (profileLines.length > 0) parts.push(['关于你的档案：', ...profileLines].join('\n'))
+        if (store.events.length > 0) parts.push(['事件与待办：', ...formatEvents(store.events)].join('\n'))
+        parts.push(store.facts.length === 0
+          ? '长期记忆：还没有，用 /remember 教我。'
+          : ['长期记忆：', ...store.facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
         parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
         parts.push(`最近消息窗口：${recent.length} 条`)
         return parts.join('\n\n')
@@ -1403,7 +1424,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // tool: it answers instantly, in one message, and never pretends it slept
     // badly.
     const companion = isCompanionMode(activeMode)
-    const styleBlock = companion ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false }) : ''
+    const styleBlock = companion
+      ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id })
+      : ''
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
     // those messages in its own history, and the inbound journal write above
@@ -1567,7 +1590,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       // image bubble instead). Markers are stripped before anything counts
       // characters, or the bracket would show up in the bubble itself.
       const stickerPlan = companion && effectiveConfig.current.stickerEnabled !== false
-        ? takeStickers(outbound.text)
+        ? takeStickers(outbound.text, { modeId: activeMode?.id })
         : { text: outbound.text, stickers: [], dropped: [] }
       if (stickerPlan.dropped.length > 0) {
         warn(`dropped sticker marker(s): ${stickerPlan.dropped.join(', ')}`)

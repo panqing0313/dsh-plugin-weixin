@@ -256,6 +256,50 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaOverrideClear:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/memoryEventAdd`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryEventAdd",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventAdd:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventAdd:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryEventDone`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryEventDone",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventDone:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventDone:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryEventRemove`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryEventRemove",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventRemove:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryEventRemove:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/memoryProfileSave`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "memoryProfileSave",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryProfileSave:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/memoryProfileSave:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/memoryFactAdd`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1770,6 +1814,8 @@ window.__ModuleLoader__.load({
 			const [draftName, setDraftName] = react.useState("");
 			const [draftPrompt, setDraftPrompt] = react.useState("");
 			const [factDraft, setFactDraft] = react.useState("");
+			const [profileDraft, setProfileDraft] = react.useState(null);
+			const [eventDraft, setEventDraft] = react.useState({ text: "", when: "" });
 
 			const load = async () => {
 				setBusy(true);
@@ -1896,6 +1942,67 @@ window.__ModuleLoader__.load({
 					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, overrideRows));
 
 			// ── Memory ──
+			// ── 人物档案 (structured memory) ──
+			// The model fills this in on its own during summaries; the inputs
+			// here are for the cases where you want to say it once and have it
+			// stick. Saves merge into the same file the chat-side /memory reads.
+			const profile = memory?.profile ?? { call: "", schedule: "", likes: [], dislikes: [], dates: [] };
+			const profileDraftValue = profileDraft ?? {
+				call: profile.call ?? "",
+				schedule: profile.schedule ?? "",
+				likes: (profile.likes ?? []).join("、"),
+				dislikes: (profile.dislikes ?? []).join("、"),
+			};
+			const splitList = (value) => String(value ?? "").split(/[、,，]/).map((item) => item.trim()).filter((item) => item !== "");
+			const profileField = (key, label, placeholder) => createElement("label", { key, style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.labelSecondary } },
+				createElement("span", { style: { flex: "0 0 64px", color: C.labelTertiary } }, label),
+				createElement("input", {
+					value: profileDraftValue[key] ?? "",
+					onChange: (e) => setProfileDraft({ ...profileDraftValue, [key]: e.target.value }),
+					placeholder,
+					style: inputStyle,
+				}));
+			const profilePanel = memory === null || memory === undefined ? null : createElement("div", { key: "profile", style: { marginTop: 10 } },
+				createElement("p", { style: { ...captionStyle, margin: 0 } }, t("Profile of the person (the model fills this in; edit it if it got something wrong)", "关于对方的档案（模型会自己填，写错了可以在这里改）")),
+				memory.digest !== "" && memory.digest !== undefined
+					? createElement("p", { style: { fontSize: 12, lineHeight: "18px", color: C.labelTertiary, margin: "4px 0 0" } }, `${t("Lifeline", "人物小传")}：${memory.digest}`)
+					: null,
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } },
+					profileField("call", t("Call them", "称呼"), t("how they want to be addressed", "对方希望怎么被称呼")),
+					profileField("schedule", t("Schedule", "作息"), t("e.g. up at 7, asleep at 2", "如 早上七点起、夜里两点睡")),
+					profileField("likes", t("Likes", "喜欢"), t("comma separated", "用、或逗号分开")),
+					profileField("dislikes", t("Dislikes", "不喜欢"), t("comma separated", "用、或逗号分开")),
+					(profile.dates ?? []).length === 0 ? null : createElement("p", { style: { fontSize: 12, lineHeight: "18px", color: C.labelTertiary, margin: 0 } },
+						`${t("Dates", "重要日期")}：${(profile.dates ?? []).map((d) => `${d.label} ${d.date}`).join("；")}`),
+					createElement("div", null,
+						createElement("button", {
+							onClick: () => run(async () => {
+								await callRemote(() => ctx.remote.weixin.memoryProfileSave({
+									accountId,
+									patch: {
+										call: profileDraftValue.call,
+										schedule: profileDraftValue.schedule,
+										likes: splitList(profileDraftValue.likes),
+										dislikes: splitList(profileDraftValue.dislikes),
+									},
+								}));
+								setProfileDraft(null);
+							}, t("Saved.", "已保存。")),
+							disabled: busy,
+							style: buttonStyleFor(busy),
+						}, t("Save profile", "保存档案")))));
+
+			// ── 事件与待办 ──
+			const eventRows = (memory?.events ?? []).map((event) => createElement("div", {
+				key: event.index,
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: event.done === true ? C.labelTertiary : C.labelSecondary, alignItems: "baseline" },
+			},
+				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, `${event.index}.`),
+				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere", textDecoration: event.done === true ? "line-through" : "none" } },
+					event.when ? `[${event.when}] ${event.text}` : event.text),
+				event.done === true ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryEventDone({ accountId, index: event.index }))), disabled: busy, style: buttonStyleFor(busy) }, t("Done", "完成")),
+				createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryEventRemove({ accountId, index: event.index }))), disabled: busy, style: buttonStyleFor(busy) }, t("Delete", "删除"))));
+
 			const factRows = (memory?.facts ?? []).map((f) => createElement("div", {
 				key: f.index,
 				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
@@ -1931,6 +2038,23 @@ window.__ModuleLoader__.load({
 				createElement("div", { style: { display: "flex", gap: 8, marginTop: 6 } },
 					createElement("input", { value: factDraft, onChange: (e) => setFactDraft(e.target.value), placeholder: t("Remember across conversations, e.g. 我对花生过敏", "跨会话记住一件事，如 我对花生过敏"), style: inputStyle }),
 					createElement("button", { onClick: () => run(async () => { await callRemote(() => ctx.remote.weixin.memoryFactAdd({ accountId, text: factDraft })); setFactDraft(""); }), disabled: busy || factDraft.trim() === "", style: buttonStyleFor(busy || factDraft.trim() === "") }, t("Remember", "记住"))),
+				profilePanel,
+				createElement("p", { style: { ...captionStyle, marginTop: 10 } }, t("Events & to-dos (dated entries expire on their own after they pass)", "事件与待办（带日期的过期后自动清掉）")),
+				createElement("div", { style: { display: "flex", gap: 8, marginTop: 6 } },
+					createElement("input", { value: eventDraft.text, onChange: (e) => setEventDraft({ ...eventDraft, text: e.target.value }), placeholder: t("e.g. 明天去体检", "如 明天去体检"), style: inputStyle }),
+					createElement("input", { value: eventDraft.when, onChange: (e) => setEventDraft({ ...eventDraft, when: e.target.value }), placeholder: "YYYY-MM-DD", style: { ...inputStyle, flex: "0 0 120px", width: 120 } }),
+					createElement("button", {
+						onClick: () => run(async () => {
+							await callRemote(() => ctx.remote.weixin.memoryEventAdd({ accountId, text: eventDraft.text, when: eventDraft.when }));
+							setEventDraft({ text: "", when: "" });
+						}, t("Added.", "已添加。")),
+						disabled: busy || eventDraft.text.trim() === "",
+						style: buttonStyleFor(busy || eventDraft.text.trim() === ""),
+					}, t("Add", "添加"))),
+				eventRows.length === 0
+					? null
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, eventRows),
+				createElement("p", { style: { ...captionStyle, marginTop: 10 } }, t("Long-term facts", "长期记忆")),
 				factRows.length === 0
 					? createElement("p", { style: hintStyle }, t("No long-term facts yet. In WeChat: /remember …", "还没有长期记忆。在微信里：/remember …"))
 					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, factRows),

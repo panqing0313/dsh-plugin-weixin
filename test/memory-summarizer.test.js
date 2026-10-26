@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createMemorySummarizer } from '../src/memory-summarizer.js'
-import { readConvMemory, setConvSummary } from '../src/memory.js'
+import { readConvMemory, readGlobalMemory, setConvSummary, setDigest } from '../src/memory.js'
 import { appendJournal } from '../src/message/journal.js'
 
 let root
@@ -22,11 +22,11 @@ const ACCOUNT = 'bot1'
 const CONV = 'conv-1'
 
 /** Seed a two-turn journal so the summarizer has something to fold. */
-function seedJournal(conversationId = CONV) {
-  appendJournal(root, { dir: 'in', accountId: ACCOUNT, conversationId, text: '帮我查下明天天气' })
-  appendJournal(root, { dir: 'out', accountId: ACCOUNT, conversationId, text: '明天晴，25 度。' })
-  appendJournal(root, { dir: 'in', accountId: ACCOUNT, conversationId, text: '那穿什么合适' })
-  appendJournal(root, { dir: 'out', accountId: ACCOUNT, conversationId, text: '薄外套就行。' })
+function seedJournal(conversationId = CONV, accountId = ACCOUNT) {
+  appendJournal(root, { dir: 'in', accountId, conversationId, text: '帮我查下明天天气' })
+  appendJournal(root, { dir: 'out', accountId, conversationId, text: '明天晴，25 度。' })
+  appendJournal(root, { dir: 'in', accountId, conversationId, text: '那穿什么合适' })
+  appendJournal(root, { dir: 'out', accountId, conversationId, text: '薄外套就行。' })
 }
 
 /** A controllable fake bridge: records summarize() prompts, resolves manually. */
@@ -35,8 +35,8 @@ function fakeBridge() {
   let pending = []
   return {
     calls,
-    summarize({ conversationId, accountId, prompt }) {
-      const record = { conversationId, accountId, prompt, resolved: undefined }
+    summarize({ conversationId, accountId, prompt, sessionPrefix, route }) {
+      const record = { conversationId, accountId, prompt, sessionPrefix, route, resolved: undefined }
       calls.push(record)
       return new Promise((resolve) => {
         record.resolve = resolve
@@ -84,7 +84,9 @@ test('at the cadence the summary runs on the side session and lands in conv memo
   assert.match(call.prompt, /【最近对话】/)
   assert.match(call.prompt, /用户：帮我查下明天天气/)
   assert.match(call.prompt, /助手：薄外套就行。/)
-  assert.match(call.prompt, /只输出摘要本身/)
+  assert.match(call.prompt, /只输出一个 JSON 对象/)
+  assert.match(call.prompt, /"summary"/)
+  assert.match(call.prompt, /"profile"/)
   bridge.settleAll('用户喜欢简洁的回复，正在测试语音功能。')
   await new Promise((resolve) => setImmediate(resolve))
   const conv = readConvMemory(root, ACCOUNT, CONV)
@@ -148,4 +150,114 @@ test('one summary in flight per conversation', async () => {
   bridge.settleAll('终于写进去了')
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(readConvMemory(root, ACCOUNT, CONV).summary, '终于写进去了')
+})
+
+test('a JSON reply fills the conversation summary, facts, events and profile', async () => {
+  const bridge = fakeBridge()
+  const conv = 'conv-json'
+  seedJournal(conv)
+  const sum = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1, memoryConvMaxChars: 1200 })
+  sum.afterTurn(ACCOUNT, conv)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(bridge.calls.length, 1)
+  assert.match(bridge.calls[0].prompt, /"events"/)
+  bridge.settleAll(JSON.stringify({
+    summary: '在聊明天穿什么。',
+    facts: ['对花生过敏', '住在杭州'],
+    events: [{ text: '明天去体检', when: '2099-01-02' }],
+    profile: { call: '小满', schedule: '夜里两点睡', likes: ['猫'], dislikes: ['香菜'], dates: [{ label: '生日', date: '1998-03-04' }] },
+  }))
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(readConvMemory(root, ACCOUNT, conv).summary, '在聊明天穿什么。')
+  const store = readGlobalMemory(root, ACCOUNT)
+  assert.deepEqual(store.facts.map((fact) => fact.text), ['对花生过敏', '住在杭州'])
+  assert.equal(store.facts[0].weight, 4, 'an inferred fact is more durable than a passing line')
+  assert.deepEqual(store.events.map((event) => event.text), ['明天去体检'])
+  assert.equal(store.events[0].when, '2099-01-02')
+  assert.equal(store.profile.call, '小满')
+  assert.deepEqual(store.profile.likes, ['猫'])
+  assert.deepEqual(store.profile.dates, [{ label: '生日', date: '1998-03-04' }])
+})
+
+test('a JSON reply in a code fence still parses, and a garbage reply stays a plain summary', async () => {
+  const bridge = fakeBridge()
+  const conv = 'conv-fence'
+  seedJournal(conv)
+  const sum = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1, memoryConvMaxChars: 1200 })
+  sum.afterTurn(ACCOUNT, conv)
+  await new Promise((resolve) => setImmediate(resolve))
+  bridge.settleAll('```json\n{"summary": "围栏里的摘要", "facts": [], "events": [], "profile": {}}\n```')
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(readConvMemory(root, ACCOUNT, conv).summary, '围栏里的摘要')
+
+  const conv2 = 'conv-garbage'
+  seedJournal(conv2)
+  const sum2 = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1, memoryConvMaxChars: 1200 })
+  sum2.afterTurn(ACCOUNT, conv2)
+  await new Promise((resolve) => setImmediate(resolve))
+  bridge.settleAll('就是一段普通文字摘要，没有 JSON。')
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(readConvMemory(root, ACCOUNT, conv2).summary, '就是一段普通文字摘要，没有 JSON。')
+})
+
+test('consolidation merges a long fact list into a digest, and only when it is due', async () => {
+  const bridge = fakeBridge()
+  const conv = 'conv-digest'
+  const account = 'bot-digest'
+  const facts = Array.from({ length: 12 }, (_v, i) => ({ text: `事实 ${i + 1}`, at: Date.now(), weight: 3 }))
+  // Seed through the public writers so the file shape is the real one.
+  const { addGlobalFact } = await import('../src/memory.js')
+  for (const fact of facts) addGlobalFact(root, account, fact.text, { weight: fact.weight })
+  seedJournal(conv, account)
+
+  const sum = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1, memoryGlobalMaxFacts: 30 })
+  sum.afterTurn(account, conv)
+  await new Promise((resolve) => setImmediate(resolve))
+  bridge.settleAll(JSON.stringify({ summary: '摘要', facts: [], events: [], profile: {} }))
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const digestCall = bridge.calls.find((call) => call.sessionPrefix === 'wx-dig-' || /人物小传/.test(call.prompt))
+  assert.ok(digestCall, 'a long fact list must trigger the consolidation prompt')
+  assert.match(digestCall.prompt, /【记下的事实】/)
+  bridge.settleAll(JSON.stringify({ digest: '小满是杭州人，夜里睡，喜欢猫。', facts: [{ text: '对花生过敏', weight: 5 }] }))
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const store = readGlobalMemory(root, account)
+  assert.equal(store.digest, '小满是杭州人，夜里睡，喜欢猫。')
+  assert.deepEqual(store.facts.map((fact) => fact.text), ['对花生过敏'])
+  assert.equal(store.facts[0].weight, 5)
+  assert.ok(store.digestAt > 0)
+
+  // A second pass inside the window must not run again.
+  const before = bridge.calls.length
+  const again = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1, memoryGlobalMaxFacts: 30 })
+  again.afterTurn(account, conv)
+  await new Promise((resolve) => setImmediate(resolve))
+  bridge.settleAll(JSON.stringify({ summary: '摘要', facts: [], events: [], profile: {} }))
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(bridge.calls.length, before + 1, 'only the summary call, no second consolidation')
+})
+
+test('the memory model route rides along to the side session', async () => {
+  const bridge = fakeBridge()
+  const route = { provider: 'zai', model: 'glm-4-flash' }
+  const sum = createMemorySummarizer({
+    bridge,
+    stateRoot: root,
+    config: () => ({ memoryEnabled: true, memorySummaryTurns: 1 }),
+    route: () => route,
+  })
+  seedJournal('conv-route')
+  sum.afterTurn(ACCOUNT, 'conv-route')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(bridge.calls.length, 1)
+  assert.deepEqual(bridge.calls[0].route, route)
 })

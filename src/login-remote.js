@@ -21,14 +21,7 @@ import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist, setAccountLabel, setAccountPaused } from "./account-registry.js";
 import { readSavedConfig, stateDir } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
-import {
-    readGlobalMemory,
-    listConvMemories,
-    addGlobalFact,
-    removeGlobalFact,
-    clearConvMemory,
-    bondLine,
-} from "./memory.js";
+import { readGlobalMemory, listConvMemories, addGlobalFact, removeGlobalFact, clearConvMemory, bondLine, addEvent, removeEvent, completeEvent, saveProfile, formatEvents } from "./memory.js";
 import {
     activeModeFor,
     listActiveOverrides,
@@ -437,8 +430,14 @@ export class WeixinLoginController extends TypertRemoteService {
             globalDefault,
             accountDefault: account === "" ? "" : readAccountDefaultMode(root, account, { warn }),
             overrides: listActiveOverrides(root, { warn }),
-            memory: account === "" ? null : {
-                facts: readGlobalMemory(root, account, { warn }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
+            memory: account === "" ? null : (() => {
+                const store = readGlobalMemory(root, account, { warn });
+                return {
+                profile: store.profile,
+                digest: store.digest,
+                digestAt: store.digestAt,
+                events: store.events.map((event, i) => ({ index: i + 1, ...event })),
+                facts: store.facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at, weight: f.weight })),
                 conversations: listConvMemories(root, account, { warn }).map((conv) => {
                     // Which persona this line is in, and how she is doing right
                     // now: the card shows both per conversation, so "why is she
@@ -454,7 +453,8 @@ export class WeixinLoginController extends TypertRemoteService {
                         lifeLine: lifeSummary(life),
                     };
                 }),
-            },
+                }
+            })(),
         };
     }
 
@@ -576,6 +576,48 @@ export class WeixinLoginController extends TypertRemoteService {
         if (accountId === "" || conversationId === "") throw new RemoteError("accountId and conversationId are required");
         clearConvMemory(stateDir(), accountId, conversationId, { warn: (m) => logger.warn(m) });
         return { ok: true };
+    }
+
+    /** Edit the 人物档案 (addressing, schedule, likes, dislikes, dates). */
+    async memoryProfileSave(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        if (accountId === "") throw new RemoteError("accountId is required");
+        const patch = opts.patch !== null && typeof opts.patch === "object" ? opts.patch : {};
+        const saved = saveProfile(stateDir(), accountId, patch, { warn: (m) => logger.warn(m) });
+        return { ok: saved.ok === true, profile: saved.profile };
+    }
+
+    /** Add one 事件与待办 entry; `when` is a local YYYY-MM-DD or empty. */
+    async memoryEventAdd(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        if (accountId === "") throw new RemoteError("accountId is required");
+        const result = addEvent(stateDir(), accountId, { text: opts.text, when: opts.when }, { warn: (m) => logger.warn(m) });
+        if (result.added === true) return { ok: true };
+        return { ok: false, reason: result.reason };
+    }
+
+    /** Index is 1-based, matching what /memory and this card print. */
+    async memoryEventDone(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const index = Number(opts.index);
+        if (accountId === "") throw new RemoteError("accountId is required");
+        if (Number.isInteger(index) === false) throw new RemoteError("index is required");
+        const done = completeEvent(stateDir(), accountId, index, { warn: (m) => logger.warn(m) });
+        return { done: done.done === true, text: done.done === true ? done.text : undefined };
+    }
+
+    /** Index is 1-based, matching what /memory and this card print. */
+    async memoryEventRemove(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        const index = Number(opts.index);
+        if (accountId === "") throw new RemoteError("accountId is required");
+        if (Number.isInteger(index) === false) throw new RemoteError("index is required");
+        const removed = removeEvent(stateDir(), accountId, index, { warn: (m) => logger.warn(m) });
+        return { removed: removed.removed === true, text: removed.removed === true ? removed.text : undefined };
     }
 
     /** Message journal for the settings card: newest first, optional account filter. */    /** Message journal for the settings card: newest first, optional account filter. */
@@ -802,4 +844,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

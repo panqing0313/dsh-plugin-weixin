@@ -17,6 +17,14 @@ import {
 	clearConvMemory,
 	readRecentWindow,
 	buildMemoryBlock,
+	addEvent,
+	removeEvent,
+	completeEvent,
+	saveProfile,
+	setDigest,
+	replaceFacts,
+	formatProfile,
+	formatEvents,
 	DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
 } from '../src/memory.js'
 import { appendJournal } from '../src/message/journal.js'
@@ -35,7 +43,7 @@ after(() => {
 
 test('global facts: add, read back, duplicate refused', () => {
 	const dir = join(root, 'global')
-	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [] })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0 })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '用户对花生过敏', { warn }), { added: true })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '  用户对花生过敏  ', { warn }), { added: false, reason: 'duplicate' })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '', { warn }), { added: false, reason: 'empty' })
@@ -169,7 +177,7 @@ test('a broken memory file degrades to empty, not a throw', () => {
 	mkdirSync(join(dir, 'memory'), { recursive: true })
 	writeFileSync(join(dir, 'memory', 'global-b@im.bot.json'), '{ broken')
 	warns.length = 0
-	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [] })
+	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0 })
 	assert.ok(warns.length === 1, `warned once: ${JSON.stringify(warns)}`)
 })
 
@@ -222,4 +230,74 @@ test('bondLine renders the one-liner; buildMemoryBlock leads with it', () => {
 	assert.ok(block.startsWith('<weixin_memory>\n【我们】我们认识第 26 天'), block)
 	const bare = buildMemoryBlock({ conv: { summary: 's', facts: [], updatedTurn: 1 }, recent: [] })
 	assert.ok(!bare.includes('【我们】'), bare)
+})
+
+test('the structured profile merges only known fields and unions the lists', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mem-profile-'))
+	const saved = saveProfile(dir, 'bot1', { call: '  小满 ', schedule: '夜里两点睡', gender: 'female' })
+	assert.equal(saved.ok, true)
+	assert.equal(saved.profile.call, '小满')
+	assert.equal('gender' in saved.profile, false, 'an unknown key never lands in the file')
+	saveProfile(dir, 'bot1', { likes: ['猫', '咖啡'] })
+	const merged = saveProfile(dir, 'bot1', { likes: ['猫', '下雨天'], dislikes: ['香菜'] })
+	assert.deepEqual(merged.profile.likes, ['猫', '下雨天'], 'an explicit edit replaces the list it names')
+	assert.deepEqual(merged.profile.dislikes, ['香菜'])
+	assert.equal(merged.profile.schedule, '夜里两点睡', 'a later patch does not erase the earlier fields')
+	const again = saveProfile(dir, 'bot1', { dates: [{ label: '生日', date: '1998-03-04' }, { label: '坏日期', date: '3月4日' }] })
+	assert.deepEqual(again.profile.dates, [{ label: '生日', date: '1998-03-04' }])
+	const lines = formatProfile(again.profile)
+	assert.equal(lines.some((line) => line.includes('称呼：小满')), true)
+	assert.equal(lines.some((line) => line.includes('喜欢：猫、下雨天')), true)
+	assert.equal(lines.some((line) => line.includes('重要日期：生日 1998-03-04')), true)
+	rmSync(dir, { recursive: true, force: true })
+})
+
+test('events: add, refuse duplicates, complete and remove by number, prune the stale', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mem-events-'))
+	const now = Date.parse('2026-10-27T10:00:00')
+	assert.deepEqual(addEvent(dir, 'bot1', { text: '   ' }, { now }), { added: false, reason: 'empty' })
+	assert.deepEqual(addEvent(dir, 'bot1', { text: '明天去体检', when: '2026-10-28' }, { now }), { added: true })
+	assert.deepEqual(addEvent(dir, 'bot1', { text: '明天去体检', when: '2026-10-28' }, { now }), { added: false, reason: 'duplicate' })
+	addEvent(dir, 'bot1', { text: '买猫粮' }, { now })
+	let store = readGlobalMemory(dir, 'bot1', { now })
+	assert.deepEqual(formatEvents(store.events), ['- · [2026-10-28] 明天去体检', '- · 买猫粮'])
+	assert.deepEqual(completeEvent(dir, 'bot1', 2, { now }), { done: true, text: '买猫粮' })
+	assert.deepEqual(removeEvent(dir, 'bot1', 1, { now }), { removed: true, text: '明天去体检' })
+	assert.deepEqual(removeEvent(dir, 'bot1', 9, { now }), { removed: false, reason: 'no-such-index' })
+	store = readGlobalMemory(dir, 'bot1', { now })
+	assert.deepEqual(formatEvents(store.events), ['- ✅ 买猫粮'])
+
+	addEvent(dir, 'bot1', { text: '上周体检', when: '2026-10-20' }, { now })
+	addEvent(dir, 'bot1', { text: '前天体检', when: '2026-10-26' }, { now })
+	store = readGlobalMemory(dir, 'bot1', { now })
+	const texts = store.events.map((event) => event.text)
+	assert.equal(texts.includes('上周体检'), false, 'a date long past is pruned rather than remembered forever')
+	assert.equal(texts.includes('前天体检'), true, 'the grace window keeps yesterday-ish events')
+	rmSync(dir, { recursive: true, force: true })
+})
+
+test('the digest leads the block, the profile follows, and the budget squeezes facts', () => {
+	const digest = '小满是杭州人，夜里两点睡，养了一只猫，最近在学做饭。'
+	const profile = { call: '小满', schedule: '夜里两点睡', likes: ['猫'], dislikes: [], dates: [] }
+	const facts = [
+		{ text: '随身带伞', at: 1, weight: 1 },
+		{ text: '对花生过敏', at: 2, weight: 5 },
+		{ text: '住在杭州西湖区', at: 3, weight: 3 },
+	]
+	const block = buildMemoryBlock({ global: { facts, profile, events: [{ text: '体检', when: '2026-10-28', done: false, at: 1 }], digest }, recent: [] })
+	const lines = block.split('\n')
+	assert.equal(lines[1], '【长期记忆 · 关于用户】')
+	assert.equal(lines[2], digest, 'the digest is the first thing the model reads')
+	assert.ok(block.includes('- 称呼：小满'))
+	assert.ok(block.includes('【事件与待办】\n- · [2026-10-28] 体检'))
+	// Importance, not insertion order.
+	const allergyAt = block.indexOf('对花生过敏')
+	const umbrellaAt = block.indexOf('随身带伞')
+	assert.ok(allergyAt > 0 && allergyAt < umbrellaAt, 'a weight-5 fact precedes a weight-1 one')
+	// A tight budget keeps the digest and drops facts tail-first.
+	const longDigest = '小满'.repeat(100)
+	const tight = buildMemoryBlock({ global: { facts, profile, events: [], digest: longDigest }, recent: [], maxChars: longDigest.length })
+	assert.ok(tight.includes(longDigest))
+	assert.equal(tight.includes('对花生过敏'), false, 'a budget that only fits the digest keeps only the digest')
+	assert.equal(tight.includes('称呼：'), false)
 })

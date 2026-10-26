@@ -333,9 +333,13 @@ export class AgentBridge {
    * `installModelSelection` comes from `@deepseek-ai/dsh-agent`, which resolves
    * only inside a DSH profile; a profile showing a different shape degrades to
    * running without the listener rather than failing to load.
+   *
+   * @param {{ provider: string, model: string }} [routeOverride] run this
+   *   session on a different provider/model — what the memory model setting
+   *   uses, so background summarising cannot spend the conversation's model.
    */
-  async #setup() {
-    const route = await this.#route()
+  async #setup(routeOverride) {
+    const route = routeOverride ?? (await this.#route())
     const agentOptions =
       route === undefined
         ? undefined
@@ -416,7 +420,7 @@ export class AgentBridge {
     const inflight = this.attachPromises.get(sessionId)
     if (inflight !== undefined) return inflight
 
-    const creation = this.#attachNew(sessionId, options.sideMeta)
+    const creation = this.#attachNew(sessionId, options.sideMeta, options.route)
     this.attachPromises.set(sessionId, creation)
     try {
       return await creation
@@ -425,11 +429,11 @@ export class AgentBridge {
     }
   }
 
-  async #attachNew(sessionId, sideMeta) {
+  async #attachNew(sessionId, sideMeta, route) {
     const agents = this.#agents()
     if (agents === undefined) throw new Error('the agents service is unavailable')
 
-    const { agentOptions, setup } = await this.#setup()
+    const { agentOptions, setup } = await this.#setup(route)
     /** @type {{ agent: any, dispose: () => Promise<void> }} */
     let handle
     /** Created here rather than adopted, so {@link #create} already filed it. */
@@ -646,12 +650,17 @@ export class AgentBridge {
    * @param {string} params.prompt
    * @returns {Promise<{ text: string, sessionId: string } | undefined>}
    */
-  async summarize({ conversationId, accountId, prompt, sessionPrefix = 'wx-mem-' }) {
+  async summarize({ conversationId, accountId, prompt, sessionPrefix = 'wx-mem-', route }) {
     const key = scopedLineKey(accountId, conversationId)
-    const digest = createHash('sha1').update(key).digest('hex').slice(0, 16)
+    // The route is part of the identity: a session created under one model
+    // cannot be re-pointed at another, so changing the memory model has to
+    // start a fresh side session instead of quietly reusing the old one.
+    const identity = route === undefined ? key : `${key}|${route.provider}/${route.model}`
+    const digest = createHash('sha1').update(identity).digest('hex').slice(0, 16)
     const sessionId = `${sessionPrefix}${digest}`
     const record = await this.attach(conversationId, accountId, {
       sessionId,
+      ...(route === undefined ? {} : { route }),
       sideMeta: {
         origin: 'subagent',
         parentSession: this.#activeSessionId(conversationId, accountId),

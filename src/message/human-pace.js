@@ -169,9 +169,13 @@ export function planCompanionReply({ text, mode, life = null, config = {}, rng =
  * a chat message looks. It is one block for every companion mode and none for
  * the stock assistant.
  *
+ * A character pack's stickers are only offered in that character's mode, so
+ * the hint and the parser agree on what one conversation may send.
+ *
+ * @param {{ stickers?: boolean, modeId?: string }} [options]
  * @returns {string}
  */
-export function buildHumanStyleBlock({ stickers = false } = {}) {
+export function buildHumanStyleBlock({ stickers = false, modeId } = {}) {
   return [
     '<weixin_style>',
     '【怎么发消息】你在微信上和对方聊天，不是写文档：',
@@ -180,7 +184,7 @@ export function buildHumanStyleBlock({ stickers = false } = {}) {
     '- 想补充的话可以另起一条再说，不要全堆在一段里。',
     // Only offered when the sticker channel is on: a marker the pipeline will
     // not honour becomes a stray bracket in the user's chat.
-    ...(stickers ? [stickerHint()] : []),
+    ...(stickers ? [stickerHint(modeId)] : []),
     '</weixin_style>',
   ].join('\n');
 }

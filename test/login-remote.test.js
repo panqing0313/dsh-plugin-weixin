@@ -429,7 +429,11 @@ test('personaOverview seeds the builtin modes and reports overrides and memory',
     assert.ok(overview.modes.every((m) => m.builtin === true))
     assert.equal(overview.globalDefault, '')
     assert.deepEqual(overview.overrides, [])
-    assert.deepEqual(overview.memory, { facts: [], conversations: [] })
+    assert.equal(overview.memory.facts.length, 0)
+    assert.equal(overview.memory.conversations.length, 0)
+    assert.equal(overview.memory.digest, '')
+    assert.deepEqual(overview.memory.events, [])
+    assert.deepEqual(overview.memory.profile, { call: '', schedule: '', likes: [], dislikes: [], dates: [] })
     assert.ok(fs.existsSync(path.join(root, 'persona-modes.json')), 'the catalog is seeded on disk')
   })
 })
@@ -558,5 +562,37 @@ test('memoryConvClear wipes the conversation summary the card lists', async () =
     await c.memoryConvClear({ accountId: 'bot1', conversationId: 'conv9' })
     overview = await c.personaOverview({ accountId: 'bot1' })
     assert.deepEqual(overview.memory.conversations, [], 'an emptied memory is not listed at all')
+  })
+})
+
+test('the structured memory: profile edits, events, and the digest show up in the overview', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const saved = await c.memoryProfileSave({ accountId: 'bot1', patch: { call: '小满', likes: ['猫'] } })
+    assert.equal(saved.ok, true)
+    assert.equal(saved.profile.call, '小满')
+
+    assert.deepEqual(await c.memoryEventAdd({ accountId: 'bot1', text: '   ' }), { ok: false, reason: 'empty' })
+    assert.deepEqual(await c.memoryEventAdd({ accountId: 'bot1', text: '明天体检', when: '2099-01-01' }), { ok: true })
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.memory.profile.call, '小满')
+    assert.equal(overview.memory.events.length, 1)
+    assert.equal(overview.memory.events[0].index, 1)
+    assert.equal(overview.memory.events[0].text, '明天体检')
+
+    const done = await c.memoryEventDone({ accountId: 'bot1', index: 1 })
+    assert.equal(done.done, true)
+    assert.equal((await c.personaOverview({ accountId: 'bot1' })).memory.events[0].done, true)
+    const removed = await c.memoryEventRemove({ accountId: 'bot1', index: 1 })
+    assert.equal(removed.removed, true)
+    assert.equal((await c.personaOverview({ accountId: 'bot1' })).memory.events.length, 0)
+
+    // A model-written digest is read-only in the card: it is shown, not edited.
+    const { setDigest } = await import('../src/memory.js')
+    setDigest(root, 'bot1', '小满是杭州人，夜里两点睡。')
+    assert.equal((await c.personaOverview({ accountId: 'bot1' })).memory.digest, '小满是杭州人，夜里两点睡。')
+
+    await assert.rejects(() => c.memoryEventAdd({ accountId: '' , text: 'x' }), (error) => error.code === 'accountId is required')
+    await assert.rejects(() => c.memoryEventDone({ accountId: 'bot1', index: 'x' }), (error) => error.code === 'index is required')
   })
 })

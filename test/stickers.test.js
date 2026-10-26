@@ -3,14 +3,19 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 import {
+  BASE_STICKERS,
+  CUTE_STICKERS,
   MAX_STICKERS_PER_REPLY,
+  MODE_STICKERS,
   STICKERS,
   resolveSticker,
   stickerFilesReady,
   stickerHint,
   stickerPath,
+  stickersForMode,
   takeStickers,
 } from '../src/message/stickers.js'
+import { BUILTIN_MODES } from '../src/persona.js'
 
 test('every sticker in the catalog is a real PNG on disk', () => {
   assert.equal(stickerFilesReady(), true)
@@ -86,8 +91,56 @@ test('removing a marker cannot leave three blank lines or a whitespace bubble', 
 
 test('the prompt hint lists every caption exactly once', () => {
   const hint = stickerHint()
-  for (const sticker of STICKERS) {
+  for (const sticker of stickersForMode()) {
     assert.equal(hint.split(sticker.caption).length - 1, 1, `${sticker.caption} must appear once`)
   }
   assert.match(hint, /\[表情:名字\]/)
+})
+
+test('the catalog is three packs: twelve shared, twelve cute, four per character', () => {
+  assert.equal(BASE_STICKERS.length, 12)
+  assert.equal(CUTE_STICKERS.length, 12)
+  assert.deepEqual(MODE_STICKERS.map((pack) => pack.modes), [['neko'], ['whale-girl'], ['daughter']])
+  for (const pack of MODE_STICKERS) assert.equal(pack.stickers.length, 4)
+  assert.equal(STICKERS.length, 12 + 12 + 12)
+})
+
+test('a character pack follows its mode and only its mode', () => {
+  const shared = [...BASE_STICKERS, ...CUTE_STICKERS].map((sticker) => sticker.id)
+  assert.deepEqual(stickersForMode().map((sticker) => sticker.id), shared)
+  assert.deepEqual(stickersForMode('girlfriend').map((sticker) => sticker.id), shared)
+  assert.deepEqual(stickersForMode('neko').map((sticker) => sticker.id), [...shared, 'meow', 'paw', 'fluff', 'nuzzle'])
+  assert.deepEqual(stickersForMode('whale-girl').slice(shared.length).map((s) => s.id), ['burble', 'spout', 'tail', 'peek'])
+  assert.deepEqual(stickersForMode('daughter').slice(shared.length).map((s) => s.id), ['actcute', 'headpat', 'proud', 'weepy'])
+})
+
+test('every mode pack names a builtin mode', () => {
+  const ids = BUILTIN_MODES.map((mode) => mode.id)
+  for (const pack of MODE_STICKERS) {
+    for (const id of pack.modes) assert.equal(ids.includes(id), true, `${id} is not a builtin mode any more`)
+  }
+})
+
+test('a cat sticker is unresolvable outside the cat mode, so the wrong character never sends it', () => {
+  assert.equal(resolveSticker('喵'), null)
+  assert.equal(resolveSticker('喵', 'neko'), 'meow')
+  assert.equal(resolveSticker('摸摸头', 'daughter'), 'headpat')
+  assert.equal(resolveSticker('摸摸头', 'neko'), null)
+
+  const plan = takeStickers('在的呀\n[表情:喵]', { modeId: 'girlfriend' })
+  assert.equal(plan.text, '在的呀')
+  assert.deepEqual(plan.stickers, [])
+  assert.deepEqual(plan.dropped, ['喵'])
+
+  const catty = takeStickers('在的呀\n[表情:喵]', { modeId: 'neko' })
+  assert.deepEqual(catty.stickers, ['meow'])
+})
+
+test('the hint offers exactly the pack a mode may send', () => {
+  const shared = stickerHint()
+  assert.equal(shared.includes('喵'), false)
+  assert.equal(shared.includes('开心'), true)
+  const catHint = stickerHint('neko')
+  for (const caption of ['喵', '舔爪', '炸毛', '蹭蹭']) assert.equal(catHint.includes(caption), true)
+  assert.equal(catHint.includes('咕噜噜'), false, 'another character\'s pack stays out')
 })
