@@ -5,8 +5,8 @@
 ## 当前状态（2026-10-26）
 
 - **版本**：`0.9.3`，2026-10-23 已发布（npm `latest`、tag `v0.9.3`、GitHub release 三者齐全；注册表 `dist.shasum` / `dist.integrity` 与本地 `dsh-plugin-weixin-0.9.3.tgz` 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
-- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）与**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`，见下，待随下次发版）。
-- **测试**：`npm test` → `tests 449 / pass 449 / fail 0`（约 36s；相对 0.9.2 新增 88 条，其中个性化与记忆占 38：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
+- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）。
+- **测试**：`npm test` → `tests 464 / pass 464 / fail 0`（约 36s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -18,7 +18,8 @@
 - **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
 - **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 8 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / **个性化** / 关于）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
-- **个性化与记忆**：`/mode` 切换对话模式（默认助手/女友/男友/朋友 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词；设置卡「个性化」页签可视管理。
+- **个性化与记忆**：`/mode` 切换对话模式（默认助手/女友/男友/朋友 + **三个游戏模式** 海龟汤/成语接龙/文字冒险 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回；游戏列表分组显示）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词、**亲密度**（认识天数/消息数/确定性心情，进提示词 `/status` `/memory` 与设置卡）；设置卡「个性化」页签可视管理。
+- **定时主动消息**：`/subscribe <时间> <提示词>`（每天/每周X/裸 HH:mm/一次性）到点开侧会话让 agent 带着人设与记忆生成一条再走标准出站管线（分片/限速继承），`/subscribelist` `/subscribecancel`；错过的到点 30 分钟内补发一次、否则丢弃，一次性到期自动移除；每账号上限 20 条。`/remind` 保持零模型消耗不变，两者互补。
 - **健壮性**：长轮询看门狗（响应头到达后 body 挂死）、归档会话自动恢复、模型调用失败不卡队、二维码 PNG 只用 `node:zlib` 自编码（Windows 可用）。
 
 ## 未完成 / 待办
@@ -2269,3 +2270,46 @@ memoryFactAdd / memoryFactRemove / memoryConvClear`（RemoteError 的文案在 c
 persona 9、memory 8、会话命令 6（/mode 列表/切换/按 id/钉回默认、/remember 往返、/forget 关键词）、
 后台摘要 7、e2e 2（persona+memory 注入顺序与关闭行为；摘要落盘且不发气泡）、设置卡页签 1、
 远程方法 parity、config-remote 表单 5 字段。全量 `npm test` → **449/449**（~36s）。
+
+## 可玩性三件套（2026-10-26，`ea59e86` + `081759d` + `79307dc`，待随下次发版）
+
+用户问「还有什么好的建议，有更好的可玩性」，给了四档清单后选定三项，按小到大独立提交。
+
+### 行为
+
+- **游戏模式**（`ea59e86`）：`BUILTIN_MODES` 新增海龟汤（出谜面、只答是/否/无关、可要提示）、
+  成语接龙（接不上判负、记连胜）、文字冒险（第二人称选项制），每个都是 `game:true` 的普通模式——
+  游戏状态就是会话上下文（摘要器兜底跨长局），`/mode` 切换开新线即重开一局。`/mode` 列表按
+  角色/游戏分组，游戏区标着「玩完 /mode 默认 就退出」。每个 prompt 都带边界段（正事优先、健康内容）。
+- **亲密度 + 心情**（`081759d`）：`memory/*.json` 的 conv 文件多一个 `bond` 键（firstDay/msgs/
+  msgsToday/lastMessageAt/mood），由摘要器的每回合计数顺带更新（`bumpTurnAndBond` 一次读改写，
+  零额外 IO）。心情是**确定性规则**不走模型：深夜(23–5)「夜深了，还醒着」> 刚认识 > 超一天没聊
+  「好久没聊，有点想你」> 今日 ≥19 条「聊得很热络」> 平静。展示为「我们认识第 N 天 · 聊过 M 条
+  消息 · 此刻：<心情>」，进提示词（memory 块首行【我们】）、`/status`、`/memory`、设置卡会话行。
+  开关跟随 `memoryEnabled`，不加配置项；老 conv 文件没有 bond 键时形状不变（deep-equal 测试钉住）。
+- **定时主动消息**（`79307dc`）：`/subscribe <时间> <提示词>`。时间支持 每天/每日/daily HH:mm、
+  每周X HH:mm、裸 HH:mm（=每天）、一次性（复用 /remind 的 parseWhen：10m、绝对日期）。存储
+  `<stateRoot>/subscriptions.json`（结构同 reminders + prompt，每账号上限 20 条）。到点开侧会话
+  `wx-sub-<sha1>`（`bridge.summarize` 加了 `sessionPrefix` 选项），prompt = 人设块 + 记忆块 + 时间戳
+  + 订阅指令，生成的正文走 sendChunked 标准出站。错过的到点：循环订阅 30 分钟内补发一次，否则只
+  推进不补发；一次性到期直接丢弃。同一会话同时只跑一个订阅回合。空正文不发。`/remind` 不变。
+
+### 坑与教训
+
+- 会话命令的裸命令（`/subscribe` 不带参数）必须显式给规则，否则会**落到 agent** 变成一轮普通对话，
+  用户看到的是「处理失败：record.agent.followup is not a function」。`/remind` 当年也一样，这次给
+  `/subscribe` 补了裸命令 → usage 的规则。
+- `parseSessionCommand` 的两词时间（每天 08:00）要一次正则吃下，先按第一个空格切会把 when 切成「每天」。
+- statusContext 里引用 setup IIFE 的 `let` 变量（subscriptionScheduler）会 ReferenceError——
+  createInboundHandler 是模块级函数，依赖必须走参数（与 reminderScheduler 同款接线）。
+- 测「吞错误」路径时必须传真 logger（摘要器这次已经吃过一回，订阅器学乖了）。
+- 调试插件静默：`withPlugin` 的 `finally` 里用 `DSH_DEBUG_LINES` 环境变量 dump `lines`，
+  一次就能看到插件到底 warn 了什么（比临时改源码快）。
+- `assert.match(x, re, msg)` 第三个参数是失败**说明**不是实际值——排错时别被它带偏。
+
+### 测试
+
+游戏模式 1（persona 游戏内置与 round-trip）+ 列表分组断言并入既有 /mode 用例；亲密度 6
+（memory 3：bump 跨天/心情表/渲染、login-remote 1、会话命令 1、e2e 1：bond.msgs 与心情落盘）；
+订阅 9（subscriptions 单测 8：解析表/nextFireAt/触发推进/一次性自移除/宽限窗/过期丢弃落盘/
+校验与上限/描述，会话命令 1：schedule→list→cancel 全流程）。全量 `npm test` → **464/464**（~36s）。
