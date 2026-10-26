@@ -71,6 +71,7 @@ import {
   bondLine,
   setConvRecentSession,
 } from './memory.js'
+import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
@@ -139,6 +140,11 @@ export const Config = z.object({
   memoryRecentTurns: z.number().min(0).default(5).description(
     'How many recent user/assistant messages, at most, the memory block repeats back to the model. Only used when a conversation line is COLD (a brand new session: first message, /new, /mode switch, or a line whose session no longer holds the history) — a resumed line already carries those messages in its own history, so repeating them every turn would spend tokens on nothing. 0 turns the window off entirely.',
   ),
+  memoryRecall: z.boolean().default(true).description(
+    'Search the local message journal for the current message and inject the matching original lines as a <weixin_recall> block. Only fires when the message looks like it refers back to something (上次/之前/那天…) or scores high enough — small talk matches nothing and costs zero tokens. /recall queries by hand without spending any.',
+  ),
+  memoryRecallDays: z.number().min(7).max(3650).default(180).description('How many days back the local recall index reaches. Older day files leave the index (the journal itself is still on disk).'),
+  memoryRecallHits: z.number().min(1).max(8).default(3).description('How many matching original messages to inject at most, each truncated to 140 characters.'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -976,6 +982,21 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const file = writeChatExport(stateRoot, accountId, conversationId, markdown)
         return `聊天记录比较长（${entries.length} 条，${markdown.length} 字），已导出成文件：\n${file}\n完整内容也可以在设置卡「消息流水」页签里一键导出。`
       },
+      recall: (arg) => {
+        const keyword = String(arg ?? '').trim()
+        if (keyword === '') return '用法：/recall <关键词>，例如 /recall 报错。会在本地消息流水里翻原文，不经过模型、不花 token。'
+        const days = Number(modeConfig().memoryRecallDays ?? 180)
+        const limit = 5
+        // 先在这段会话里找（最相关），找不到再扩大到整个账号——
+        // 用户问「上次说的那个」时，往往记不清是在哪个对话里说的。
+        const inConversation = queryRecall(stateRoot, keyword, { accountId, conversationId, days, limit, warn })
+        if (inConversation.length > 0) return formatRecallHits(inConversation, { query: keyword })
+        const anywhere = queryRecall(stateRoot, keyword, { accountId, days, limit, warn })
+        if (anywhere.length === 0) {
+          return `本地流水（最近 ${days} 天）里没有找到和「${keyword}」相关的消息。`
+        }
+        return `这个会话里没有，但账号下其他对话里有：\n${formatRecallHits(anywhere, { query: keyword })}`
+      },
       remember: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'
         if (arg === undefined || String(arg).trim() === '') return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏'
@@ -1022,8 +1043,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     }
   }
   return async (message) => {
+    // One timestamp for both the journal line and the recall exclusion, so the
+    // message being answered can be recognised in the index without matching
+    // on text alone.
+    const journaledAt = Date.now()
     if (config.messageJournal === true && message.type === 'text') {
       journalInbound?.({
+        at: journaledAt,
         accountId,
         conversationId: message.conversationId,
         senderId: message.senderId,
@@ -1253,9 +1279,26 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     if (coldLine && effectiveConfig.current.memoryEnabled === true) {
       setConvRecentSession(stateRoot, accountId, message.conversationId, lineSessionId, { warn })
     }
-    // Prepend in ONE join so the order stays persona → memory → user text
-    // (a per-block prepend loop would silently reverse it).
-    const blocks = [personaBlock, memoryBlock].filter((block) => block !== '')
+    // Recall: the journal already holds every message, but nothing looked at
+    // it, so long-range questions ("上次那个报错") could only be answered from
+    // a lossy summary. Search it locally first, and only pay for the block
+    // when the search actually hits: small talk finds nothing and costs zero.
+    let recallBlock = ''
+    if (effectiveConfig.current.memoryRecall !== false) {
+      const recallHits = queryRecall(stateRoot, message.text, {
+        accountId,
+        conversationId: message.conversationId,
+        days: Number(effectiveConfig.current.memoryRecallDays ?? 180),
+        limit: Number(effectiveConfig.current.memoryRecallHits ?? 3),
+        excludeAt: journaledAt,
+        excludeText: message.text,
+        warn,
+      })
+      if (shouldRecall(message.text, recallHits)) recallBlock = buildRecallBlock(recallHits)
+    }
+    // Prepend in ONE join so the order stays persona → memory → recall → user
+    // text (a per-block prepend loop would silently reverse it).
+    const blocks = [personaBlock, memoryBlock, recallBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 5. Drive the agent, then send the reply back in chunks.

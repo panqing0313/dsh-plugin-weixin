@@ -608,6 +608,37 @@ test('/export renders the journal as markdown and spills to a file when long', a
 	})
 })
 
+test('/recall searches the local journal and answers without an agent turn', async () => {
+	await withPlugin(async ({ root, fake, sessionsOpened }) => {
+		// 60 天前的旧消息，关键词只在那一条里出现。
+		appendJournal(root, {
+			dir: 'in',
+			accountId: ACCOUNT_ID,
+			conversationId: ALLOWED,
+			text: '上次那个报错是 ECONNREFUSED，端口没起',
+			at: Date.now() - 60 * 24 * 60 * 60 * 1000,
+		})
+		appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '今天天气不错', at: Date.now() - 1000 })
+
+		// 只发 /recall，没有触发 agent 回合：回复直接来自本地索引。
+		fake.deliver('/recall 报错', 'r0')
+		await waitFor(() => fake.outbound.length > 0, 'the recall reply')
+		assert.match(fake.outbound[0].text, /找到 1 条和「报错」相关的记录/, fake.outbound[0].text)
+		assert.match(fake.outbound[0].text, /ECONNREFUSED/, 'the original line comes back verbatim')
+		assert.deepEqual(sessionsOpened, [], 'a local lookup must not cost a model turn')
+
+		// 查不到就说查不到，而不是把问题丢给模型。
+		fake.deliver('/recall 火龙果', 'r1')
+		await waitFor(() => fake.outbound.length > 1, 'the miss reply')
+		assert.match(fake.outbound[1].text, /没有找到和「火龙果」相关的消息/)
+
+		// 裸命令给用法。
+		fake.deliver('/recall', 'r2')
+		await waitFor(() => fake.outbound.length > 2, 'the usage reply')
+		assert.match(fake.outbound[2].text, /用法：\/recall/)
+	})
+})
+
 test('/summary summarizes the conversation on demand and never writes the conv file', async () => {
   await withPlugin(async ({ fake, root }) => {
     // A short history so the recent window is non-empty.

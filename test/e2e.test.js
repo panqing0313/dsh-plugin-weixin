@@ -1453,3 +1453,62 @@ test('memory summarizer: every settled turn counts; at the cadence a side sessio
     delete process.env.DSH_WEIXIN_STATE_DIR
   }
 })
+
+test('local recall: an old line comes back only when the message asks for it', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-recall-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    // One line from two months ago, one from today, both in this conversation.
+    appendJournal(stateRoot, {
+      at: Date.now() - 60 * 24 * 60 * 60 * 1000,
+      dir: 'in',
+      accountId: ACCOUNT_ID,
+      conversationId: ALLOWED,
+      text: '上次那个报错是 ECONNREFUSED，端口没起',
+    })
+    appendJournal(stateRoot, { at: Date.now() - 60_000, dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '今天天气不错' })
+
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 7001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-recall', create_time_ms: 41, item_list: [{ type: 1, text_item: { text: '上次那个报错是什么来着' } }] },
+      ],
+      [
+        { message_id: 7002, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-recall-2', create_time_ms: 42, item_list: [{ type: 1, text_item: { text: '好' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(String(l)) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (sent.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    assert.ok(sent.length >= 2, `expected two replies (warnings: ${warnings.join(' | ')})`)
+    const asked = sent[0].msg.item_list[0].text_item.text
+    const smallTalk = sent[1].msg.item_list[0].text_item.text
+    assert.ok(asked.includes('<weixin_recall>'), `a question about the past must carry the retrieved originals: ${asked}`)
+    assert.match(asked, /\[2026-\d\d-\d\d \d\d:\d\d\] 用户：上次那个报错是 ECONNREFUSED/, 'the original line, dated')
+    assert.ok(!smallTalk.includes('<weixin_recall>'), `small talk must not pay for a search: ${smallTalk}`)
+    // The recalled line is not repeated a second time as the current message.
+    assert.ok(!asked.includes('用户：上次那个报错是什么来着'), asked)
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})

@@ -580,6 +580,8 @@ export function parseSessionCommand(text) {
   if (forgetMatch !== null) return { command: 'forget', arg: forgetMatch[1]?.trim() }
   const memoryMatch = /^\/(?:memory|记忆)$/i.exec(trimmed)
   if (memoryMatch !== null) return { command: 'memory' }
+  const recallMatch = /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i.exec(trimmed)
+  if (recallMatch !== null) return { command: 'recall', arg: recallMatch[1]?.trim() ?? '' }
   return undefined
 }
 
@@ -598,6 +600,7 @@ export const SESSION_COMMANDS_HELP = [
   '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）',
   '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）',
   '/memory 查看记住的内容和这段会话的记忆',
+  '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token',
   '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办',
   '/export [天数] 导出最近 N 天（默认 30）的聊天记录',
   '/status 查看当前账号和会话的状态（白名单、会话线等）',
@@ -666,8 +669,8 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (cancel === undefined) return '当前没有可中断的回合（这个入口拿不到正在运行的会话）。'
     return cancel()
   }
-  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory' || command.command === 'summary' || command.command === 'export') {
-    // All five answered by the inbound handler's persona bundle: it knows the
+  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory' || command.command === 'summary' || command.command === 'export' || command.command === 'recall') {
+    // All of them are answered by the inbound handler's persona bundle: it knows the
     // state root, the mode table, the memory files and the session bridge (the
     // /summary side session). A bare caller says so instead of pretending it
     // stored something. The handler may be async (/summary) — return the
