@@ -37,6 +37,7 @@ import path from 'node:path'
 import { stateDir } from './state.js'
 import { labelForAccount } from './account-registry.js'
 import { parseWhen } from './message/scheduler.js'
+import { parseSubscriptionWhen, describeSubscription } from './message/subscriptions.js'
 
 /** Filename under the state root holding every conversation's line list. */
 const LINES_FILE = 'sessions.json'
@@ -552,6 +553,18 @@ export function parseSessionCommand(text) {
   if (remindListMatch !== null) return { command: 'remindlist' }
   const remindCancelMatch = /^\/remindcancel\s+(\S+)$/i.exec(trimmed)
   if (remindCancelMatch !== null) return { command: 'remindcancel', id: remindCancelMatch[1] }
+  // Bare `/subscribe` (and `/订阅`) answers with usage instead of reaching
+  // the agent: a bare time command read as a chat message would silently
+  // schedule nothing and confuse the sender.
+  if (/^\/(?:subscribe|订阅)$/i.test(trimmed) === true) return { command: 'subscribe', when: '', text: '' }
+  // The time part may be two tokens (`每天 08:00`) — try the compound forms
+  // before falling back to a single token, then everything else is the prompt.
+  const subscribeMatch = /^\/(?:subscribe|订阅)\s+((?:每天|每日|daily)\s+\d{1,2}:\d{2}|每周[一二三四五六日天]\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}|\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
+  if (subscribeMatch !== null) return { command: 'subscribe', when: subscribeMatch[1], text: subscribeMatch[2] ?? '' }
+  const subscribeListMatch = /^\/(?:subscribelist|订阅列表)$/i.exec(trimmed)
+  if (subscribeListMatch !== null) return { command: 'subscribelist' }
+  const subscribeCancelMatch = /^\/(?:subscribecancel|订阅取消)\s+(\S+)$/i.exec(trimmed)
+  if (subscribeCancelMatch !== null) return { command: 'subscribecancel', id: subscribeCancelMatch[1] }
   // Persona + memory commands (personalization round). Parsing stays pure:
   // each one is ANSWERED by a handler the inbound handler provides under
   // context.persona, because the store and the mode table live with the
@@ -586,6 +599,9 @@ export const SESSION_COMMANDS_HELP = [
   '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
   '/remindlist 查看这个账号还没发出的提醒',
   '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）',
+  '/subscribe <时间> <主题> 定时主动消息：每天/每周X HH:mm，或一次性时间；到点我会主动给你发一条',
+  '/subscribelist 查看这个账号的定时主动消息',
+  '/subscribecancel <编号> 取消一条定时主动消息（编号来自 /subscribelist）',
 ].join('\n')
 
 /**
@@ -706,6 +722,36 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (scheduler === undefined) return '当前无法取消提醒（调度器不可用）。'
     const removed = scheduler.cancel(command.id)
     return removed === true ? `已取消提醒 ${command.id}。` : `没有找到编号 ${command.id} 的提醒（/remindlist 可以看现有的）。`
+  }
+  if (command.command === 'subscribe') {
+    const scheduler = context?.subscription
+    if (scheduler === undefined) return '当前无法安排定时消息（调度器不可用）。'
+    if (String(command.text ?? '').trim() === '') {
+      return '用法：/subscribe <时间> <主题>，例如 /subscribe 每天 08:00 早安，问问我睡得怎么样\n时间支持 每天 HH:mm、每周日 HH:mm、裸 HH:mm（等于每天），以及一次性时间（10m、2026-11-01 09:00）'
+    }
+    const when = parseSubscriptionWhen(command.when)
+    if (when.ok === false) return `没有安排：${when.reason}`
+    const accountIdForSub = context?.accountId ?? accountId ?? ''
+    const planned = scheduler.schedule({ accountId: accountIdForSub, conversationId, when, prompt: command.text })
+    if (planned.error !== undefined) return `没有安排：${planned.error}`
+    const recurring = planned.kind !== 'once'
+    const tail = recurring
+      ? `到点我会主动给你发一条（编号 ${planned.id}）。/subscribecancel ${planned.id} 取消。`
+      : `到点我会主动给你发一条（编号 ${planned.id}，只发这一次）。/subscribecancel ${planned.id} 取消。`
+    return `好的，${describeSubscription(planned)} ${tail}`
+  }
+  if (command.command === 'subscribelist') {
+    const scheduler = context?.subscription
+    if (scheduler === undefined) return '当前无法查看定时消息（调度器不可用）。'
+    const items = scheduler.list(context?.accountId ?? accountId ?? '')
+    if (items.length === 0) return '这个账号现在没有定时主动消息。用 /subscribe 安排一个。'
+    return ['定时主动消息：', ...items.map((item) => `${item.id} · ${describeSubscription(item)} · ${item.prompt}`)].join('\n')
+  }
+  if (command.command === 'subscribecancel') {
+    const scheduler = context?.subscription
+    if (scheduler === undefined) return '当前无法取消定时消息（调度器不可用）。'
+    const removed = scheduler.cancel(command.id)
+    return removed === true ? `已取消定时消息 ${command.id}。` : `没有找到编号 ${command.id} 的定时消息（/subscribelist 可以看现有的）。`
   }
   if (command.index === undefined) {
     return `${USE_USAGE}\n\n${lines.render(conversationId, accountId)}`

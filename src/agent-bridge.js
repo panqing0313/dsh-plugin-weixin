@@ -642,10 +642,10 @@ export class AgentBridge {
    * @param {string} params.prompt
    * @returns {Promise<{ text: string, sessionId: string } | undefined>}
    */
-  async summarize({ conversationId, accountId, prompt }) {
+  async summarize({ conversationId, accountId, prompt, sessionPrefix = 'wx-mem-' }) {
     const key = scopedLineKey(accountId, conversationId)
     const digest = createHash('sha1').update(key).digest('hex').slice(0, 16)
-    const sessionId = `wx-mem-${digest}`
+    const sessionId = `${sessionPrefix}${digest}`
     const record = await this.attach(conversationId, accountId, {
       sessionId,
       sideMeta: {

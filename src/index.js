@@ -39,6 +39,7 @@ import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
 import { ReminderScheduler } from './message/scheduler.js'
+import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { WeixinLoginController } from './login-remote.js'
@@ -318,6 +319,7 @@ export function apply(ctx, config) {
     /** @type {string} */
     let cwd
     let reminderScheduler
+    let subscriptionScheduler
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -391,6 +393,62 @@ export function apply(ctx, config) {
       if (config.messageJournal === true) {
         journalOutboundRef = (entry) => appendJournal(stateRoot, { dir: 'out', ...entry }, { warn })
       }
+
+      // Scheduled proactive messages (/subscribe): the bot speaks first
+      // through its own side session. The prompt re-uses the exact injection
+      // blocks the reply path builds — persona mode, memory, the recent
+      // window — so a proactive bubble sounds like the same entity the user
+      // has been talking to, not a different bot.
+      const subscriptionBusy = new Set()
+      subscriptionScheduler = new SubscriptionScheduler({
+        stateRoot,
+        warn,
+        fire: async (item) => {
+          const transport = transports.get(item.accountId)
+          if (transport === undefined) {
+            warn(`subscription ${item.id} has no live transport for ${item.accountId}; skipped`)
+            return
+          }
+          if (subscriptionBusy.has(item.conversationId)) {
+            warn(`subscription ${item.id} skipped: another fire is running for ${item.conversationId}`)
+            return
+          }
+          subscriptionBusy.add(item.conversationId)
+          try {
+            const now = Date.now()
+            const personaBlock = buildPersonaBlock(resolveMode(
+              readPersonaStore(stateRoot, { warn }),
+              activeModeFor(stateRoot, item.accountId, item.conversationId, config.personaDefaultMode, { warn }),
+            ))
+            const memoryBlock = config.memoryEnabled === true
+              ? buildMemoryBlock({
+                  global: readGlobalMemory(stateRoot, item.accountId, { warn }),
+                  conv: readConvMemory(stateRoot, item.accountId, item.conversationId, { warn }),
+                  recent: readRecentWindow(stateRoot, item.accountId, item.conversationId, {}),
+                  now,
+                })
+              : ''
+            const prompt = [
+              personaBlock,
+              memoryBlock,
+              `<weixin_subscription>`,
+              `现在是 ${formatStamp(now)}。你之前和对方约定：到这个时间点，就由你主动给对方发一条消息，主题是「${item.prompt}」。`,
+              `直接输出这条消息的正文，就像你在微信里自己发起的一条消息。不要复述或解释这个约定本身。`,
+              `</weixin_subscription>`,
+            ].filter((part) => part !== '').join('\n\n')
+            const result = await bridge.summarize({ conversationId: item.conversationId, accountId: item.accountId, prompt, sessionPrefix: 'wx-sub-' })
+            const text = typeof result?.text === 'string' ? result.text.trim() : ''
+            if (text === '' || text === '（已取消）') {
+              log(`subscription ${item.id} produced nothing to send`)
+              return
+            }
+            await sendChunked(transport, config, { conversationId: item.conversationId, text })
+            log(`subscription ${item.id} delivered to ${item.conversationId}`)
+          } finally {
+            subscriptionBusy.delete(item.conversationId)
+          }
+        },
+      })
 
     })()
 
@@ -546,6 +604,7 @@ export function apply(ctx, config) {
         // workspace, so "what the agent wrote" is well defined.
         agentCwd: cwd,
         reminderScheduler,
+        subscriptionScheduler,
         journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
       })
 
@@ -627,6 +686,7 @@ export function apply(ctx, config) {
     return async () => {
       cancelled = true
       reminderScheduler?.stop()
+      subscriptionScheduler?.stop()
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
@@ -803,7 +863,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, journalInbound }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, journalInbound }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -1012,6 +1072,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         senders: effectiveConfig.current.allowedSenders ?? [],
       },
       reminders: reminderScheduler,
+      subscription: subscriptionScheduler,
       // Affinity rides /status when memory is on; computed fresh per message
       // like the rest of the status facts (the card can edit between messages).
       bondLine: effectiveConfig.current.memoryEnabled !== false

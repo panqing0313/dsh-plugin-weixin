@@ -512,3 +512,42 @@ test('/status and /memory show the affinity line when a bond exists', async () =
     assert.match(fake.outbound[1].text, /我们认识第 1 天/, fake.outbound[1].text)
   })
 })
+
+test('/subscribe schedules, lists and cancels timed proactive messages', async () => {
+  await withPlugin(async ({ fake, root, sessionsOpened }) => {
+    fake.deliver('/subscribe', 'm0')
+    await waitFor(() => fake.outbound.length > 0, 'the usage reply')
+    assert.match(fake.outbound[0].text, /用法：\/subscribe/, fake.outbound[0].text)
+    assert.match(fake.outbound[0].text, /每天 HH:mm/, 'the usage names the recurring forms')
+
+    fake.deliver('/subscribe 每天 08:00 早安，问问我睡得怎么样', 'm1')
+    await waitFor(() => fake.outbound.length > 1, 'the confirmation')
+    assert.match(fake.outbound[1].text, /好的，每天 08:00 到点我会主动给你发一条（编号 s1）/, fake.outbound[1].text)
+    assert.deepEqual(sessionsOpened, [], 'scheduling costs no model turn')
+
+    const store = JSON.parse(fs.readFileSync(path.join(root, 'subscriptions.json'), 'utf8'))
+    assert.equal(store.items.length, 1)
+    assert.equal(store.items[0].kind, 'daily')
+    assert.equal(store.items[0].time, '08:00')
+    assert.equal(store.items[0].prompt, '早安，问问我睡得怎么样')
+    assert.ok(store.items[0].fireAt > Date.now(), 'the first slot is in the future')
+
+    fake.deliver('/subscribelist', 'm2')
+    await waitFor(() => fake.outbound.length > 2, 'the list reply')
+    assert.match(fake.outbound[2].text, /s1 · 每天 08:00 · 早安，问问我睡得怎么样/, fake.outbound[2].text)
+
+    fake.deliver('/subscribe 每周日 21:30 聊聊这周', 'm3')
+    await waitFor(() => fake.outbound.length > 3, 'the second confirmation')
+    assert.match(fake.outbound[3].text, /每周日 21:30/, 'the weekly label renders')
+
+    fake.deliver('/subscribecancel s1', 'm4')
+    await waitFor(() => fake.outbound.length > 4, 'the cancel reply')
+    assert.match(fake.outbound[4].text, /已取消定时消息 s1/, fake.outbound[4].text)
+    const after = JSON.parse(fs.readFileSync(path.join(root, 'subscriptions.json'), 'utf8'))
+    assert.deepEqual(after.items.map((item) => item.id), ['s2'])
+
+    fake.deliver('/subscribecancel s9', 'm5')
+    await waitFor(() => fake.outbound.length > 5, 'the miss reply')
+    assert.match(fake.outbound[5].text, /没有找到编号 s9/, fake.outbound[5].text)
+  })
+})
