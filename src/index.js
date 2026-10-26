@@ -829,9 +829,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const currentId = activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })
         if (arg === undefined || arg === '') {
           const current = resolveMode(store, currentId)
+          const render = (m) => `${m.id === currentId ? '→' : '　'}${m.id === DEFAULT_MODE_ID ? '默认助手（不扮演角色）' : m.name} — /mode ${m.name === '' ? m.id : m.name}`
+          const roles = store.filter((m) => m.game !== true)
+          const games = store.filter((m) => m.game === true)
           return [
             `当前对话模式：${current?.name ?? currentId}。`,
-            ...store.map((m) => `${m.id === currentId ? '→' : '　'}${m.id === DEFAULT_MODE_ID ? '默认助手（不扮演角色）' : m.name} — /mode ${m.name === '' ? m.id : m.name}`),
+            ...roles.map(render),
+            // Games are modes too (a fresh conversation line is a fresh board),
+            // but they read better as their own section.
+            ...(games.length > 0 ? ['—— 小游戏（玩完 /mode 默认 就退出）——', ...games.map(render)] : []),
           ].join('\n')
         }
         // Users type the display name (女友), not the id (girlfriend) — match

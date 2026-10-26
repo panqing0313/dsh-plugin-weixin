@@ -418,7 +418,7 @@ test('/mode 女友 switches, pins the override, and opens a fresh session line',
     fake.deliver('/mode 不存在的模式', 'm3')
     await waitFor(() => fake.outbound.length > 2, 'the unknown-mode reply')
     assert.match(fake.outbound[2].text, /没有叫「不存在的模式」的模式/)
-    assert.match(fake.outbound[2].text, /默认、女友、男友、朋友/)
+    assert.match(fake.outbound[2].text, /默认、女友、男友、朋友、海龟汤、成语接龙、文字冒险/)
     // /mode 默认 pins default (it must NOT clear the override: the global
     // default may itself be a persona).
     fake.deliver('/mode 默认', 'm4')

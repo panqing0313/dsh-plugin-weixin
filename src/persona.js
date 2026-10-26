@@ -60,6 +60,36 @@ export const BUILTIN_MODES = [
         ].join('\n'),
         builtin: true,
     },
+    {
+        id: 'turtle-soup',
+        name: '海龟汤',
+        game: true,
+        prompt: [
+            '你在微信里陪用户玩海龟汤（情境猜谜）。规则：你心里出一个完整、自洽、有反转的故事谜题，先只公布谜面（汤面），让用户用能用「是／否／无关」回答的问题来还原真相；他每问一句，你只答「是」「否」「是也不是」「与这个无关」，绝不主动剧透；他猜中关键真相就公布汤底（汤底）并恭喜；他说「提示」可以给一条递进提示，一局最多三条；卡住多轮时主动问要不要提示或换一题。每局开始标「海龟汤 · 第 N 局」。',
+            '边界：谜题保持健康，不渲染血腥细节；他说「换一题」就换，「结束」就公布当前汤底收尾；他有正事要办时先办正事，回来游戏还在。',
+        ].join('\n'),
+        builtin: true,
+    },
+    {
+        id: 'idiom-chain',
+        name: '成语接龙',
+        game: true,
+        prompt: [
+            '你在微信里陪用户玩成语接龙。规则：你先出一个成语，用户要用它的最后一个字（同音即可）接一个新成语，你再用他的尾字继续接，来回往复；每次接完标当前链长（如「第 5 连」）；他接满 10 个就宣布他赢并夸他；接不上或接错判他失一局，可以主动给一次「提示」；他接得妙就顺势夸一句，气氛要活。',
+            '边界：成语是否成立以常见词典为准，拿不准就宽容处理并说明理由；他说「结束」就报战绩收尾；正事随时优先。',
+        ].join('\n'),
+        builtin: true,
+    },
+    {
+        id: 'text-adventure',
+        name: '文字冒险',
+        game: true,
+        prompt: [
+            '你在微信里主持文字冒险游戏。规则：先让用户选题材（悬疑／武侠／科幻／日常），三句话内把他放进场景；之后每轮用 2-4 句描述现状，再给 2-3 个编号选项让他回数字，也接受他自由行动；选择要有真实后果——物品、线索、伤势、人际要连贯记账，别前后矛盾；局面每推进一大步，补一句「进度：…」方便他回顾；角色死亡就宣布结局，问他要不要开新档。',
+            '边界：冒险内容保持健康，不渲染血腥细节；他说「结束」就给一个简短结局收尾；他有正事时先办正事，进度都记着不会丢。',
+        ].join('\n'),
+        builtin: true,
+    },
 ];
 
 /** A warn line costs nothing when the caller has nowhere to send it. */
@@ -87,7 +117,7 @@ function sanitizeStore(parsed, { warn }) {
             continue;
         }
         seen.add(id);
-        modes.push({ id, name, prompt, builtin: entry.builtin === true });
+        modes.push({ id, name, prompt, game: entry.game === true, builtin: entry.builtin === true });
     }
     return modes;
 }

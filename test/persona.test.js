@@ -155,3 +155,22 @@ test('a /mode switch round-trips persona-active.json WITHOUT erasing the card de
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('the game builtins carry playable rules and the game flag survives a rewrite', () => {
+  const games = BUILTIN_MODES.filter((m) => m.game === true)
+  assert.deepEqual(games.map((m) => m.name), ['海龟汤', '成语接龙', '文字冒险'])
+  for (const game of games) {
+    assert.ok(game.prompt.length > 80, `${game.name} needs real rules`)
+  }
+  const root = mkdtempSync(join(tmpdir(), 'persona-games-'))
+  try {
+    const modes = readPersonaStore(root)
+    const turtle = modes.find((m) => m.id === 'turtle-soup')
+    assert.equal(turtle.game, true)
+    writePersonaStore(root, modes)
+    const reread = readPersonaStore(root).find((m) => m.id === 'turtle-soup')
+    assert.equal(reread.game, true, 'the game flag must survive a round trip')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
