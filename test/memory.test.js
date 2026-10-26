@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
 	addGlobalFact,
+	setConvRecentSession,
 	readGlobalMemory,
 	bumpTurnAndBond,
 	bondLine,
@@ -100,6 +101,45 @@ test('recent window comes from the journal, clamped and ordered old→new', () =
 	assert.equal(clamped.length, 2, 'a turn is one in+out pair')
 	assert.ok(clamped.every((e) => e.text.length <= 5), JSON.stringify(clamped))
 	assert.equal(clamped[1].text, '回复 8'.slice(0, 5))
+})
+
+test('the message being answered is excluded from its own window', () => {
+	const dir = join(root, 'exclude')
+	const acct = 'e@im.bot'
+	const conv = 'e@im.wechat'
+	appendJournal(dir, { dir: 'in', accountId: acct, conversationId: conv, text: '在吗', at: 1000 })
+	appendJournal(dir, { dir: 'out', accountId: acct, conversationId: conv, text: '在的', at: 2000 })
+	// The inbound journal write happens before the prompt is built, so the
+	// newest entry IS the message being answered: it must not be repeated.
+	appendJournal(dir, { dir: 'in', accountId: acct, conversationId: conv, text: '晚上吃啥好', at: 3000 })
+
+	const window = readRecentWindow(dir, acct, conv, { warn, turns: 5, excludeText: '晚上吃啥好' })
+	assert.deepEqual(window.map((e) => e.text), ['在吗', '在的'], 'the current message is dropped, the rest survives')
+	// A different current message (or none at all) leaves the newest entry alone.
+	assert.equal(readRecentWindow(dir, acct, conv, { warn, turns: 5 }).length, 3)
+	assert.equal(readRecentWindow(dir, acct, conv, { warn, turns: 5, excludeText: '不是你' }).length, 3)
+	// Only the NEWEST inbound entry is dropped — an older identical message stays.
+	appendJournal(dir, { dir: 'in', accountId: acct, conversationId: conv, text: '在吗', at: 4000 })
+	const reordered = readRecentWindow(dir, acct, conv, { warn, turns: 5, excludeText: '在吗' })
+	assert.deepEqual(reordered.map((e) => e.text), ['在吗', '在的', '晚上吃啥好'], 'older duplicate kept')
+})
+
+test('the injected line is remembered, so only a cold line pays for the window', () => {
+	const dir = join(root, 'coldline')
+	const acct = 'l@im.bot'
+	const conv = 'l@im.wechat'
+	assert.equal(readConvMemory(dir, acct, conv, { warn }).recentSessionId, undefined, 'no key before any injection')
+	assert.equal(setConvRecentSession(dir, acct, conv, 'sess-a', { warn }), true)
+	assert.equal(readConvMemory(dir, acct, conv, { warn }).recentSessionId, 'sess-a')
+	// An empty id is not a line: refuse rather than write a useless marker.
+	assert.equal(setConvRecentSession(dir, acct, conv, '', { warn }), false)
+	assert.equal(readConvMemory(dir, acct, conv, { warn }).recentSessionId, 'sess-a')
+	// The marker rides alongside the rest of the file instead of replacing it.
+	setConvSummary(dir, acct, conv, '聊到了搬家', { warn })
+	setConvRecentSession(dir, acct, conv, 'sess-b', { warn })
+	const conv2 = readConvMemory(dir, acct, conv, { warn })
+	assert.equal(conv2.summary, '聊到了搬家')
+	assert.equal(conv2.recentSessionId, 'sess-b')
 })
 
 test('buildMemoryBlock: sections, omission, and the empty case costs nothing', () => {

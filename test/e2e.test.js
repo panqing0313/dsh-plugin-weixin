@@ -15,6 +15,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { appendJournal } from '../src/message/journal.js'
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 
@@ -1321,9 +1322,19 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       fs.writeFileSync(path.join(stateRoot, 'memory', `global-${ACCOUNT_ID}.json`), JSON.stringify({
         facts: [{ text: '我对花生过敏', at: 1700000000000 }],
       }))
+      // A prior exchange in the journal, so the cold-start window has real
+      // context to fold in (it must NOT repeat the message being answered).
+      appendJournal(stateRoot, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, senderId: ALLOWED, text: '在吗', at: 1700000000000 })
+      appendJournal(stateRoot, { dir: 'out', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '在的', at: 1700000000001 })
+      // Two messages on one line: the first is a COLD line (the window is worth
+      // injecting), the second is warm (the agent already has the first in its
+      // own history, so the window must not be repeated).
       const { server, baseUrl, sent } = await startFakeILink([
         [
           { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona', create_time_ms: 21, item_list: [{ type: 1, text_item: { text: '晚上吃啥好' } }] },
+        ],
+        [
+          { message_id: 5002, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona-2', create_time_ms: 22, item_list: [{ type: 1, text_item: { text: '那吃点啥' } }] },
         ],
       ])
       seedAccount(stateRoot, baseUrl)
@@ -1341,15 +1352,16 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       plugin.apply(ctx, config)
 
       const deadline = Date.now() + 10_000
-      while (sent.length < 1 && Date.now() < deadline) {
+      while (sent.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
       for (const d of disposers) await (await d)?.()
       await new Promise((resolve) => setTimeout(resolve, 100))
       server.close()
 
-      assert.ok(sent.length >= 1, `expected a reply (memoryEnabled=${memoryEnabled}; warnings: ${warnings.join(' | ')})`)
+      assert.ok(sent.length >= 2, `expected two replies (memoryEnabled=${memoryEnabled}; warnings: ${warnings.join(' | ')})`)
       const prompt = sent[0].msg.item_list[0].text_item.text
+      const warmPrompt = sent[1].msg.item_list[0].text_item.text
       if (memoryEnabled) {
         // Persona first, then memory, then the user text — one tag each.
         const personaAt = prompt.indexOf('<weixin_persona mode="女友">')
@@ -1360,7 +1372,15 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
         assert.ok(personaAt < memoryAt && memoryAt < textAt, `order wrong: persona=${personaAt} memory=${memoryAt} text=${textAt}`)
         assert.match(prompt, /会关心他的身体和心情/, 'the shipped girlfriend prompt body')
         assert.match(prompt, /【长期记忆 · 关于用户】\n- 我对花生过敏/)
-        assert.match(prompt, /【最近消息】\n用户：晚上吃啥好/, 'the journal window folds in this very message')
+        // Cold line: the previous exchange is folded in, the message being
+        // answered is not (it follows the block verbatim).
+        assert.match(prompt, /【最近消息】\n用户：在吗\n助手：在的/, 'the window carries earlier context')
+        assert.ok(!prompt.includes('用户：晚上吃啥好'), `the current message must not be repeated: ${prompt}`)
+        // Warm line: the agent already holds that history, so the window costs
+        // nothing. The rest of the memory block (facts) is still there.
+        assert.match(warmPrompt, /<weixin_persona mode="女友">/, 'persona stays on every turn')
+        assert.match(warmPrompt, /【长期记忆 · 关于用户】\n- 我对花生过敏/)
+        assert.ok(!warmPrompt.includes('【最近消息】'), `a warm line repeats nothing: ${warmPrompt}`)
       } else {
         // Memory off removes only the memory block — the persona mode table is
         // a separate feature with its own switch (the mode itself).

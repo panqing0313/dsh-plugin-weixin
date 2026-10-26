@@ -69,6 +69,7 @@ import {
   addGlobalFact,
   removeGlobalFact,
   bondLine,
+  setConvRecentSession,
 } from './memory.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
@@ -135,6 +136,9 @@ export const Config = z.object({
   ),
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
+  memoryRecentTurns: z.number().min(0).default(5).description(
+    'How many recent user/assistant messages, at most, the memory block repeats back to the model. Only used when a conversation line is COLD (a brand new session: first message, /new, /mode switch, or a line whose session no longer holds the history) — a resumed line already carries those messages in its own history, so repeating them every turn would spend tokens on nothing. 0 turns the window off entirely.',
+  ),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -1218,13 +1222,37 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // window folded from the journal, each section omitted when empty.
     const personaModes = readPersonaStore(stateRoot, { warn })
     const personaBlock = buildPersonaBlock(resolveMode(personaModes, activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
+    // The recent-message window is the expensive part of the memory block and
+    // it only earns its tokens on a COLD line: a resumed session already has
+    // those messages in its own history, and the inbound journal write above
+    // puts the message being answered at the top of the window too. So the
+    // window is injected once per session line (the id is remembered in the
+    // conversation memory file) and the message being answered is excluded.
+    const convMemory = readConvMemory(stateRoot, accountId, message.conversationId, { warn })
+    const recentTurns = Number(effectiveConfig.current.memoryRecentTurns ?? 5)
+    const lineSessionId = bridge.lines.active(message.conversationId, accountId)
+    const coldLine = convMemory.recentSessionId !== lineSessionId
+    const recent = recentTurns > 0 && coldLine
+      ? readRecentWindow(stateRoot, accountId, message.conversationId, {
+          turns: recentTurns,
+          textChars: 120,
+          excludeText: message.text,
+          warn,
+        })
+      : []
     const memoryBlock = effectiveConfig.current.memoryEnabled === true
       ? buildMemoryBlock({
           global: readGlobalMemory(stateRoot, accountId, { warn }),
-          conv: readConvMemory(stateRoot, accountId, message.conversationId, { warn }),
-          recent: readRecentWindow(stateRoot, accountId, message.conversationId, { warn }),
+          conv: convMemory,
+          recent,
         })
       : ''
+    // Remember the line even when the window came back empty: the next message
+    // on this line is warm, so the window must not be re-read (and re-injected)
+    // just because the first one had nothing to show yet.
+    if (coldLine && effectiveConfig.current.memoryEnabled === true) {
+      setConvRecentSession(stateRoot, accountId, message.conversationId, lineSessionId, { warn })
+    }
     // Prepend in ONE join so the order stays persona → memory → user text
     // (a per-block prepend loop would silently reverse it).
     const blocks = [personaBlock, memoryBlock].filter((block) => block !== '')

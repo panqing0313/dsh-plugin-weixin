@@ -136,7 +136,31 @@ export function readConvMemory(stateRoot, accountId, conversationId, { warn = no
     // exists.
     const bond = sanitizeBond(parsed.bond);
     if (bond !== undefined) out.bond = bond;
+    // Same optional-key rule as bond: a file written before cold-start windows
+    // existed keeps its exact shape.
+    if (typeof parsed.recentSessionId === 'string' && parsed.recentSessionId !== '') {
+        out.recentSessionId = parsed.recentSessionId;
+    }
     return out;
+}
+
+/**
+ * Remember which session line the recent-message window was last injected
+ * for. The window is only worth its tokens on a COLD line — a resumed line
+ * already carries the same messages in the agent's own history, so
+ * re-injecting them every turn is pure duplication.
+ *
+ * @param {string} stateRoot
+ * @param {string} accountId
+ * @param {string} conversationId
+ * @param {string} sessionId the DSH session the window was injected into
+ */
+export function setConvRecentSession(stateRoot, accountId, conversationId, sessionId, { warn = noopWarn } = {}) {
+    if (typeof sessionId !== 'string' || sessionId === '') return false;
+    const file = convMemoryPath(stateRoot, accountId, conversationId);
+    const current = readJsonSafe(file, {}, warn, 'conversation memory');
+    current.recentSessionId = sessionId;
+    return writeJsonSafe(file, current, warn, 'conversation memory');
 }
 
 /**
@@ -305,11 +329,19 @@ export function readRecentWindow(stateRoot, accountId, conversationId, {
     warn = noopWarn,
     turns = DEFAULT_MEMORY_RECENT_TURNS,
     textChars = DEFAULT_MEMORY_RECENT_TEXT_CHARS,
+    excludeText,
 } = {}) {
     const wanted = Math.max(1, Math.floor(turns)) * 2;
-    const entries = readJournal(stateRoot, { limit: wanted + 20, accountId, conversationId })
-        .filter((entry) => typeof entry.text === 'string' && entry.text.trim() !== '')
-        .slice(0, wanted);
+    const newestFirst = readJournal(stateRoot, { limit: wanted + 20, accountId, conversationId })
+        .filter((entry) => typeof entry.text === 'string' && entry.text.trim() !== '');
+    // The inbound journal write happens before the prompt is built, so the
+    // message being answered is already the newest entry — it follows the
+    // block verbatim and must not be repeated inside it.
+    if (typeof excludeText === 'string' && excludeText.trim() !== ''
+        && newestFirst[0]?.dir !== 'out' && newestFirst[0]?.text.trim() === excludeText.trim()) {
+        newestFirst.shift();
+    }
+    const entries = newestFirst.slice(0, wanted);
     return entries.reverse().map((entry) => ({
         dir: entry.dir === 'out' ? 'out' : 'in',
         text: entry.text.trim().slice(0, Math.max(1, Math.floor(textChars))),
