@@ -99,6 +99,13 @@ node bin/install.mjs --uninstall
 同时会把两个**可选**依赖（`qrcode-terminal`、`silk-wasm`）搬到 profile 的 `node_modules`——
 不搬的话它们只在这个仓库里可见，装到 profile 后会静默降级。
 
+> **注意：这份安装会活到下一次 App 启动。** 桌面端每次启动都会在 `<profile>/` 里跑一次
+> `pnpm install`，按 `package.json` + `pnpm-lock.yaml` 里声明的版本**从 npm 重装插件**——
+> 手工复制进去的源码会被整个覆盖（新增的文件直接消失，表现为「重启前后功能不一样」）。
+> 所以：**当场验证**用这个脚本；**装好并长期生效**请把 `<profile>/package.json` 的
+> `dsh-plugin-weixin` 指向已发布版本（如 `^0.9.5`）并同步锁文件，或者直接用设置卡的
+> 「插件」面板装 npm 上那一份。
+
 重启 DSH 后生效。
 
 ## 登录
