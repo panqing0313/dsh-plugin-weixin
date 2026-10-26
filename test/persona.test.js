@@ -50,6 +50,22 @@ test('a file that lost a builtin gets it re-added, keeping the rest', () => {
 	assert.ok(modes.some((m) => m.id === 'girlfriend'), 'existing kept')
 })
 
+test('an older catalog gains the new modes where the roster puts them', () => {
+	const dir = join(root, 'upgrade')
+	// What a 0.9.4 install holds: no JARVIS, none of the companion roles.
+	writePersonaStore(dir, [
+		{ id: 'default', name: '默认助手', prompt: '', builtin: true },
+		{ id: 'girlfriend', name: '女友', prompt: 'x', builtin: true },
+		{ id: 'friend', name: '朋友', prompt: 'y', builtin: true },
+		{ id: 'custom-1', name: '我的模式', prompt: 'z' },
+	], { warn })
+	const modes = readPersonaStore(dir, { warn })
+	const roleOrder = modes.filter((m) => m.builtin === true && m.game !== true).map((m) => m.id)
+	const canonical = BUILTIN_MODES.filter((m) => m.game !== true).map((m) => m.id)
+	assert.deepEqual(roleOrder, canonical, 'builtins land in the shipped order, not reversed at the top')
+	assert.ok(modes.some((m) => m.id === 'custom-1'), 'the operator entry survives')
+})
+
 test('a corrupt catalog warns and reseeds instead of throwing', () => {
 	const dir = join(root, 'corrupt')
 	mkdirSync(dir, { recursive: true })
@@ -159,14 +175,30 @@ test('a /mode switch round-trips persona-active.json WITHOUT erasing the card de
 
 test('the role builtins cover the shipped roster, each with a boundary paragraph', () => {
   const roles = BUILTIN_MODES.filter((m) => m.game !== true)
-  assert.deepEqual(roles.map((m) => m.id), ['default', 'girlfriend', 'boyfriend', 'friend', 'jarvis'])
+  assert.deepEqual(roles.map((m) => m.id), [
+    'default', 'girlfriend', 'boyfriend', 'friend', 'jarvis',
+    'whale-girl', 'oneesan', 'big-sister', 'warm-guy', 'daughter', 'neko', 'tsundere',
+  ])
+  assert.deepEqual(roles.map((m) => m.name), [
+    '默认助手', '女友', '男友', '朋友', '贾维斯',
+    '小鲸娘', '御姐', '知心大姐姐', '暖男', '可爱闺女', '猫娘', '傲娇',
+  ])
   const jarvis = BUILTIN_MODES.find((m) => m.id === 'jarvis')
-  assert.equal(jarvis.name, '贾维斯')
   assert.equal(jarvis.builtin, true)
   assert.ok(jarvis.prompt.length > 80, 'a persona needs a real prompt body')
-  assert.match(jarvis.prompt, /边界/, 'every builtin says tone must not override facts')
   assert.match(jarvis.prompt, /先给结论/, 'the butler style is the point of the mode')
   assert.equal(BUILTIN_MODES.filter((m) => m.id === 'jarvis').length, 1, 'one id, one mode')
+
+  // Every shipped persona — not only the butler — must keep the two halves: a
+  // tone worth switching to, and the boundary paragraph that stops the tone
+  // from turning into invented facts or dropped tasks.
+  for (const mode of roles.filter((m) => m.id !== 'default')) {
+    assert.ok(mode.prompt.length > 80, `${mode.name} needs a real prompt body`)
+    assert.match(mode.prompt, /边界/, `${mode.name} must state its boundary`)
+    assert.match(mode.prompt, /不提供医疗、法律、投资/, `${mode.name} must refuse professional advice`)
+    assert.equal(mode.builtin, true, `${mode.name} ships as a builtin`)
+    assert.equal(BUILTIN_MODES.filter((m) => m.id === mode.id).length, 1, `${mode.name}: one id, one mode`)
+  }
 })
 
 test('the game builtins carry playable rules and the game flag survives a rewrite', () => {
