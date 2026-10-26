@@ -330,14 +330,19 @@ async function mountCard(remote, options = {}) {
   }
   await (await registration.factory(require).apply(ctx))
 
-  // Three seats: the bundle page and the shell Settings nav share one
-  // component, and the session row mark now occupies a third
-  // (sidebar.session.row.leading) on every Session row in the workspace.
-  // This file is about the card, so it renders the bundle page by name rather
-  // than by position — a fourth seat must not silently change what is tested.
-  assert.equal(seats.length, 3, 'the card must register the bundle page, the settings.section entry, and the row mark')
-  const card = seats.find((seat) => seat.meta.name === 'plugins.bundle.config')
-  assert.ok(card, 'the bundle page seat must be registered')
+  // Five seats: the bundle page and the shell Settings nav share one
+  // component, the left sidebar's panel row plus the page it opens are two
+  // more (they are addressed by the same id), and the session row mark
+  // occupies the last (sidebar.session.row.leading) on every Session row in
+  // the workspace. This file is about the card, so it renders the bundle page
+  // by name rather than by position — another seat must not silently change
+  // what is tested.
+  assert.equal(seats.length, 5, 'the card must register the bundle page, the settings.section entry, the sidebar panel row, its page, and the row mark')
+  // Which seat to mount: the settings card by default, `main` for the page the
+  // left sidebar opens — the two must never drift into different components.
+  const seatName = options.seat ?? 'plugins.bundle.config'
+  const card = seats.find((seat) => seat.meta.name === seatName)
+  assert.ok(card, `the ${seatName} seat must be registered`)
   hooks.setRoot(card.component)
   hooks.flush()
 
@@ -614,4 +619,24 @@ test('the status card refreshes itself instead of going stale while mounted', as
   await statusTimer().fn()
   await settle()
   assert.equal(host.calls.status, beforeLoginTick, 'no background status read while a QR login polls')
+})
+
+test('the left sidebar panel opens the same card inside the page gutter', async () => {
+  // The sidebar row and the page behind it are two registrations sharing one
+  // id; this asserts the page actually renders the card, because a page that
+  // renders some other (or empty) component would still make the row clickable.
+  const host = fakeHost([{ accounts: [], stateDir: '/tmp', pendingLogin: false, sessionExpired: false }])
+  const page = await mountCard(host, { seat: 'main' })
+
+  const tree = page.render()
+  assert.equal(tree.type, 'div', 'the page is a plain host element')
+  // The card was sized for a ~520px settings dialog; a full workspace pane needs
+  // its own scroll and gutter or its full-bleed rows touch the frame edge.
+  assert.equal(tree.props.style.overflowY, 'auto')
+  assert.ok(/^\d+px/.test(tree.props.style.padding), `expected a padding gutter, got ${tree.props.style.padding}`)
+
+  const text = textOf(tree)
+  for (const label of ['微信账号', '会话', '配置项', '统计', '个性化', '关于']) {
+    assert.ok(text.includes(label), `the panel page must show the card's "${label}" tab, got: ${text}`)
+  }
 })

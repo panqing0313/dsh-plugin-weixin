@@ -2935,6 +2935,14 @@ window.__ModuleLoader__.load({
 		// state palette stops being a brand mark.
 		const WECHAT_GREEN = "#07C160";
 
+		// The left sidebar's panel list (`sidebar.panellist`) and the page that
+		// row opens (the layout's root-scoped `main` keyed slot) are addressed by
+		// the SAME id: the host looks the page up by the row's id, and a row
+		// whose id has no `main` entry throws on click without moving the
+		// selection. The id also has to stay clear of the shell's own panels
+		// (`conversation`, `plugins`, `schedules`), so the package name is it.
+		const PANEL_ID = "dsh-weixin";
+
 		/** Whether a Session id belongs to a conversation this plugin opened. */
 		function isWeixinSession(sessionId) {
 			return typeof sessionId === "string" && sessionId.startsWith(SESSION_ID_PREFIX);
@@ -3131,6 +3139,65 @@ window.__ModuleLoader__.load({
 					section(TABS[tab]?.label ?? "", TABS[tab]?.body));
 			}
 
+			// The glyph in the left sidebar's panel list. The host renders it at
+			// 16px in the expanded column and 18px in the collapsed rail, and
+			// passes `active`; only the size is ours to honour, since the row
+			// itself owns the hover/selected background. `aria-hidden` because
+			// the row's label is the accessible name.
+			function WeixinPanelGlyph({ size = 16 } = {}) {
+				return createElement("svg", {
+					width: size,
+					height: size,
+					viewBox: "0 0 24 24",
+					fill: WECHAT_GREEN,
+					focusable: "false",
+					"aria-hidden": "true",
+					style: { flex: "none" },
+				}, createElement("path", { d: WECHAT_GLYPH }));
+			}
+
+			// The page behind that row: the same card, but it owns the whole
+			// workspace area instead of a settings modal. Without the wrapper the
+			// card would stretch to the window width (its rows are full-bleed)
+			// and start flush against the frame edges, so the page supplies a
+			// gutter, a readable measure, and its own scroll — the card was sized
+			// for a ~520px dialog, not for a full pane.
+			function WeixinPanelPage() {
+				return createElement("div", {
+						style: { height: "100%", overflowY: "auto", boxSizing: "border-box", padding: "24px 28px 56px" },
+					},
+					createElement("div", { style: { maxWidth: 920, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 } },
+						createElement(WeixinSettingsCard, {})));
+			}
+
+			// The left sidebar entry. `sidebar.panellist` draws the row (glyph
+			// plus, when expanded, this label) and the host looks the page up in
+			// the root-scoped `main` keyed slot by the same id, so the two
+			// registrations are one feature and must stay in step. Order 20 sits
+			// after the shell's Plugins (0) and dsh-schedule's task manager (10):
+			// all three are workspace-level pages rather than conversations, and
+			// a WeChat account is not more routine than either of them.
+			ctx.slots.inject("main", () =>
+				ctx.slots.register(
+					{
+						name: "main",
+						key: PANEL_ID,
+						locale: NS,
+						inject: () => actions,
+					},
+					WeixinPanelPage));
+
+			ctx.slots.inject("sidebar.panellist", () =>
+				ctx.slots.register(
+					{
+						name: "sidebar.panellist",
+						id: PANEL_ID,
+						order: 20,
+						label: () => t("WeChat", "微信"),
+						locale: NS,
+					},
+					WeixinPanelGlyph));
+
 			ctx.slots.inject("plugins.bundle.config", () =>
 				ctx.slots.register(
 					{
@@ -3204,6 +3271,10 @@ window.__ModuleLoader__.load({
 
 		exports.apply = apply;
 		exports.inject = inject;
+		// The sidebar panel's id: the row and the page are two registrations
+		// that only work while they agree, so the tests assert both seats carry
+		// this exact id rather than a copy of the literal.
+		exports.PANEL_ID = PANEL_ID;
 		// Exported for the test suite: the chooser's cancel/absent-profile paths
 		// are the ones that regress silently, and they are not reachable from the
 		// component tree without a DOM.

@@ -259,17 +259,28 @@ test('apply() registers the settings card and disposes cleanly', async () => {
   const mod = registration.factory(fakeRequire)
   const ctx = fakeCtx()
   const dispose = await mod.apply(ctx)
-  // Three seats: the bundle page, the shell Settings nav entry (both rendering
-  // the same card component), and the session row mark on
-  // sidebar.session.row.leading.
-  assert.equal(ctx.seats.length, 3)
-  assert.equal(ctx.seats[0].meta.name, 'plugins.bundle.config')
+  // Five seats: the same card in two homes (the plugin bundle page and the
+  // shell Settings nav entry), the left sidebar's panel row plus the page it
+  // opens (both addressed by the SAME id — a row whose id has no page throws
+  // on click), and the session row mark on sidebar.session.row.leading.
+  assert.equal(ctx.seats.length, 5)
+  const seat = (name) => {
+    const found = ctx.seats.find((entry) => entry.meta.name === name)
+    assert.ok(found, `no seat registered for ${name}`)
+    return found
+  }
+  const bundlePage = seat('plugins.bundle.config')
   // The seat key is the package name the settings owner dispatches on.
-  assert.equal(ctx.seats[0].meta.key, 'dsh-plugin-weixin')
-  assert.equal(ctx.seats[1].meta.name, 'settings.section')
-  assert.equal(ctx.seats[1].meta.id, 'dsh-plugin-weixin-settings')
-  assert.equal(ctx.seats[2].meta.name, 'sidebar.session.row.leading')
-  assert.equal(ctx.seats[2].meta.id, 'dsh-plugin-weixin-row-mark')
+  assert.equal(bundlePage.meta.key, 'dsh-plugin-weixin')
+  assert.equal(seat('settings.section').meta.id, 'dsh-plugin-weixin-settings')
+  // The panel row and its page are one feature: the row's id is the page's
+  // key, and the exported constant is what both carry.
+  const panelRow = seat('sidebar.panellist')
+  assert.equal(panelRow.meta.id, mod.PANEL_ID)
+  assert.equal(seat('main').meta.key, mod.PANEL_ID)
+  assert.equal(typeof panelRow.meta.label, 'function', 'the row label is a locale thunk')
+  assert.equal(panelRow.meta.label(), '微信')
+  assert.equal(seat('sidebar.session.row.leading').meta.id, 'dsh-plugin-weixin-row-mark')
   await dispose()
 })
 
