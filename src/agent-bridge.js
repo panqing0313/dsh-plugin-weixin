@@ -214,6 +214,10 @@ export class AgentBridge {
       cancelRunningTurn: () => this.#cancelRunningTurn(key, conversationId, accountId),
     })
     if (reply === undefined) return undefined
+    // /summary resolves through a side session and answers asynchronously; the
+    // caller that awaits command replies handles the promise, and no async
+    // command can be /clear, so the sync bookkeeping below stays untouched.
+    if (reply instanceof Promise) return reply
     // `/clear` orphans the line that was active: its session id is no longer
     // in the list and the fresh line has a different id, so the old in-memory
     // record must not keep answering (a queued message would otherwise reach a

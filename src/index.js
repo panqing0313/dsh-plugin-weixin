@@ -924,6 +924,29 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         bridge.lines.create(conversationId, accountId)
         return `${match.id === DEFAULT_MODE_ID ? '已切回默认助手' : `已切换到「${match.name}」`}模式，并开启了一条新会话线。\n（之前的会话保留，/list 可以切回）`
       },
+      // /summary: an on-demand look at where the conversation stands. Unlike
+      // the background summarizer it replies to the user and never writes the
+      // conv file — 「看一眼」 and 「记住」 stay separate concerns.
+      summary: async () => {
+        const prior = readConvMemory(stateRoot, accountId, conversationId, { warn })
+        const recent = readRecentWindow(stateRoot, accountId, conversationId, { turns: 20, textChars: 200 })
+        const transcript = recent
+          .map((entry) => `${entry.dir === 'in' ? '用户' : '助手'}：${entry.text}`)
+          .join('\n')
+        if (transcript === '') return '这段会话还没有可总结的消息（消息流水里是空的）。'
+        const prompt = [
+          '以下是这段微信会话最近的对话记录。',
+          ...(String(prior.summary ?? '') !== '' ? [`【已有摘要】\n${prior.summary}`] : []),
+          `【最近对话】\n${transcript}`,
+          '请总结我们聊到哪了：正在讨论的话题、已经决定的事、还没做完的待办、彼此的约定。',
+          '不超过 300 字，直接输出总结本身，不要任何解释或前缀。',
+        ].join('\n')
+        const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: 'wx-sum-' })
+        if (result === undefined) return '当前有对话在跑，等这轮结束再试 /summary。'
+        const text = String(result.text ?? '').trim()
+        if (text === '' || text === '（已取消）') return '这次没总结出来（侧会话没有返回内容），稍后再试。'
+        return text
+      },
       remember: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'
         if (arg === undefined || String(arg).trim() === '') return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏'
@@ -1062,7 +1085,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     //    `/status` additionally gets account-level facts read fresh here (the
     //    registry entry may have changed since this handler was built).
     const registryEntry = accountId ? readRegistry()[accountId] : undefined
-    const commandReply = bridge.handleCommand(message.conversationId, message.text, accountId, {
+    // /summary answers asynchronously (a side session); awaiting a plain
+    // string is a no-op, so one call site covers both command shapes.
+    const commandReply = await bridge.handleCommand(message.conversationId, message.text, accountId, {
       accountId,
       accountLabel: registryEntry?.label ?? null,
       paused: accountId ? isAccountPaused(accountId) : false,

@@ -21,6 +21,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { after } from 'node:test'
 
+import { appendJournal } from '../src/message/journal.js'
+
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 const ACCOUNT_ID = 'bot1'
 const ALLOWED = 'wxid_abc'
@@ -157,14 +159,38 @@ async function withPlugin(body) {
   const trackedDispose = (sessionId) => async () => { disposedSessions.push(sessionId) }
   let deliverCalls = 0
 
+  // Side sessions (wx-mem-/wx-sub-/wx-sum-…) must be able to COMPLETE a turn:
+  // the background summarizer, /subscribe and /summary all run through them.
+  // Main sessions stay followup-less on purpose — a session command that leaks
+  // to the agent would otherwise look like a working turn instead of the
+  // failure this file exists to catch.
+  const sideAgent = (sessionId) => {
+    const events = []
+    let seq = 0
+    const ev = (type, data) => events.push({ type, seq: seq++, time: Date.now(), data })
+    return {
+      session: { id: sessionId, snapshotEvents: () => events },
+      inbox: { clear() {} },
+      followup(message) {
+        ev('user/message', { message })
+        ev('turn/start', {})
+        setTimeout(() => {
+          ev('assistant/message', { stream: [{ type: 'text-chunks', texts: ['（假总结）聊到了吃饭的安排。', message.content[0].text] }] })
+          ev('turn/end', {})
+        }, 20)
+      },
+    }
+  }
   const agents = {
     get: () => undefined,
     async resume({ resumeSessionId }) {
       sessionsOpened.push(resumeSessionId)
+      if (resumeSessionId.startsWith('wx-')) return { agent: sideAgent(resumeSessionId), dispose: trackedDispose(resumeSessionId) }
       return { agent: { session: { id: resumeSessionId }, inbox: { clear() {} } }, dispose: trackedDispose(resumeSessionId) }
     },
     async create({ sessionId }) {
       sessionsOpened.push(sessionId)
+      if (sessionId.startsWith('wx-')) return { agent: sideAgent(sessionId), dispose: trackedDispose(sessionId) }
       return { agent: { session: { id: sessionId }, inbox: { clear() {} } }, dispose: trackedDispose(sessionId) }
     },
   }
@@ -192,6 +218,8 @@ async function withPlugin(body) {
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
     await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, get deliverCalls() { return deliverCalls } })
   } finally {
+    // Debugging aid: DSH_DEBUG_LINES=1 dumps everything the plugin logged.
+    if (process.env.DSH_DEBUG_LINES) console.error('LINES:\n' + lines.join('\n'))
     for (const disposer of disposers) await (await disposer)?.()
     for (const target of servers.reverse()) await closeServer(target)
     if (previousStateDir === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
@@ -549,5 +577,33 @@ test('/subscribe schedules, lists and cancels timed proactive messages', async (
     fake.deliver('/subscribecancel s9', 'm5')
     await waitFor(() => fake.outbound.length > 5, 'the miss reply')
     assert.match(fake.outbound[5].text, /没有找到编号 s9/, fake.outbound[5].text)
+  })
+})
+
+test('/summary summarizes the conversation on demand and never writes the conv file', async () => {
+  await withPlugin(async ({ fake, root }) => {
+    // A short history so the recent window is non-empty.
+    appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '我们讨论了周五去哪吃饭' })
+    appendJournal(root, { dir: 'out', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '好，我来订位子' })
+
+    fake.deliver('/summary', 's0')
+    await waitFor(() => fake.outbound.length > 0, 'the summary reply')
+    assert.match(fake.outbound[0].text, /假总结/, fake.outbound[0].text)
+
+    // 「看一眼」不写盘：/summary 与后台摘要分离。
+    assert.equal(fs.existsSync(path.join(root, 'memory', `conv-${ACCOUNT_ID}-${ALLOWED}.json`)), false, 'no conv file written')
+
+    // The side-session prompt carried the transcript and the summary instruction.
+    // (The fake echoes the prompt after the canned reply; both arrive in text.)
+    assert.match(fake.outbound[0].text, /我们讨论了周五去哪吃饭/, 'the transcript reached the side session')
+
+    fake.deliver('/总结', 's1')
+    await waitFor(() => fake.outbound.length > 1, 'the zh alias reply')
+    assert.match(fake.outbound[1].text, /假总结/, fake.outbound[1].text)
+
+    // /help names the new command.
+    fake.deliver('/help', 's2')
+    await waitFor(() => fake.outbound.length > 2, 'the help reply')
+    assert.match(fake.outbound[2].text, /\/summary 总结这段会话/, fake.outbound[2].text)
   })
 })

@@ -557,6 +557,7 @@ export function parseSessionCommand(text) {
   // the agent: a bare time command read as a chat message would silently
   // schedule nothing and confuse the sender.
   if (/^\/(?:subscribe|订阅)$/i.test(trimmed) === true) return { command: 'subscribe', when: '', text: '' }
+  if (/^\/(?:summary|总结)$/i.test(trimmed) === true) return { command: 'summary' }
   // The time part may be two tokens (`每天 08:00`) — try the compound forms
   // before falling back to a single token, then everything else is the prompt.
   const subscribeMatch = /^\/(?:subscribe|订阅)\s+((?:每天|每日|daily)\s+\d{1,2}:\d{2}|每周[一二三四五六日天]\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}|\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
@@ -595,6 +596,7 @@ export const SESSION_COMMANDS_HELP = [
   '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）',
   '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）',
   '/memory 查看记住的内容和这段会话的记忆',
+  '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办',
   '/status 查看当前账号和会话的状态（白名单、会话线等）',
   '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
   '/remindlist 查看这个账号还没发出的提醒',
@@ -661,10 +663,12 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (cancel === undefined) return '当前没有可中断的回合（这个入口拿不到正在运行的会话）。'
     return cancel()
   }
-  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory') {
-    // All four answered by the inbound handler's persona bundle: it knows the
-    // state root, the mode table and the memory files. A bare caller says so
-    // instead of pretending it stored something.
+  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory' || command.command === 'summary') {
+    // All five answered by the inbound handler's persona bundle: it knows the
+    // state root, the mode table, the memory files and the session bridge (the
+    // /summary side session). A bare caller says so instead of pretending it
+    // stored something. The handler may be async (/summary) — return the
+    // promise as-is; the inbound handler awaits command replies.
     const persona = context?.persona
     const handler = persona === undefined ? undefined : persona[command.command]
     if (typeof handler !== 'function') return '个性化功能在这个入口不可用（拿不到模式与记忆的存储）。'
