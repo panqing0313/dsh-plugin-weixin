@@ -44,6 +44,7 @@
 ### 三、工程与发布
 
 - **依赖源切换（已完成，2026-10-23）**：作者的 desktop profile 已从 `file:/tmp/dsh-plugin-weixin-0.8.0.tgz` 换成 `^0.9.3`，`pnpm-lock.yaml` 同步（specifier / version / integrity 与 registry 一致，而那个 tarball 其实早已不存在了）。设置卡「来源信息」印的是 profile **声明的** spec，所以 `bin/install.mjs` 现在会在仍声明 `file:…tgz` 时打印该换成的 semver；它不会擅自改作者的依赖。
+- **0.9.4 发版被 npm 登录挡住（2026-10-26）**：代码、测试（483/483）、文档、tag 全就绪，`node bin/release.mjs 0.9.4 --yes` 在 preflight 停在 `✗ not logged in to npm`——`~/.npmrc` 里的 `_authToken` 已被注册表判 401（`npm whoami` 401；0.9.3 是 10-23 用同一 token 发的）。需要作者在真终端跑一次 `npm login --auth-type=web`，然后重跑发版脚本即可（脚本的 preflight 会重查 `npm view`、`gh`、清单一致性与工作区干净度，不会重复发版）。已从源码装进 desktop profile（`node bin/install.mjs --profile desktop`），重启 DSH 就能先用上这批功能，版本号仍显示 0.9.3。
 - **市场收录跟进**：`awesome-dsh-plugin` PR #7426 合并后核对 dsh-market 的搜索结果与条目渲染。
 - **低优先整洁性**（判定不值得单开一轮）：`src/media/inbound.js:127` 与 `:323` 各自重算同一 trim 表达式；语法合法但语义错误的 CDN URL 被静默接受（属用户配置问题）。
 
