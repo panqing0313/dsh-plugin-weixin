@@ -31,9 +31,11 @@ import {
 } from "./memory.js";
 import {
     listActiveOverrides,
+    readAccountDefaultMode,
     readGlobalDefaultMode,
     readPersonaStore,
     setActiveMode,
+    writeAccountDefaultMode,
     writeGlobalDefaultMode,
     writePersonaStore,
     clearActiveMode,
@@ -426,6 +428,7 @@ export class WeixinLoginController extends TypertRemoteService {
         return {
             modes: modes.map((m) => ({ id: m.id, name: m.name, prompt: m.prompt, builtin: m.builtin === true })),
             globalDefault: readGlobalDefaultMode(root, { warn: (m) => logger.warn(m) }),
+            accountDefault: account === "" ? "" : readAccountDefaultMode(root, account, { warn: (m) => logger.warn(m) }),
             overrides: listActiveOverrides(root, { warn: (m) => logger.warn(m) }),
             memory: account === "" ? null : {
                 facts: readGlobalMemory(root, account, { warn: (m) => logger.warn(m) }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
@@ -494,6 +497,25 @@ export class WeixinLoginController extends TypertRemoteService {
         }
         writeGlobalDefaultMode(root, id, { warn: (m) => logger.warn(m) });
         return { ok: true, globalDefault: id };
+    }
+
+    /**
+     * 账号级默认人设: ONE account's default mode. An empty modeId clears it so
+     * the account falls back to the file-wide default. Resolution order is
+     * conversation override > account default > global default > schema.
+     */
+    async personaAccountDefaultSet(options) {
+        const opts = options ?? {};
+        const accountId = String(opts.accountId ?? "").trim();
+        if (accountId === "") throw new RemoteError("accountId is required");
+        const id = String(opts.modeId ?? "").trim();
+        const root = stateDir();
+        if (id !== "") {
+            const modes = readPersonaStore(root, { warn: (m) => logger.warn(m) });
+            if (modes.some((m) => m.id === id) === false) throw new RemoteError("\u6ca1\u6709\u8fd9\u4e2a\u6a21\u5f0f");
+        }
+        writeAccountDefaultMode(root, accountId, id, { warn: (m) => logger.warn(m) });
+        return { ok: true, accountDefault: id };
     }
 
     /** Drop one conversation's override so it follows the default again. */
@@ -749,4 +771,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);

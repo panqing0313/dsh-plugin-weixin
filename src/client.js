@@ -223,6 +223,17 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaDefaultSet:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/personaAccountDefaultSet`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaAccountDefaultSet",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaAccountDefaultSet:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaAccountDefaultSet:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/personaOverrideClear`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1837,10 +1848,18 @@ window.__ModuleLoader__.load({
 						disabled: busy,
 						style: inputStyle,
 					}, defaultOptions.map((o) => createElement("option", { key: o.id, value: o.id }, o.label)))),
+				accountId === "" ? null : createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
+					createElement("label", { style: { fontSize: 12, color: C.labelSecondary, flex: "0 0 auto" } }, t("This account's default", "此账号默认")),
+					createElement("select", {
+						value: overview?.accountDefault ?? "",
+						onChange: (e) => run(() => callRemote(() => ctx.remote.weixin.personaAccountDefaultSet({ accountId, modeId: e.target.value })), t("Account default updated.", "账号默认已更新。")),
+						disabled: busy,
+						style: inputStyle,
+					}, defaultOptions.map((o) => createElement("option", { key: o.id, value: o.id }, o.label)))),
 				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } }, modeRows),
 				createElement("p", { style: captionStyle }, t(
-					"Switch per conversation from WeChat with /mode 女友; switching opens a fresh session line.",
-					"在微信里用 /mode 女友 按会话切换；切换会开一条新会话线。")),
+					"Precedence: per-conversation /mode > this account's default > global default > Options. Switch per conversation from WeChat with /mode 女友; switching opens a fresh session line.",
+					"优先级：会话 /mode 覆盖 > 此账号默认 > 全局默认 > 配置项。在微信里用 /mode 女友 按会话切换；切换会开一条新会话线。")),
 				editing !== null || draftName !== "" ? null : createElement("button", { onClick: () => { setEditing({ id: "" }); setDraftName(""); setDraftPrompt(""); }, disabled: busy, style: buttonStyleFor(busy) }, t("Add a mode", "新增模式")),
 				editing === null ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
 					createElement("input", { value: draftName, onChange: (e) => setDraftName(e.target.value), placeholder: t("Mode name, e.g. 导师", "模式名称，如 导师"), style: inputStyle }),

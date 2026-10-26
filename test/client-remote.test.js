@@ -222,6 +222,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/memoryFactAdd',
         'weixin/memoryFactRemove',
         'weixin/pause',
+        'weixin/personaAccountDefaultSet',
         'weixin/personaDefaultSet',
         'weixin/personaModeRemove',
         'weixin/personaModeSave',

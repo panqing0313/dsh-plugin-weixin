@@ -350,6 +350,32 @@ test('an expired QR code is replaced, and the refresh budget is finite', async (
 // is what a conversation reads, builtins stay untouchable, and the numbered
 // memory list the card shows matches what /forget would remove.
 
+test('personaAccountDefaultSet: per-account default persona with validation', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { readAccountDefaultMode } = await import('../src/persona.js')
+    // Unknown mode is refused (RemoteError carries the human text in .code).
+    await assert.rejects(
+      () => c.personaAccountDefaultSet({ accountId: 'bot1', modeId: 'nope' }),
+      (e) => e.code === '没有这个模式',
+    )
+    // Set, visible in the overview, cleared back.
+    await c.personaAccountDefaultSet({ accountId: 'bot1', modeId: 'girlfriend' })
+    assert.equal(readAccountDefaultMode(root, 'bot1'), 'girlfriend')
+    let overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.accountDefault, 'girlfriend')
+    overview = await c.personaOverview({})
+    assert.equal(overview.accountDefault, '', 'no account requested → no account default')
+    // A conversation override must not erase the account default.
+    await c.personaOverrideClear({ accountId: 'bot1', conversationId: 'conv-x' })
+    assert.equal(readAccountDefaultMode(root, 'bot1'), 'girlfriend')
+    await c.personaAccountDefaultSet({ accountId: 'bot1', modeId: '' })
+    assert.equal(readAccountDefaultMode(root, 'bot1'), '')
+    overview = await c.personaOverview({ accountId: 'bot1' })
+    assert.equal(overview.accountDefault, '')
+  })
+})
+
 test('journalExport renders the journal window as markdown', async () => {
   await withStateRoot(async (root) => {
     const c = controller()

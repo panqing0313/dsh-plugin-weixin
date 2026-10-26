@@ -242,12 +242,42 @@ export function activeModeFor(stateRoot, accountId, conversationId, defaultModeI
     const overrides = readActiveFile(stateRoot, { warn });
     const key = overrideKey(accountId, conversationId);
     // One resolution rule for everyone (commands, prompt injection, card):
-    // conversation override first, then the file-level account default the
-    // card writes, then the caller's fallback (the schema default).
+    // conversation override first, then THIS account's default persona
+    // (账号级默认人设, key `accountId|`), then the file-level global default
+    // the card writes, then the caller's fallback (the schema default).
     const chosen = overrides[key]
+        || readAccountDefaultMode(stateRoot, accountId, { warn })
         || readGlobalDefaultMode(stateRoot, { warn })
         || (typeof defaultModeId === 'string' ? defaultModeId : DEFAULT_MODE_ID);
     return chosen;
+}
+
+/**
+ * 账号级默认人设. The reserved key form `accountId|` (empty conversation side)
+ * holds ONE account's default mode, layered between the per-conversation
+ * overrides and the file-wide `__global__` default. Lives in
+ * persona-active.json so the card can change it live through the remote
+ * methods — a schema field would need a reload to matter.
+ */
+export function accountDefaultKey(accountId) {
+    return `${accountId}|`;
+}
+
+export function readAccountDefaultMode(stateRoot, accountId, { warn = noopWarn } = {}) {
+    const raw = readActiveRaw(stateRoot, { warn });
+    const value = raw[accountDefaultKey(accountId)];
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : '';
+}
+
+export function writeAccountDefaultMode(stateRoot, accountId, modeId, { warn = noopWarn } = {}) {
+    const raw = readActiveRaw(stateRoot, { warn });
+    const key = accountDefaultKey(accountId);
+    const wanted = typeof modeId === 'string' ? modeId.trim() : '';
+    if (wanted === '') delete raw[key];
+    else raw[key] = wanted;
+    fs.mkdirSync(stateRoot, { recursive: true });
+    fs.writeFileSync(activePath(stateRoot), `${JSON.stringify(raw, null, 2)}\n`);
+    return wanted === '' ? '' : raw[key];
 }
 
 /**
@@ -279,14 +309,19 @@ export function clearActiveMode(stateRoot, accountId, conversationId, { warn = n
 
 export function listActiveOverrides(stateRoot, { warn = noopWarn } = {}) {
     const overrides = readActiveFile(stateRoot, { warn });
-    return Object.entries(overrides).map(([key, modeId]) => {
-        const sep = key.indexOf('|');
-        return {
-            accountId: sep === -1 ? key : key.slice(0, sep),
-            conversationId: sep === -1 ? '' : key.slice(sep + 1),
-            modeId,
-        };
-    });
+    return Object.entries(overrides)
+        .map(([key, modeId]) => {
+            const sep = key.indexOf('|');
+            return {
+                accountId: sep === -1 ? key : key.slice(0, sep),
+                conversationId: sep === -1 ? '' : key.slice(sep + 1),
+                modeId,
+            };
+        })
+        // `accountId|` (empty conversation side) is the account-level default,
+        // not a per-conversation override — the card shows it in the mode
+        // panel, never in this list.
+        .filter((entry) => entry.conversationId !== '');
 }
 
 /**

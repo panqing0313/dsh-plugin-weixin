@@ -17,6 +17,7 @@ import {
 	overrideKey,
 	readGlobalDefaultMode,
 	writeGlobalDefaultMode,
+ readAccountDefaultMode, writeAccountDefaultMode,
 } from '../src/persona.js'
 
 let root
@@ -173,4 +174,45 @@ test('the game builtins carry playable rules and the game flag survives a rewrit
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('account-level default persona: write, read, precedence, listing', () => {
+	const root = mkdtempSync(join(tmpdir(), 'dsh-weixin-persona-acct-'))
+	try {
+		// Nothing set → every layer falls through to the caller default.
+		assert.equal(readAccountDefaultMode(root, 'bot1'), '')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-1', 'girlfriend'), 'girlfriend')
+
+		// Account default wins over the caller default.
+		writeAccountDefaultMode(root, 'bot1', 'girlfriend')
+		assert.equal(readAccountDefaultMode(root, 'bot1'), 'girlfriend')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-1', 'default'), 'girlfriend')
+		assert.equal(activeModeFor(root, 'other', 'conv-1', 'default'), 'default', 'another account is unaffected')
+
+		// Global file default loses to the account default.
+		writeGlobalDefaultMode(root, 'boyfriend')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-1', 'default'), 'girlfriend')
+		assert.equal(activeModeFor(root, 'other', 'conv-1', 'default'), 'boyfriend')
+
+		// Conversation override beats everything.
+		setActiveMode(root, 'bot1', 'conv-1', 'friend')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-1', 'default'), 'friend')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-2', 'default'), 'girlfriend')
+
+		// Clearing the account default falls back to the global file default.
+		writeAccountDefaultMode(root, 'bot1', '')
+		assert.equal(readAccountDefaultMode(root, 'bot1'), '')
+		assert.equal(activeModeFor(root, 'bot1', 'conv-2', 'default'), 'boyfriend')
+
+		// The account key never shows up as a per-conversation override…
+		writeAccountDefaultMode(root, 'bot2', 'friend')
+		const listed = listActiveOverrides(root)
+		assert.ok(listed.every((e) => e.conversationId !== ''), JSON.stringify(listed))
+		assert.deepEqual(listed.map((e) => e.conversationId), ['conv-1'])
+		// …and a /mode switch must not erase it.
+		setActiveMode(root, 'bot2', 'conv-9', 'girlfriend')
+		assert.equal(readAccountDefaultMode(root, 'bot2'), 'friend', 'the account default survives a conversation override write')
+	} finally {
+		rmSync(root, { recursive: true, force: true })
+	}
 })
