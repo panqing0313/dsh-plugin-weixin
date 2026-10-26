@@ -4,9 +4,9 @@
 
 ## 当前状态（2026-10-26）
 
-- **版本**：`0.9.5`，2026-10-26 已发布（npm `latest`、tag `v0.9.5`、GitHub release 三者齐全；注册表 `dist.shasum` `08d3e3ac…` / `dist.integrity` `sha512-qOvGmf0…` 与本地 `dsh-plugin-weixin-0.9.5.tgz` 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
-- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末）。
-- **测试**：`npm test` → `tests 501 / pass 501 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
+- **版本**：`0.9.6`，2026-10-26 已发布（npm `latest`、tag `v0.9.6`、GitHub release 三者齐全；注册表 `dist.shasum` `a2a1e8f7…` / `dist.integrity` `sha512-lC6LUv74…`、`gitHead` `fe1102b` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
+- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，随 0.9.7 发）。
+- **测试**：`npm test` → `tests 503 / pass 503 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -2507,3 +2507,24 @@ https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.5 ，注册�
 全量 `npm test` → **501/501**（~44s）。本轮 +1：`the options form speaks the UI language, and starts folded`
 ——渲染配置卡片，断言分组标题是「基本/权限」且不含 `Basics`、折叠时不渲染字段、点开后
 `发送间隔` / `两条消息之间至少等这么久` / `毫秒` 都在且不含 `Send interval`。
+
+## 发布 0.9.6（2026-10-26）
+
+`36b0af6` 配置项中文化 + 默认折叠随 0.9.6 出。发布记录：commit `fe1102b chore(release): 0.9.6`、
+tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.6 ；
+注册表 `dist.shasum` `a2a1e8f78e5c2d274d5af3327f1c5023c6fa4a29` 与本地 `dsh-plugin-weixin-0.9.6.tgz`
+逐字节一致，`dist-tag latest` 指向 0.9.6；全量测试 503/503。
+
+### 坑与教训
+
+- **发版脚本第 9 步「装进本机 profile」本身就是那个坑**：它跑 `bin/install.mjs`（文件复制），
+  但 App 下次启动的 `pnpm install` 按 profile 的 `dependencies` + 锁文件把旧版本装回来——
+  0.9.5 那次正是这样：跑着的 App 里是旧代码，profile 还写着 `^0.9.3`。发完 0.9.6 后
+  profile 仍写着 `^0.9.5`、锁文件也还钉着 0.9.5，手工把 spec 改成 `^0.9.6` 并刷锁文件后才真正生效。
+- 因此脚本新增 `pinProfileSpec(raw, nextVersion)` + `pinProfileDependency(profile)`：文本级替换
+  `"dsh-plugin-weixin": "^旧"` → `"^新"`（保留 profile 自己的缩进，不动其他依赖），再用 App 自带
+  那份 pnpm `install --prefer-offline` 刷锁文件。`file:` 之类的非 caret spec **不碰**——那是操作者
+  的显式选择，脚本只警告，不偷偷改成 registry 范围。
+- `npm publish` 的 2FA 需要真 TTY：`yes '' | script -q /dev/null node bin/release.mjs <ver> --yes`
+  能给到 pty 并把 ENTER 递进去，浏览器里点确认后全自动跑完（这次 0.9.6 一次通过）。
+  收尾那行 `script: write master: Input/output error` 是 pty 关闭时的噪音，不影响结果。

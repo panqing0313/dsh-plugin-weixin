@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { manifestVersionProblems, VERSION_FILES, snapshotTextFiles } from '../bin/release.mjs'
+import { manifestVersionProblems, pinProfileSpec, VERSION_FILES, snapshotTextFiles } from '../bin/release.mjs'
 
 /**
  * The release script's preflight guard, exercised on fixture manifests.
@@ -94,4 +94,44 @@ test('the dry-run snapshot covers every file the version bump rewrites', () => {
   // The client constant is rewritten by the bump, so it must be snapshotted.
   assert.ok(VERSION_FILES.includes('src/client.js'), 'src/client.js carries PLUGIN_VERSION')
   assert.match(snapshot.find((f) => f.path === 'src/client.js').text, /const PLUGIN_VERSION = "\d+\.\d+\.\d+";/)
+})
+
+/**
+ * Step 9 copies files into the profile, but the app's own startup `pnpm install`
+ * restores whatever the profile's dependency graph says — so on 0.9.5 the
+ * running app served the published tarball while the profile still declared
+ * `^0.9.3`. Making the copy survive a restart means moving the declared spec too,
+ * and that rewrite is what these cases pin down.
+ */
+test('pinning the profile dependency rewrites the spec in place, keeping the file as it was', () => {
+  const raw = [
+    '{',
+    '  "name": "dsh-profile-desktop",',
+    '  "private": true,',
+    '  "dependencies": {',
+    '    "@dsh-market/plugin": "^0.4.16",',
+    '    "dsh-plugin-weixin": "^0.9.5"',
+    '  },',
+    '  "dsh": { "enabled": true }',
+    '}',
+    '',
+  ].join('\n')
+  const patch = pinProfileSpec(raw, '0.9.6')
+  assert.equal(patch.from, '^0.9.5')
+  assert.equal(patch.to, '^0.9.6')
+  // Text, not a re-serialised object: the profile keeps its own shape.
+  assert.ok(patch.text.includes('    "dsh-plugin-weixin": "^0.9.6"'), `expected the indentation to survive, got: ${patch.text}`)
+  assert.ok(patch.text.includes('"@dsh-market/plugin": "^0.4.16"'), 'unrelated dependencies are untouched')
+  assert.ok(patch.text.includes('"dsh": { "enabled": true }'), 'the rest of the file is untouched')
+  assert.deepEqual(JSON.parse(patch.text).dependencies['dsh-plugin-weixin'], '^0.9.6')
+})
+
+test('pinning does nothing when there is nothing to pin', () => {
+  const withSpec = (spec) => JSON.stringify({ dependencies: { 'dsh-plugin-weixin': spec } })
+  assert.equal(pinProfileSpec(withSpec('^0.9.6'), '0.9.6'), null, 'already pinned is not a patch')
+  // A file: pin is the operator's deliberate choice (0.9.3 shipped that way once);
+  // the release warns instead of silently converting it to a registry range.
+  assert.equal(pinProfileSpec(withSpec('file:/tmp/dsh-plugin-weixin-0.8.0.tgz'), '0.9.6'), null)
+  assert.equal(pinProfileSpec(JSON.stringify({ dependencies: {} }), '0.9.6'), null)
+  assert.equal(pinProfileSpec('not json at all', '0.9.6'), null)
 })

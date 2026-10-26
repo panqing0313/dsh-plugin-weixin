@@ -622,6 +622,13 @@ function tagAndPush(notes) {
 	}
 }
 
+/**
+ * The app installs a file copy, but the app's own startup `pnpm install`
+ * restores whatever the profile's dependency graph says — so a copy alone is
+ * undone at the next launch (it was, on 0.9.5: the running app served the
+ * tarball while the profile still declared `^0.9.3`). Pinning the profile's
+ * spec is what makes the release actually survive a restart.
+ */
 function installLocally() {
 	step('Install into this machine\'s DSH profile')
 	const profile = process.env.DSH_PROFILE ?? 'desktop'
@@ -632,6 +639,61 @@ function installLocally() {
 		return
 	}
 	ok(`installed into the "${profile}" profile — restart DSH to load it`)
+	pinProfileDependency(profile)
+}
+
+/** Where this machine keeps the pnpm that works in a profile (the fnm shim hangs). */
+const BUNDLED_PNPM = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs'
+
+/**
+ * Rewrite the profile's dependency spec, in the same text, so the profile keeps
+ * whatever indentation it was written with and the lockfile stays the only
+ * other thing that has to move.
+ *
+ * Returns null when there is nothing to do: no profile, no such dependency, a
+ * spec that is not a caret range (a `file:` pin is the operator's choice and is
+ * reported instead), or a spec already at the target.
+ */
+export function pinProfileSpec(raw, nextVersion) {
+	let pkg
+	try {
+		pkg = JSON.parse(raw)
+	} catch {
+		return null
+	}
+	const declared = pkg?.dependencies?.[PKG_NAME]
+	if (typeof declared !== 'string' || !declared.startsWith('^')) return null
+	const wanted = `^${nextVersion}`
+	if (declared === wanted) return null
+	const pattern = new RegExp(`("${PKG_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\s*:\\s*)"\\^[^"]*"`)
+	if (!pattern.test(raw)) return null
+	return { from: declared, to: wanted, text: raw.replace(pattern, `$1"${wanted}"`) }
+}
+
+function pinProfileDependency(profile) {
+	const pkgPath = path.join(os.homedir(), '.dsh', 'profiles', profile, 'package.json')
+	if (!fs.existsSync(pkgPath)) {
+		warn(`no ${pkgPath} — the profile cannot be pinned, only copied`)
+		return
+	}
+	const patch = pinProfileSpec(fs.readFileSync(pkgPath, 'utf8'), version)
+	if (patch === null) {
+		ok('profile dependency already points at this version (or is pinned by hand)')
+		return
+	}
+	fs.writeFileSync(pkgPath, patch.text)
+	ok(`profile dependency ${patch.from} → ${patch.to}`)
+	const args = ['install', '--prefer-offline']
+	const cwd = path.dirname(pkgPath)
+	const refreshed = fs.existsSync(BUNDLED_PNPM)
+		? spawnSync(process.execPath, [BUNDLED_PNPM, ...args], { cwd, encoding: 'utf8' })
+		: spawnSync('pnpm', args, { cwd, encoding: 'utf8' })
+	if (refreshed.status !== 0) {
+		warn('could not refresh the profile lockfile — run pnpm install in the profile by hand')
+		note(String(refreshed.stderr ?? '').trim().split('\n').slice(-2).join('\n'))
+		return
+	}
+	ok('profile lockfile refreshed — the app will not roll back on restart')
 }
 
 // ---------------------------------------------------------------------------
