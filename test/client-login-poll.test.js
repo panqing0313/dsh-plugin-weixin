@@ -249,6 +249,32 @@ function fakeHost(script = []) {
     async logout() {
       return { removed: [], reloadRequired: false }
     },
+    // The persona tab reads this on mount. The shape mirrors the real remote
+    // method: modes + global/account defaults + per-conversation memory, where
+    // each conversation now carries its mode and its inferred state.
+    async personaOverview() {
+      return {
+        modes: [
+          { id: 'default', name: '默认助手', prompt: '', builtin: true },
+          { id: 'girlfriend', name: '女友', prompt: '温柔一点', builtin: true },
+        ],
+        globalDefault: '',
+        accountDefault: '',
+        overrides: [],
+        memory: {
+          facts: [],
+          conversations: [{
+            conversationId: 'conv-heat',
+            summary: '聊过天气',
+            bondLine: '我们认识第 3 天 · 聊过 12 条消息',
+            modeId: 'girlfriend',
+            modeName: '女友',
+            life: { mood: '有点乏，回得会慢一点', activity: '在家歇着', energy: 34 },
+            lifeLine: '在家歇着 · 有点乏，回得会慢一点 · 精力 34/100',
+          }],
+        },
+      }
+    },
   }
   const asr = {
     namespace: 'weixinAsr',
@@ -732,4 +758,25 @@ test('the options form speaks the UI language, and starts folded', async () => {
   assert.ok(opened.includes('两条消息之间至少等这么久'), 'the hint is translated too')
   assert.ok(opened.includes('毫秒'), 'the unit is translated too')
   assert.ok(!opened.includes('Send interval'), 'no English label survives in a Chinese UI')
+})
+
+test('the persona tab says, per conversation, which mode is on and how she feels', async () => {
+  // The user asked for exactly this: the settings card must show, per
+  // conversation, the persona mode and the state the bot is in right now —
+  // inferred, never typed in by hand.
+  const host = fakeHost([{ accounts: [], stateDir: '/tmp', pendingLogin: false, sessionExpired: false }])
+  host.calls.accounts.push({ accountId: 'BOT@im.bot', label: 'bot' })
+  const card = await mountCard(host)
+  await card.render()
+
+  const tab = findButton(card.render(), '个性化')
+  await tab.props.onClick()
+  // The tab fetches status, then the overview, then re-renders; each flush runs
+  // one round of settled effects, so give it a few.
+  let text = ''
+  for (let i = 0; i < 6; i += 1) text = textOf(await card.render())
+
+  assert.match(text, /模式：女友/, text)
+  assert.match(text, /精力 34\/100/, text)
+  assert.match(text, /有点乏，回得会慢一点/, text)
 })

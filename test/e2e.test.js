@@ -107,6 +107,37 @@ function createFakeAgents({ reply, tools }) {
   }
 }
 
+/**
+ * Fake agents whose reply is exactly one fixed string — no prompt echo. Used by
+ * the pacing test, where the exact outbound bubbles are the assertion.
+ */
+function fixedReplyAgents(reply) {
+  const agents = new Map()
+  return {
+    get: (id) => agents.get(id),
+    resume: async ({ resumeSessionId }) => {
+      let seq = 0
+      const events = []
+      const ev = (type, data) => events.push({ type, seq: seq++, time: Date.now(), data })
+      const agent = {
+        session: { id: resumeSessionId, snapshotEvents: () => events },
+        inbox: { clear() {} },
+        followup(message) {
+          ev('user/message', { message })
+          ev('turn/start', {})
+          setTimeout(() => {
+            ev('assistant/message', { stream: [{ type: 'text-chunks', texts: [reply] }] })
+            ev('turn/end', {})
+          }, 20)
+        },
+      }
+      const handle = { agent, dispose: async () => {} }
+      agents.set(resumeSessionId, agent)
+      return handle
+    },
+  }
+}
+
 /** Fake iLink endpoint: getupdates once with a scripted batch, then empty. */
 async function startFakeILink(batches) {
   const sent = []
@@ -1340,7 +1371,9 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled })
+      // Pacing off here: this test asserts the PROMPTS, and a split reply
+      // would turn sent[1] into a second bubble instead of the next prompt.
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled, humanPacing: false })
 
       const disposers = []
       const warnings = []
@@ -1365,11 +1398,21 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       if (memoryEnabled) {
         // Persona first, then memory, then the user text — one tag each.
         const personaAt = prompt.indexOf('<weixin_persona mode="女友">')
+        const styleAt = prompt.indexOf('<weixin_style>')
+        const lifeAt = prompt.indexOf('<weixin_life>')
         const memoryAt = prompt.indexOf('<weixin_memory>')
         const textAt = prompt.indexOf('晚上吃啥好')
         assert.ok(personaAt !== -1, prompt)
         assert.ok(memoryAt !== -1, prompt)
-        assert.ok(personaAt < memoryAt && memoryAt < textAt, `order wrong: persona=${personaAt} memory=${memoryAt} text=${textAt}`)
+        // A companion also carries the wording rules and the inferred life
+        // state, in that order, ahead of memory.
+        assert.ok(styleAt !== -1, prompt)
+        assert.ok(lifeAt !== -1, prompt)
+        assert.match(prompt, /【状态】.+精力 \d+\/100。/)
+        assert.ok(
+          personaAt < styleAt && styleAt < lifeAt && lifeAt < memoryAt && memoryAt < textAt,
+          `order wrong: persona=${personaAt} style=${styleAt} life=${lifeAt} memory=${memoryAt} text=${textAt}`,
+        )
         assert.match(prompt, /会关心他的身体和心情/, 'the shipped girlfriend prompt body')
         assert.match(prompt, /【长期记忆 · 关于用户】\n- 我对花生过敏/)
         // Cold line: the previous exchange is folded in, the message being
@@ -1387,6 +1430,65 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
         assert.ok(prompt.includes('<weixin_persona mode="女友">'), prompt)
         assert.ok(!prompt.includes('weixin_memory'), prompt)
         assert.match(prompt, /晚上吃啥好/)
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
+  }
+})
+
+test('companion pacing: a companion splits the reply into bubbles, the stock assistant does not', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const longReply = '今天降温了，你出门记得穿厚一点。我这边风也很大，吹得人站不住。'
+  for (const mode of ['girlfriend', 'default']) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-pace-${mode}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 6001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-pace', create_time_ms: 31, item_list: [{ type: 1, text_item: { text: '在忙吗' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      // Timings pinned small: the test asserts the SPLIT, not the wall clock.
+      const config = plugin.Config({
+        allowedSenders: [ALLOWED],
+        accountId: ACCOUNT_ID,
+        personaDefaultMode: mode,
+        memoryEnabled: false,
+        replyDelayMaxMs: 40,
+        bubbleGapMs: 20,
+      })
+
+      const disposers = []
+      const ctx = {
+        logger: { info: () => {}, warn: () => {} },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? fixedReplyAgents(longReply) : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const expected = mode === 'default' ? 1 : 2
+      const deadline = Date.now() + 10_000
+      while (sent.length < expected && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      const texts = sent.map((entry) => entry.msg.item_list[0].text_item.text)
+      if (mode === 'default') {
+        // A tool answers once, whole, with no pause before it.
+        assert.equal(texts.length, 1, `the stock assistant must not split: ${JSON.stringify(texts)}`)
+        assert.equal(texts[0], longReply)
+      } else {
+        assert.equal(texts.length, 2, `a companion sends two bubbles: ${JSON.stringify(texts)}`)
+        assert.deepEqual(texts, ['今天降温了，你出门记得穿厚一点。', '我这边风也很大，吹得人站不住。'])
       }
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true })

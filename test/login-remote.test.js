@@ -449,6 +449,37 @@ test('personaOverview attaches the affinity line to each conversation', async ()
   })
 })
 
+test('personaOverview reports each conversation’s mode and its inferred life state', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { bumpTurnAndBond } = await import('../src/memory.js')
+    const { setActiveMode } = await import('../src/persona.js')
+    const now = new Date('2026-10-26T15:30:00').getTime()
+    bumpTurnAndBond(root, 'bot1', 'conv-heat', { now })
+    bumpTurnAndBond(root, 'bot1', 'conv-plain', { now })
+    setActiveMode(root, 'bot1', 'conv-heat', 'girlfriend')
+
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    const warm = overview.memory.conversations.find((entry) => entry.conversationId === 'conv-heat')
+    const plain = overview.memory.conversations.find((entry) => entry.conversationId === 'conv-plain')
+
+    assert.equal(warm.modeId, 'girlfriend')
+    assert.equal(warm.modeName, '女友')
+    assert.ok(warm.life && typeof warm.life.mood === 'string' && warm.life.mood !== '', 'a mood is inferred, never typed in')
+    assert.ok(warm.life.energy >= 5 && warm.life.energy <= 100)
+    assert.match(warm.lifeLine, /精力 \d+\/100/)
+    assert.match(warm.lifeLine, new RegExp(warm.life.mood))
+
+    // No override, no account default: the stock assistant, with the same
+    // inferred state — the card shows it, even though the prompt does not use it.
+    assert.equal(plain.modeName, '默认助手')
+    assert.match(plain.lifeLine, /精力 \d+\/100/)
+
+    // Reading the overview must not leave a snapshot behind (persist: false).
+    assert.equal(fs.existsSync(path.join(root, 'memory', 'life-bot1.json')), false)
+  })
+})
+
 test('personaModeSave creates a custom mode, edits it, and refuses builtins', async () => {
   await withStateRoot(async (root) => {
     const c = controller()

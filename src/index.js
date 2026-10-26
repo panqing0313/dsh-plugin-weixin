@@ -72,6 +72,8 @@ import {
   setConvRecentSession,
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
+import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
+import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
@@ -145,6 +147,15 @@ export const Config = z.object({
   ),
   memoryRecallDays: z.number().min(7).max(3650).default(180).description('How many days back the local recall index reaches. Older day files leave the index (the journal itself is still on disk).'),
   memoryRecallHits: z.number().min(1).max(8).default(3).description('How many matching original messages to inject at most, each truncated to 140 characters.'),
+  humanPacing: z.boolean().default(true).description(
+    '陪聊节奏：角色模式（女友/男友/朋友/贾维斯/小游戏等）回复时先停顿一下再发，并把一段话拆成两三条气泡；「默认助手」模式永远不受影响。',
+  ),
+  replyDelayMaxMs: z.number().min(0).max(10000).default(2400).description('角色模式回复前最多停顿多久（毫秒），0 表示不停顿；实际停顿按回复长度抖动，累了会更慢。'),
+  bubbleSplitMax: z.number().min(1).max(5).default(3).description('角色模式一条回复最多拆成几条气泡；1 表示不拆。'),
+  bubbleGapMs: z.number().min(0).max(5000).default(700).description('角色模式两条气泡之间的停顿（毫秒），实际值会在 0.7–1.3 倍之间抖动。'),
+  lifeState: z.boolean().default(true).description(
+    '生活状态：按时间、距上次聊天多久、今天聊了多少，自动推断角色此刻的心情/在做什么/精力，注入到提示词里；「默认助手」模式不注入。',
+  ),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -906,6 +917,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
   const personaCommands = (conversationId) => {
     const memoryOn = () => effectiveConfig.current.memoryEnabled !== false
     const modeConfig = () => effectiveConfig.current
+    // "Is this line a companion?" — the same resolution the prompt build uses,
+    // so /status and /memory tell the same story the reply does. The stock
+    // assistant gets no affinity line: it has no feelings to report.
+    const companionHere = () => {
+      const modes = readPersonaStore(stateRoot, { warn })
+      const active = resolveMode(modes, activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }))
+      return isCompanionMode(active)
+    }
     return {
       mode: (arg) => {
         const store = readPersonaStore(stateRoot, { warn })
@@ -1033,7 +1052,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
         const recent = readRecentWindow(stateRoot, accountId, conversationId, { warn })
         const parts = []
-        const bond = bondLine(readConvMemory(stateRoot, accountId, conversationId, { warn }).bond)
+        const bond = companionHere() ? bondLine(readConvMemory(stateRoot, accountId, conversationId, { warn }).bond) : ''
         if (bond !== '') parts.push(bond)
         parts.push(facts.length === 0 ? '长期记忆：还没有，用 /remember 教我。' : ['长期记忆：', ...facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
         parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
@@ -1155,7 +1174,10 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       subscription: subscriptionScheduler,
       // Affinity rides /status when memory is on; computed fresh per message
       // like the rest of the status facts (the card can edit between messages).
+      // Affinity is an emotional frame, so it rides /status only in a
+      // companion conversation — the stock assistant reports facts, not moods.
       bondLine: effectiveConfig.current.memoryEnabled !== false
+        && isCompanionMode(resolveMode(readPersonaStore(stateRoot, { warn }), activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
         ? bondLine(readConvMemory(stateRoot, accountId, message.conversationId, { warn }).bond)
         : '',
       persona: personaCommands(message.conversationId),
@@ -1247,7 +1269,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // Memory injects global facts, the conversation summary, and a recent
     // window folded from the journal, each section omitted when empty.
     const personaModes = readPersonaStore(stateRoot, { warn })
-    const personaBlock = buildPersonaBlock(resolveMode(personaModes, activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
+    const activeMode = resolveMode(personaModes, activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }))
+    const personaBlock = buildPersonaBlock(activeMode)
+    // Everything that makes a character feel alive — the pause before the first
+    // bubble, the split into two or three bubbles, the wording rules, the life
+    // state — is scoped to a COMPANION. The stock `default` assistant is a
+    // tool: it answers instantly, in one message, and never pretends it slept
+    // badly.
+    const companion = isCompanionMode(activeMode)
+    const styleBlock = companion ? buildHumanStyleBlock() : ''
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
     // those messages in its own history, and the inbound journal write above
@@ -1255,6 +1285,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // window is injected once per session line (the id is remembered in the
     // conversation memory file) and the message being answered is excluded.
     const convMemory = readConvMemory(stateRoot, accountId, message.conversationId, { warn })
+    // Life state: inferred from the clock, the time since the last message and
+    // how much you have been chatting today, then handed to the model as one
+    // short block. It is what makes the same persona sound different at 08:00
+    // and at 23:40, and it costs about 90 characters.
+    const life = companion && effectiveConfig.current.lifeState !== false
+      ? readOrInferLifeState(stateRoot, accountId, { now: journaledAt, bond: convMemory.bond, warn })
+      : null
+    const lifeBlockText = life === null ? '' : lifeBlock(life)
     const recentTurns = Number(effectiveConfig.current.memoryRecentTurns ?? 5)
     const lineSessionId = bridge.lines.active(message.conversationId, accountId)
     const coldLine = convMemory.recentSessionId !== lineSessionId
@@ -1271,6 +1309,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           global: readGlobalMemory(stateRoot, accountId, { warn }),
           conv: convMemory,
           recent,
+          includeBond: companion,
         })
       : ''
     // Remember the line even when the window came back empty: the next message
@@ -1298,7 +1337,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     }
     // Prepend in ONE join so the order stays persona → memory → recall → user
     // text (a per-block prepend loop would silently reverse it).
-    const blocks = [personaBlock, memoryBlock, recallBlock].filter((block) => block !== '')
+    const blocks = [personaBlock, styleBlock, lifeBlockText, memoryBlock, recallBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 5. Drive the agent, then send the reply back in chunks.
@@ -1393,9 +1432,22 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         warn,
         fileLog,
       })
+      // P0: a companion answers the way a person types — a beat before the
+      // first bubble, then two or three short ones. Everything else (command
+      // receipts, errors, progress notes) stays instant, and `default` mode
+      // plans delayMs 0 with a single bubble, so a tool never acts alive.
+      const pacing = planCompanionReply({
+        text: markdownToPlainText(outbound.text ?? '', resolveMarkdownMode(config)),
+        mode: activeMode,
+        life,
+        config: effectiveConfig.current,
+      })
+      if (pacing.delayMs > 0) await sleep(pacing.delayMs)
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
         text: outbound.text,
+        bubbles: pacing.bubbles,
+        gapMs: pacing.gapMs,
         contextToken: message.contextToken,
       })
       await sendProducedFiles({
@@ -1569,6 +1621,8 @@ async function sendProducedFiles(params) {
  * @param {{ maxMessageLength: number, markdownMode?: 'strip'|'off' }} config
  * @param {{ conversationId: string, text: string, contextToken?: string }} message
  */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 async function sendChunked(transport, config, message) {
   const text = markdownToPlainText(message.text ?? '', resolveMarkdownMode(config))
   journalOutboundRef?.({
@@ -1576,12 +1630,20 @@ async function sendChunked(transport, config, message) {
     conversationId: message.conversationId,
     text,
   })
-  const chunks = chunkText(text, config.maxMessageLength)
-  for (const chunk of chunks) {
+  // `bubbles` is the human-pacing split (already plain text, one entry per
+  // bubble). Without it this is the plain length-based chunking every other
+  // send has always used. A bubble that is still over the length cap is cut
+  // again, so pacing can never produce an oversized message.
+  const chunks = Array.isArray(message.bubbles) && message.bubbles.length > 0
+    ? message.bubbles.flatMap((bubble) => chunkText(bubble, config.maxMessageLength))
+    : chunkText(text, config.maxMessageLength)
+  const gapMs = Number(message.gapMs)
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (index > 0 && Number.isFinite(gapMs) && gapMs > 0) await sleep(gapMs)
     await transport.send({
       conversationId: message.conversationId,
       type: 'text',
-      text: chunk,
+      text: chunks[index],
       contextToken: message.contextToken,
     })
   }

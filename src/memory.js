@@ -304,8 +304,14 @@ export function listConvMemories(stateRoot, accountId, { warn = noopWarn } = {})
     for (const file of files) {
         if (file.startsWith(`${prefix}`) === false || file.endsWith('.json') === false) continue;
         const parsed = readJsonSafe(path.join(dir, file), {}, warn, 'conversation memory');
+        const bond = sanitizeBond(parsed.bond);
+        // A conversation with a bond is worth listing even before its first
+        // summary (which only lands every memorySummaryTurns turns): the card
+        // shows "how is she doing in this line", and a brand-new line with no
+        // summary yet still has a state to show.
         const hasAny = (typeof parsed.summary === 'string' && parsed.summary.trim() !== '')
-            || sanitizeFacts(parsed.facts).length > 0;
+            || sanitizeFacts(parsed.facts).length > 0
+            || bond !== undefined;
         if (hasAny === false) continue;
         const entry = {
             conversationId: typeof parsed.conversationId === 'string' ? parsed.conversationId : null,
@@ -313,7 +319,6 @@ export function listConvMemories(stateRoot, accountId, { warn = noopWarn } = {})
             updatedTurn: typeof parsed.updatedTurn === 'number' ? parsed.updatedTurn : 0,
             factCount: sanitizeFacts(parsed.facts).length,
         };
-        const bond = sanitizeBond(parsed.bond);
         if (bond !== undefined) entry.bond = bond;
         entries.push(entry);
     }
@@ -353,9 +358,11 @@ export function readRecentWindow(stateRoot, accountId, conversationId, {
  * with nothing at all injects nothing, so turning memory on costs zero
  * tokens until there is something to remember.
  */
-export function buildMemoryBlock({ global, conv, recent, now = Date.now() } = {}) {
+export function buildMemoryBlock({ global, conv, recent, now = Date.now(), includeBond = true } = {}) {
     const sections = [];
-    const bondText = bondLine(conv?.bond, now);
+    // The bond line ("认识第 N 天 · 此刻：…") is an emotional frame, so a stock
+    // assistant conversation leaves it out — see `isCompanionMode`.
+    const bondText = includeBond ? bondLine(conv?.bond, now) : '';
     if (bondText !== '') sections.push(`【我们】${bondText}`);
     const globalFacts = global?.facts ?? [];
     if (globalFacts.length > 0) {

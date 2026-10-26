@@ -522,7 +522,7 @@ test('a switching a mode does not disturb an ordinary queued message flow', asyn
   })
 })
 
-test('/status and /memory show the affinity line when a bond exists', async () => {
+test('/status and /memory show the affinity line in a companion mode, never for the stock assistant', async () => {
   await withPlugin(async ({ fake, root }) => {
     // Seed the bond the settle point would have written (the settle-point
     // write itself is covered by the e2e summarizer test; this harness's fake
@@ -531,13 +531,25 @@ test('/status and /memory show the affinity line when a bond exists', async () =
     const { bumpTurnAndBond } = await import('../src/memory.js')
     bumpTurnAndBond(root, ACCOUNT_ID, ALLOWED)
 
+    // Default assistant: facts only. An affinity line would be a lie about a
+    // tool, so it is absent even though the bond exists.
     fake.deliver('/status', 'm1')
     await waitFor(() => fake.outbound.length > 0, 'the status reply')
-    assert.match(fake.outbound[0].text, /我们认识第 1 天 · 聊过 1 条消息/, fake.outbound[0].text)
+    assert.ok(!fake.outbound[0].text.includes('我们认识第'), fake.outbound[0].text)
 
-    fake.deliver('/memory', 'm2')
-    await waitFor(() => fake.outbound.length > 1, 'the memory reply')
-    assert.match(fake.outbound[1].text, /我们认识第 1 天/, fake.outbound[1].text)
+    // Switch to a companion: now it reports how long you two have known each
+    // other. /mode opens a new session line; the bond lives on the
+    // conversation, not the line, so it survives the switch.
+    fake.deliver('/mode 女友', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the mode switch reply')
+
+    fake.deliver('/status', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the companion status reply')
+    assert.match(fake.outbound[2].text, /我们认识第 1 天 · 聊过 1 条消息/, fake.outbound[2].text)
+
+    fake.deliver('/memory', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the memory reply')
+    assert.match(fake.outbound[3].text, /我们认识第 1 天/, fake.outbound[3].text)
   })
 })
 

@@ -30,10 +30,12 @@ import {
     bondLine,
 } from "./memory.js";
 import {
+    activeModeFor,
     listActiveOverrides,
     readAccountDefaultMode,
     readGlobalDefaultMode,
     readPersonaStore,
+    resolveMode,
     setActiveMode,
     writeAccountDefaultMode,
     writeGlobalDefaultMode,
@@ -41,6 +43,8 @@ import {
     clearActiveMode,
     MAX_CUSTOM_MODES,
 } from "./persona.js";
+import { DEFAULT_MODE_ID } from "./persona.js";
+import { lifeSummary, readOrInferLifeState } from "./message/life-state.js";
 import { qrDataUrl } from "./qr-png.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -425,18 +429,31 @@ export class WeixinLoginController extends TypertRemoteService {
         const opts = options ?? {};
         const account = typeof opts.accountId === "string" && opts.accountId.trim() !== "" ? opts.accountId.trim() : "";
         const root = stateDir();
-        const modes = readPersonaStore(root, { warn: (m) => logger.warn(m) });
+        const warn = (m) => logger.warn(m);
+        const modes = readPersonaStore(root, { warn });
+        const globalDefault = readGlobalDefaultMode(root, { warn });
         return {
             modes: modes.map((m) => ({ id: m.id, name: m.name, prompt: m.prompt, builtin: m.builtin === true })),
-            globalDefault: readGlobalDefaultMode(root, { warn: (m) => logger.warn(m) }),
-            accountDefault: account === "" ? "" : readAccountDefaultMode(root, account, { warn: (m) => logger.warn(m) }),
-            overrides: listActiveOverrides(root, { warn: (m) => logger.warn(m) }),
+            globalDefault,
+            accountDefault: account === "" ? "" : readAccountDefaultMode(root, account, { warn }),
+            overrides: listActiveOverrides(root, { warn }),
             memory: account === "" ? null : {
-                facts: readGlobalMemory(root, account, { warn: (m) => logger.warn(m) }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
-                conversations: listConvMemories(root, account, { warn: (m) => logger.warn(m) }).map((conv) => ({
-                    ...conv,
-                    bondLine: bondLine(conv.bond),
-                })),
+                facts: readGlobalMemory(root, account, { warn }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
+                conversations: listConvMemories(root, account, { warn }).map((conv) => {
+                    // Which persona this line is in, and how she is doing right
+                    // now: the card shows both per conversation, so "why is she
+                    // so short today" has an answer you can read.
+                    const mode = resolveMode(modes, activeModeFor(root, account, conv.conversationId, globalDefault === "" ? DEFAULT_MODE_ID : globalDefault, { warn }));
+                    const life = readOrInferLifeState(root, account, { bond: conv.bond, persist: false, warn });
+                    return {
+                        ...conv,
+                        bondLine: bondLine(conv.bond),
+                        modeId: mode.id,
+                        modeName: mode.name,
+                        life: { mood: life.mood, activity: life.activity, energy: life.energy },
+                        lifeLine: lifeSummary(life),
+                    };
+                }),
             },
         };
     }

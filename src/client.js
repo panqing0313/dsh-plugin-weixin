@@ -1904,15 +1904,24 @@ window.__ModuleLoader__.load({
 				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, f.text),
 				createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryFactRemove({ accountId, index: f.index }))), disabled: busy, style: buttonStyleFor(busy) }, t("Forget", "删除"))));
 
-			const convRows = (memory?.conversations ?? []).map((c) => createElement("div", {
-				key: c.conversationId ?? c.summary.slice(0, 12),
-				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
-			},
-				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
-					c.conversationId === null ? t("(older conversation)", "（较早会话）") : c.conversationId,
-					c.summary ? ` — ${c.summary}` : "",
-					typeof c.bondLine === "string" && c.bondLine !== "" ? createElement("span", { style: { display: "block", color: C.labelTertiary } }, c.bondLine) : null),
-				c.conversationId === null ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryConvClear({ accountId, conversationId: c.conversationId }))), disabled: busy, style: buttonStyleFor(busy) }, t("Clear", "清空"))));
+			// Per conversation: which persona it is in, how she feels right now,
+			// and how long you two have known each other. The life state is
+			// inferred on the host (clock + today's chat volume), never typed in.
+			const convRows = (memory?.conversations ?? []).map((c) => {
+				const stateParts = [];
+				if (typeof c.modeName === "string" && c.modeName !== "") stateParts.push(t(`Mode: ${c.modeName}`, `模式：${c.modeName}`));
+				if (typeof c.lifeLine === "string" && c.lifeLine !== "") stateParts.push(c.lifeLine);
+				if (typeof c.bondLine === "string" && c.bondLine !== "") stateParts.push(c.bondLine);
+				return createElement("div", {
+					key: c.conversationId ?? c.summary.slice(0, 12),
+					style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+				},
+					createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
+						c.conversationId === null ? t("(older conversation)", "（较早会话）") : c.conversationId,
+						c.summary ? ` — ${c.summary}` : "",
+						stateParts.length > 0 ? createElement("span", { style: { display: "block", color: C.labelTertiary } }, stateParts.join(" · ")) : null),
+					c.conversationId === null ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryConvClear({ accountId, conversationId: c.conversationId }))), disabled: busy, style: buttonStyleFor(busy) }, t("Clear", "清空")));
+			});
 
 			const memoryPanel = accountId === "" ? null : createElement("div", { key: "memory", style: panelStyle },
 				createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
@@ -1925,7 +1934,7 @@ window.__ModuleLoader__.load({
 				factRows.length === 0
 					? createElement("p", { style: hintStyle }, t("No long-term facts yet. In WeChat: /remember …", "还没有长期记忆。在微信里：/remember …"))
 					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, factRows),
-				convRows.length > 0 ? createElement("p", { style: { ...captionStyle, marginTop: 8 } }, t("Conversation summaries (auto, every N turns — see Options)", "会话摘要（自动，每 N 回合——见配置项）")) : null,
+				convRows.length > 0 ? createElement("p", { style: { ...captionStyle, marginTop: 8 } }, t("Conversations: mode, how she feels right now, and how long you have known each other (summaries auto-refresh every N turns)", "每个会话：模式 · 此刻状态 · 认识多久（摘要每 N 回合自动更新）")) : null,
 				convRows.length === 0 ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 6 } }, convRows));
 
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
