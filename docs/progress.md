@@ -1,12 +1,12 @@
 # 开发进度
 
-更新时间：2026-10-25
+更新时间：2026-10-26
 
-## 当前状态（2026-10-25）
+## 当前状态（2026-10-26）
 
 - **版本**：`0.9.3`，2026-10-23 已发布（npm `latest`、tag `v0.9.3`、GitHub release 三者齐全；注册表 `dist.shasum` / `dist.integrity` 与本地 `dsh-plugin-weixin-0.9.3.tgz` 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
-- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）。
-- **测试**：`npm test` → `tests 411 / pass 411 / fail 0`（约 35s；相对 0.9.2 新增 50 条：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
+- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）与**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`，见下，待随下次发版）。
+- **测试**：`npm test` → `tests 449 / pass 449 / fail 0`（约 36s；相对 0.9.2 新增 88 条，其中个性化与记忆占 38：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6。耗时从 ~103s 降到 ~36s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -16,8 +16,9 @@
 - **会话**：一个微信会话挂多条 DSH 会话（`/new` `/list` `/use` `/clear`），标题带账号前缀并镜像成宿主会话名；`/status` `/help` 让命令族自描述；`/cancel` 中断正在跑的那一轮（排队消息仍继续）。
 - **出站**：分片 + Markdown→纯文本 + 限速（`sendIntervalMs` / `sendCooldownMs`）+ **滚动窗口上限**（默认 15 条 / 2 分钟，到顶自动等窗口滑过而不是硬发）+ 失败冷却；回合中的工具变化流式推送；音频附件可发成语音气泡（`voiceOutbound`，**默认关**：服务端接受不投递，见「未完成」；wav/silk 进程内转 SILK、其余走 ffmpeg，发送被拒自动降级为文件）。
 - **主动消息**：`/remind`（相对时长 / `HH:mm` / 绝对日期，**不经过 agent 轮次**）、`/remindlist`、`/remindcancel`；调度器原子落盘 `<stateRoot>/reminders.json`，每账号上限 50 条。
-- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 7 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / 关于）。
+- **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 8 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / 定时提醒 / **个性化** / 关于）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
+- **个性化与记忆**：`/mode` 切换对话模式（默认助手/女友/男友/朋友 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词；设置卡「个性化」页签可视管理。
 - **健壮性**：长轮询看门狗（响应头到达后 body 挂死）、归档会话自动恢复、模型调用失败不卡队、二维码 PNG 只用 `node:zlib` 自编码（Windows 可用）。
 
 ## 未完成 / 待办
@@ -2210,3 +2211,61 @@ file instead` 一行可定位。视频出站仍需编码管线，未做。
   集成测试改为显式 `voiceOutbound: true`。全量 `npm test` → **411/411**（~35s）。
 - 结论一句话：**代码就绪、默认关闭；服务端哪天放开机器人语音投递，把开关打开就行**。TTS（文字→
   语音合成）依旧是另一回事，未做。
+
+## 个性化与记忆（2026-10-26，`f78f5ca` + `8f7dba2`，待随下次发版）
+
+用户需求（原话）：“会话可以定制话对话风格，如女友、男友、朋友等等模式……配置项新开页签可以配置
+个性化模式，增加配置全局记忆和会话记忆，让对话更亲和更人性化”。方案确认后按 P0 模式 → P1 记忆
+命令 → P2 后台摘要三步实现。
+
+### 行为
+
+- **对话模式**：内置 默认助手 / 女友 / 男友 / 朋友，用户可自定义至多 8 个。`/mode` 看列表，
+  `/mode 女友` 切换——切换会**开一条新会话线**（旧会话保留，`/list` 可切回），避免旧上下文污染
+  新人设。模式以 `<weixin_persona>` 块注入 prompt；内置提示词自带边界段（人设只改语气，不改编
+  事实、不拒任务、不做医疗/法律/投资建议）。`/mode 默认` 显式钉回纯助手（哪怕全局默认是人设）。
+- **两级默认**：会话覆盖（`persona-active.json`，键 `accountId|conversationId`）> 全局默认
+  （同文件的 `__global__`，设置卡选）> 配置项 `personaDefaultMode`。`activeModeFor` 是唯一
+  解析点，命令/注入/卡片共用。
+- **长期记忆**：`/remember 内容` 写入 `memory/global-<账号>.json`（去重、上限
+  `memoryGlobalMaxFacts`=30 条；**存满后拒绝新增**而不是挤掉最旧的——用户当它可靠清单用）。
+  `/forget 编号或关键词` 删除，`/memory` 查看全部 + 本会话摘要 + 最近窗口。
+- **会话摘要**：每 `memorySummaryTurns`（默认 10）个已完成的 agent 回合，后台用一条**侧会话**
+  （`wx-mem-<sha1>`，origin 'subagent'，无任何出站通道）把「旧摘要 + 最近 10 条流水」压成
+  ≤400 字新摘要，写入 `memory/conv-<账号>-<会话>.json`。下一个 prompt 以 `<weixin_memory>` 块
+  注入：长期事实 + 会话摘要 + 最近 5 条消息（每条截 160 字）。计数不受 `memoryEnabled` 开关影响
+  （关了再开节拍不乱）；摘要在 fire-and-forget 里跑，失败只记日志，绝不延迟或搞挂已发出的回复。
+  e2e 断言：摘要落盘的同轮**只发出 1 条微信消息**。
+- **提示词顺序**：`<weixin_persona>` → `<weixin_memory>` → `sourceContext` 之后是用户原文。
+  `memoryEnabled: false` 关掉记忆块与记忆命令（/mode 不受它管）。
+
+### 设置卡
+
+「个性化」页签（第 7 个）：模式列表（新增/编辑/删除自定义，内置只读）、「默认模式」选择器
+（实时生效，不用重载）、会话覆盖查看/清除、长期记忆的增删、各会话摘要查看/清除。远程方法
+`personaOverview / personaModeSave / personaModeRemove / personaDefaultSet / personaOverrideClear /
+memoryFactAdd / memoryFactRemove / memoryConvClear`（RemoteError 的文案在 code 槽，测试断言 `code`）。
+
+### 存储
+
+`<stateRoot>/persona-modes.json`（目录，首读播种内置）、`persona-active.json`（覆盖 + `__global__`）、
+`memory/global-<账号>.json`、`memory/conv-<账号>-<会话>.json`。写坏/丢内置自愈（重播种、丢条目
+跳过并告警）。
+
+### 坑与教训
+
+- `setActiveMode` 曾把**过滤后的视图**写回（会抹掉 `__global__`）——变更操作必须走原始文件往返，
+  有回归测试钉住。
+- 摘要器的 catch 把 `ReferenceError: accountId is not defined` 吞成了静默——测“吞错误”的模块时
+  必须传真 logger。
+- `createMemorySummarizer` 一度建在 setup IIFE 里，而 `createInboundHandler` 是模块级函数靠参数
+  取依赖——启动即 `createMemorySummarizer is not defined`，只有 e2e 的 ctx.logger.warn 抓得到；
+  最终按 `bridge` 的模式放外层 `let` + setup 内赋值，settle 点用 `?.` 兜底。
+- config-remote 表单与 schema 的 parity 测试很有用：新 schema 字段忘加表单会被它当场拦下。
+- e2e 精确断言 prompt 的旧用例需要 `memoryEnabled: false`（memory 块默认会出现在 prompt 里）。
+
+### 测试
+
+persona 9、memory 8、会话命令 6（/mode 列表/切换/按 id/钉回默认、/remember 往返、/forget 关键词）、
+后台摘要 7、e2e 2（persona+memory 注入顺序与关闭行为；摘要落盘且不发气泡）、设置卡页签 1、
+远程方法 parity、config-remote 表单 5 字段。全量 `npm test` → **449/449**（~36s）。

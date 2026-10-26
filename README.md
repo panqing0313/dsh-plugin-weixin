@@ -212,6 +212,11 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
 | `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
 | `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 50 条 |
+| `personaDefaultMode` | `'default'` | 新会话默认的对话模式。设置卡「个性化」页签的「默认模式」选择器会实时覆盖它（存盘即生效，不需要重载） |
+| `memoryEnabled` | `true` | 把长期记忆、会话摘要与最近消息窗口折进提示词。关掉后 /remember、/forget、/memory 一并停用；/mode 是独立功能，不受影响 |
+| `memorySummaryTurns` | `10` | 每多少个已完成的 agent 回合，后台自动把这段会话的摘要更新一次 |
+| `memoryGlobalMaxFacts` | `30` | 长期记忆条数上限；存满后 /remember 会拒绝新增，而不是悄悄挤掉最旧的一条 |
+| `memoryConvMaxChars` | `1200` | 会话摘要的字符上限 |
 | `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
 | `voiceOutbound` | `false` | 音频附件按微信语音发出而不是文件（wav/silk 进程内转码，其余走 ffmpeg）。**默认关**：实测服务端接受机器人语音（ret=0）但不投递，开着会让附件无声消失；发送被拒时仍会自动降级为文件 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
@@ -410,6 +415,28 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 按天一个文件，文本截断 200 字符）。设置卡的「消息流水」页签显示最近 50 条（收 ↓ / 发 ↑、账号、时间、
 内容，最新在前），不用翻日志就能确认每个账号都活着。写流水是尽力而为：失败只 warn，绝不影响消息收发。
 `test/journal.test.js` 与 `test/e2e.test.js` 的 messageJournal 用例守着这些行为。
+
+### 个性化与记忆（/mode · /remember · /forget · /memory）
+
+每个微信会话可以选一种对话模式（内置：默认助手 / 女友 / 男友 / 朋友，设置卡里最多再自定义 8 个，
+每个模式就是一段语气提示词——只改说话方式，不改变事实与任务能力）。微信里：
+
+- `/mode` 看有哪些模式、当前在用哪个；`/mode 女友` 切换。切换会**开一条新会话线**
+  （`/list` 可以随时切回旧线，旧上下文不丢）；`/mode 默认` 回到普通助手。
+- `/remember 我对花生过敏` 把一件事写进**长期记忆**（跨会话、跨重启、跨 /new 生效）；
+  `/forget 编号或关键词` 删除；`/memory` 查看全部。长期记忆存满（默认 30 条）后
+  `/remember` 会明确拒绝，不会悄悄挤掉最旧的。
+- 每段会话还有一个**自动摘要**：每 `memorySummaryTurns`（默认 10）个回合，插件在后台用一个
+  独立侧会话把最近对话浓缩成摘要——它绝不发微信消息，你只在下一条回复的提示词里感受到它。
+
+发消息时插件把三样东西折进提示词（都在用户文字之前）：当前模式的人格块、
+`<weixin_memory>` 记忆块（长期记忆 + 本会话摘要 + 最近 5 条消息），然后才是你说的内容。
+
+设置卡新增 **个性化** 页签：切换/新增/编辑自定义模式（内置模式只读）、改账号级默认模式
+（存盘即生效，不需要重载）、清除某个会话的模式覆盖、增删长期记忆、清空会话摘要。
+存储在 `<状态目录>/persona-modes.json`、`persona-active.json` 与 `memory/` 下，与凭证同目录。
+`test/persona.test.js`、`test/memory.test.js`、`test/memory-summarizer.test.js`、
+`test/session-commands.test.js` 与 e2e 的 persona/memory/summarizer 用例守着这些行为。
 
 ### 工具审计（toolAudit）
 
