@@ -219,6 +219,9 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `memoryGlobalMaxFacts` | `30` | 长期记忆条数上限；存满后 /remember 会拒绝新增，而不是悄悄挤掉最旧的一条 |
 | `memoryConvMaxChars` | `1200` | 会话摘要的字符上限 |
 | `memoryRecentTurns` | `5` | 冷启动时补多少条最近消息：只在**新会话线**（首条消息、`/new`、`/mode` 切换）注入一次，已接上的会话不再重复。0 关闭 |
+| `memoryRecall` | `true` | 消息提到旧事时在本地流水里检索原文并折进提示词；闲聊命中不到不花 token |
+| `memoryRecallDays` | `180` | 本地回忆检索往回找多少天（更早的流水仍在磁盘上，只是不进索引） |
+| `memoryRecallHits` | `3` | 一次最多注入几条命中原文（每条截 140 字） |
 | `quietHoursEnabled` | `false` | 免打扰开关：开着时落在时段内的定时提醒与 /subscribe 主动消息都推迟到时段结束后再发（重新排期，不丢、不重复） |
 | `quietHoursStart` | `'23:00'` | 免打扰开始（本地时间 `HH:mm`）。必须严格早于结束（或跨午夜），两端相等视为未配置 |
 | `quietHoursEnd` | `'07:00'` | 免打扰结束（本地时间 `HH:mm`）。跨午夜时段（如 23:00 → 07:00）按两段计算 |
@@ -433,6 +436,21 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 内容，最新在前），不用翻日志就能确认每个账号都活着。写流水是尽力而为：失败只 warn，绝不影响消息收发。
 页签顶部有 **导出记录** 按钮：把最近 30 天渲染成 Markdown 由卡片直接下载，不经过服务端文件。
 `test/journal.test.js` 与 `test/e2e.test.js` 的 messageJournal 用例守着这些行为。
+
+### 本地回忆检索（/recall）
+
+消息流水本来就把每条消息留在本地，缺的只是「查得到」：摘要是有损的，事实是手工整理的。
+`memoryRecall` 开着时（默认开），每条消息会先在本机检索一次流水——中文按二元切片、英文按词，
+BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天文件增量追加，只覆盖最近
+`memoryRecallDays` 天（默认 180，更早的流水仍在磁盘上，只是不进索引）。
+
+只有**值得查**的时候才花 token：消息里出现「上次/之前/那天/我说过」这类词，或者词面命中够密
+（≥2 个词且分数过线）时，才把 **3 条（`memoryRecallHits`）带日期的原文**折进 `<weixin_recall>`
+块；闲聊命中不到就什么都不注入，0 token。当前这条消息、以及 `/recall` 这类指令本身不会命中自己。
+
+`/recall <关键词>` 手动翻记录：直接回带日期的原文，**不经过模型、不花 token**；本会话找不到
+再扩大到整个账号（你常常记不清是在哪个对话里说的）。`test/recall.test.js`、`test/session-commands.test.js`
+的 /recall 用例与 e2e 的 local recall 用例守着这些行为。
 
 ### 即时总结与导出（/summary · /export）
 
