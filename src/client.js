@@ -166,6 +166,17 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journal:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/journalExport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "journalExport",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/journalExport:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journalExport:result`, create: _statusResult },
+				},
 
 				{
 					id: `${PKG}#weixin/personaOverview`,
@@ -1925,8 +1936,32 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			const [exporting, setExporting] = react.useState(false);
+			const exportChat = async () => {
+				setExporting(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.journalExport({ days: 30 }));
+					// The card downloads the Markdown itself as a Blob — no
+					// server-side file handoff involved.
+					const blob = new Blob([r?.markdown ?? ""], { type: "text/markdown;charset=utf-8" });
+					const url = URL.createObjectURL(blob);
+					const anchor = document.createElement("a");
+					anchor.href = url;
+					anchor.download = `weixin-journal-${new Date().toISOString().slice(0, 10)}.md`;
+					anchor.click();
+					URL.revokeObjectURL(url);
+					setError("");
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setExporting(false);
+				}
+			};
+
 			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
 				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Message journal", "消息流水")),
+				createElement("button", { onClick: () => exportChat(), disabled: exporting, style: buttonStyleFor(exporting) },
+					t("Export chat", "导出记录")),
 				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) },
 					t("Refresh", "刷新")));
 

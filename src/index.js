@@ -69,6 +69,7 @@ import {
   removeGlobalFact,
   bondLine,
 } from './memory.js'
+import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
@@ -946,6 +947,19 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const text = String(result.text ?? '').trim()
         if (text === '' || text === '（已取消）') return '这次没总结出来（侧会话没有返回内容），稍后再试。'
         return text
+      },
+      // /export: render this conversation's journal as Markdown. Short
+      // exports ride the normal reply; long ones land in
+      // `<stateRoot>/exports/` and the reply carries the path (the settings
+      // card's 消息流水 tab also has a one-click export).
+      export: (rawDays) => {
+        const days = Math.min(365, Math.max(1, Number(rawDays) || 30))
+        const entries = readJournalRange(stateRoot, { accountId, conversationId, days })
+        if (entries.length === 0) return `这个会话在最近 ${days} 天没有消息流水。`
+        const markdown = renderChatMarkdown(entries, { title: `聊天记录 · ${conversationId} · 最近 ${days} 天` })
+        if (markdown.length <= 3000) return markdown
+        const file = writeChatExport(stateRoot, accountId, conversationId, markdown)
+        return `聊天记录比较长（${entries.length} 条，${markdown.length} 字），已导出成文件：\n${file}\n完整内容也可以在设置卡「消息流水」页签里一键导出。`
       },
       remember: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'

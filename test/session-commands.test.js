@@ -580,6 +580,34 @@ test('/subscribe schedules, lists and cancels timed proactive messages', async (
   })
 })
 
+test('/export renders the journal as markdown and spills to a file when long', async () => {
+	await withPlugin(async ({ root, fake }) => {
+		// A small export rides the normal reply channel.
+		appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '晚饭吃什么', at: Date.now() - 60_000 })
+		appendJournal(root, { dir: 'out', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '去吃面', at: Date.now() })
+		fake.deliver('/export 1', 'e0')
+		await waitFor(() => fake.outbound.length > 0, 'the small export reply')
+		assert.match(fake.outbound[0].text, /晚饭吃什么/)
+		assert.match(fake.outbound[0].text, /去吃面/)
+
+		// A long export spills to a file under <stateRoot>/exports/.
+		for (let i = 0; i < 120; i += 1) {
+			appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: `长记录第${i}条 ${'x'.repeat(90)}`, at: Date.now() + i })
+		}
+		fake.deliver('/export', 'e1')
+		await waitFor(() => fake.outbound.length > 1, 'the spill reply')
+		assert.match(fake.outbound[1].text, /已导出成文件/)
+		const m = /已导出成文件：\n(\S+)/.exec(fake.outbound[1].text)
+		assert.ok(m, fake.outbound[1].text)
+		assert.ok(fs.existsSync(m[1]), `export file missing: ${m[1]}`)
+
+		// The zh alias reaches the command, not the agent turn.
+		fake.deliver('/导出', 'e2')
+		await waitFor(() => fake.outbound.length > 2, 'the alias reply')
+		assert.match(fake.outbound[2].text, /已导出成文件/)
+	})
+})
+
 test('/summary summarizes the conversation on demand and never writes the conv file', async () => {
   await withPlugin(async ({ fake, root }) => {
     // A short history so the recent window is non-empty.

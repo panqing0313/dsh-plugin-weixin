@@ -350,6 +350,24 @@ test('an expired QR code is replaced, and the refresh budget is finite', async (
 // is what a conversation reads, builtins stay untouchable, and the numbered
 // memory list the card shows matches what /forget would remove.
 
+test('journalExport renders the journal window as markdown', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { appendJournal } = await import('../src/message/journal.js')
+    appendJournal(root, { dir: 'in', accountId: 'bot1', conversationId: 'c1', senderId: 'wxid_a', text: '你好', at: Date.now() - 1000 })
+    appendJournal(root, { dir: 'out', accountId: 'bot1', conversationId: 'c1', text: '你好呀', at: Date.now() })
+    const r = await c.journalExport({ accountId: 'bot1', days: 7 })
+    assert.equal(r.count, 2)
+    assert.equal(r.chars, r.markdown.length)
+    assert.match(r.markdown, /对方（wxid_a）：你好/)
+    assert.match(r.markdown, /我：你好呀/)
+    assert.match(r.markdown, /^# 聊天记录 · bot1\n/)
+    // No entries for the account → an empty document, still a valid reply.
+    const empty = await c.journalExport({ accountId: 'nobody' })
+    assert.equal(empty.count, 0)
+  })
+})
+
 test('personaOverview seeds the builtin modes and reports overrides and memory', async () => {
   await withStateRoot(async (root) => {
     const c = controller()

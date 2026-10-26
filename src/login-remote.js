@@ -62,6 +62,7 @@ function donateQrDataUrl() {
 }
 import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
+import { readJournalRange, renderChatMarkdown } from "./message/chat-export.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -546,6 +547,21 @@ export class WeixinLoginController extends TypertRemoteService {
         return { entries: readJournal(stateDir(), { limit, accountId }) };
     }
 
+    /**
+     * Render the journal (optionally one account, last `days` days) as a
+     * Markdown document for the settings card's one-click export. The card
+     * downloads the text itself — no file has to travel through the plugin.
+     */
+    async journalExport(options) {
+        const opts = options ?? {};
+        const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
+        const daysRaw = Number(opts.days);
+        const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(Math.floor(daysRaw), 365) : 30;
+        const entries = readJournalRange(stateDir(), { accountId, days });
+        const markdown = renderChatMarkdown(entries, { title: accountId ? `聊天记录 · ${accountId}` : "聊天记录" });
+        return { count: entries.length, chars: markdown.length, markdown };
+    }
+
     async pause(accountId) {
         const id = String(accountId ?? "").trim();
         if (!id) throw new RemoteError("account id is required");
@@ -733,4 +749,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear"]);
