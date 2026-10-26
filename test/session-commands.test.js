@@ -493,3 +493,22 @@ test('a switching a mode does not disturb an ordinary queued message flow', asyn
     assert.match(fake.outbound[0].text, /已切换到「朋友」模式/)
   })
 })
+
+test('/status and /memory show the affinity line when a bond exists', async () => {
+  await withPlugin(async ({ fake, root }) => {
+    // Seed the bond the settle point would have written (the settle-point
+    // write itself is covered by the e2e summarizer test; this harness's fake
+    // agents do not complete real turns). The conversation here is the peer id
+    // itself: group_id is empty for direct messages.
+    const { bumpTurnAndBond } = await import('../src/memory.js')
+    bumpTurnAndBond(root, ACCOUNT_ID, ALLOWED)
+
+    fake.deliver('/status', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the status reply')
+    assert.match(fake.outbound[0].text, /我们认识第 1 天 · 聊过 1 条消息/, fake.outbound[0].text)
+
+    fake.deliver('/memory', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the memory reply')
+    assert.match(fake.outbound[1].text, /我们认识第 1 天/, fake.outbound[1].text)
+  })
+})

@@ -126,11 +126,114 @@ export function removeGlobalFact(stateRoot, accountId, index, { warn = noopWarn 
 /** The conversation-level store: rolling summary + durable per-chat facts. */
 export function readConvMemory(stateRoot, accountId, conversationId, { warn = noopWarn } = {}) {
     const parsed = readJsonSafe(convMemoryPath(stateRoot, accountId, conversationId), {}, warn, 'conversation memory');
-    return {
+    const out = {
         summary: typeof parsed.summary === 'string' ? parsed.summary : '',
         facts: sanitizeFacts(parsed.facts),
         updatedTurn: typeof parsed.updatedTurn === 'number' ? parsed.updatedTurn : 0,
     };
+    // bond is optional on purpose: pre-affinity files keep their exact shape
+    // (deep-equal tests and callers alike), the key only appears once a bond
+    // exists.
+    const bond = sanitizeBond(parsed.bond);
+    if (bond !== undefined) out.bond = bond;
+    return out;
+}
+
+/**
+ * The affinity record ({@link bumpTurnAndBond}): how long the two sides have
+ * known each other, how much they have talked, and the derived mood. Plain
+ * data so the card can render it without importing behaviour.
+ *
+ * @param {unknown} value
+ */
+function sanitizeBond(value) {
+    if (value === null || typeof value !== 'object') return undefined;
+    const raw = value;
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
+    const bond = {
+        firstDay: typeof raw.firstDay === 'string' ? raw.firstDay : undefined,
+        msgs: num(raw.msgs) ?? 0,
+        lastDate: typeof raw.lastDate === 'string' ? raw.lastDate : undefined,
+        msgsToday: num(raw.msgsToday) ?? 0,
+        lastMessageAt: num(raw.lastMessageAt),
+        mood: typeof raw.mood === 'string' ? raw.mood : undefined,
+    };
+    return bond;
+}
+
+/** Local-calendar `YYYY-MM-DD` — the day a bond started is a human day, not a UTC one. */
+function dayString(now) {
+    const d = new Date(now);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+/** Inclusive day count between two local calendar days: same day → 1. */
+function daysSince(firstDay, now) {
+    const start = new Date(`${firstDay}T00:00:00`);
+    if (Number.isNaN(start.getTime())) return undefined;
+    const today = new Date(dayString(now) + 'T00:00:00');
+    return Math.max(1, Math.floor((today.getTime() - start.getTime()) / 86_400_000) + 1);
+}
+
+/**
+ * Deterministic mood, no model in the loop: a wrong parse must never be able
+ * to inject a fake feeling into the prompt. Order matters — the situational
+ * states (late night, long gap) beat the activity ones.
+ *
+ * @param {{ msgs: number, msgsToday: number, lastMessageAt?: number }} prior bond state BEFORE this turn
+ * @param {number} now
+ */
+export function moodFor(prior, now = Date.now()) {
+    const hour = new Date(now).getHours();
+    if (hour >= 23 || hour < 5) return '夜深了，还醒着';
+    const gapMs = typeof prior.lastMessageAt === 'number'
+        ? now - prior.lastMessageAt
+        : (prior.msgs > 0 ? 0 : Number.POSITIVE_INFINITY);
+    if (gapMs === Number.POSITIVE_INFINITY) return '刚认识';
+    if (gapMs > 86_400_000) return '好久没聊，有点想你';
+    if (prior.msgsToday >= 19) return '聊得很热络';
+    return '平静';
+}
+
+/**
+ * One read-modify-write per settled agent turn: bump the turn counter AND the
+ * affinity counters (the per-turn write already happens for the counter, so
+ * the bond rides along at zero extra IO). Returns the new turn number and the
+ * updated bond.
+ */
+export function bumpTurnAndBond(stateRoot, accountId, conversationId, { now = Date.now(), warn = noopWarn } = {}) {
+    const memory = readConvMemory(stateRoot, accountId, conversationId, { warn });
+    const prior = memory.bond ?? { msgs: 0, msgsToday: 0 };
+    const turn = (memory.updatedTurn ?? 0) + 1;
+    memory.updatedTurn = turn;
+    const day = dayString(now);
+    const bond = {
+        firstDay: prior.firstDay ?? day,
+        msgs: prior.msgs + 1,
+        lastDate: day,
+        msgsToday: prior.lastDate === day ? prior.msgsToday + 1 : 1,
+        lastMessageAt: now,
+        mood: moodFor(prior, now),
+    };
+    memory.bond = bond;
+    memory.conversationId = conversationId;
+    writeJsonSafe(convMemoryPath(stateRoot, accountId, conversationId), memory, warn, 'conversation memory');
+    return { turn, bond: { ...bond } };
+}
+
+/**
+ * The one-line affinity display shared by the prompt block, /memory and the
+ * settings card. Empty when there is no usable bond record (old files).
+ */
+export function bondLine(bond, now = Date.now()) {
+    if (bond === undefined || bond === null || typeof bond !== 'object') return '';
+    if (typeof bond.firstDay !== 'string' || typeof bond.msgs !== 'number') return '';
+    const days = daysSince(bond.firstDay, now);
+    if (days === undefined) return '';
+    const mood = typeof bond.mood === 'string' && bond.mood !== '' ? ` · 此刻：${bond.mood}` : '';
+    return `我们认识第 ${days} 天 · 聊过 ${bond.msgs} 条消息${mood}`;
 }
 
 /** Used by the P2 summarizer; truncated so one bad run cannot bloat the block. */
@@ -180,12 +283,15 @@ export function listConvMemories(stateRoot, accountId, { warn = noopWarn } = {})
         const hasAny = (typeof parsed.summary === 'string' && parsed.summary.trim() !== '')
             || sanitizeFacts(parsed.facts).length > 0;
         if (hasAny === false) continue;
-        entries.push({
+        const entry = {
             conversationId: typeof parsed.conversationId === 'string' ? parsed.conversationId : null,
             summary: typeof parsed.summary === 'string' ? parsed.summary : '',
             updatedTurn: typeof parsed.updatedTurn === 'number' ? parsed.updatedTurn : 0,
             factCount: sanitizeFacts(parsed.facts).length,
-        });
+        };
+        const bond = sanitizeBond(parsed.bond);
+        if (bond !== undefined) entry.bond = bond;
+        entries.push(entry);
     }
     return entries;
 }
@@ -215,8 +321,10 @@ export function readRecentWindow(stateRoot, accountId, conversationId, {
  * with nothing at all injects nothing, so turning memory on costs zero
  * tokens until there is something to remember.
  */
-export function buildMemoryBlock({ global, conv, recent } = {}) {
+export function buildMemoryBlock({ global, conv, recent, now = Date.now() } = {}) {
     const sections = [];
+    const bondText = bondLine(conv?.bond, now);
+    if (bondText !== '') sections.push(`【我们】${bondText}`);
     const globalFacts = global?.facts ?? [];
     if (globalFacts.length > 0) {
         sections.push(['【长期记忆 · 关于用户】', ...globalFacts.map((fact) => `- ${fact.text}`)].join('\n'));

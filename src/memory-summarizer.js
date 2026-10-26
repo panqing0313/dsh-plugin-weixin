@@ -15,7 +15,7 @@
  * @module dsh-weixin/memory-summarizer
  */
 
-import { readConvMemory, setConvSummary, setConvTurn, readRecentWindow, DEFAULT_MEMORY_CONV_MAX_CHARS } from './memory.js'
+import { readConvMemory, setConvSummary, bumpTurnAndBond, readRecentWindow, DEFAULT_MEMORY_CONV_MAX_CHARS } from './memory.js'
 
 const noopWarn = () => {}
 
@@ -45,10 +45,10 @@ export function createMemorySummarizer({ bridge, stateRoot, config, logger = {} 
     function afterTurn(accountId, conversationId) {
         const current = config()
         // The counter counts real agent turns regardless of the toggle, so
-        // re-enabling memory mid-conversation keeps a meaningful cadence.
-        const conv = readConvMemory(stateRoot, accountId, conversationId, { warn: errLog })
-        const turn = (conv.updatedTurn ?? 0) + 1
-        setConvTurn(stateRoot, accountId, conversationId, turn, { warn: errLog })
+        // re-enabling memory mid-conversation keeps a meaningful cadence. The
+        // affinity bond rides the same write (zero extra IO).
+        const bumped = bumpTurnAndBond(stateRoot, accountId, conversationId, { warn: errLog })
+        const turn = bumped.turn
 
         const every = Math.max(1, Number(current.memorySummaryTurns) || 10)
         if (current.memoryEnabled !== true) return

@@ -6,6 +6,9 @@ import { join } from 'node:path'
 import {
 	addGlobalFact,
 	readGlobalMemory,
+	bumpTurnAndBond,
+	bondLine,
+	moodFor,
 	removeGlobalFact,
 	readConvMemory,
 	setConvSummary,
@@ -128,4 +131,55 @@ test('a broken memory file degrades to empty, not a throw', () => {
 	warns.length = 0
 	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [] })
 	assert.ok(warns.length === 1, `warned once: ${JSON.stringify(warns)}`)
+})
+
+test('bumpTurnAndBond counts days and messages, and derives the mood deterministically', () => {
+	const a = 'bot1'; const c = 'conv-bond'
+	// Morning of day one: first contact.
+	const day1 = new Date('2026-10-26T09:00:00')
+	let bumped = bumpTurnAndBond(root, a, c, { now: day1.getTime() })
+	assert.equal(bumped.turn, 1)
+	assert.equal(bumped.bond.firstDay, '2026-10-26')
+	assert.equal(bumped.bond.msgs, 1)
+	assert.equal(bumped.bond.msgsToday, 1)
+	assert.equal(bumped.bond.mood, '刚认识', 'no prior message → the first-contact mood')
+	// Same evening: the counters roll, the mood is the calm default.
+	bumped = bumpTurnAndBond(root, a, c, { now: new Date('2026-10-26T20:00:00').getTime() })
+	assert.equal(bumped.bond.msgs, 2)
+	assert.equal(bumped.bond.msgsToday, 2)
+	assert.equal(bumped.bond.mood, '平静')
+	// A day and a half later: the per-day counter resets, the gap shows.
+	bumped = bumpTurnAndBond(root, a, c, { now: new Date('2026-10-28T12:00:00').getTime() })
+	assert.equal(bumped.bond.msgsToday, 1)
+	assert.equal(bumped.bond.lastDate, '2026-10-28')
+	assert.equal(bumped.bond.mood, '好久没聊，有点想你')
+	const stored = readConvMemory(root, a, c)
+	assert.equal(stored.bond.msgs, 3)
+	assert.equal(stored.bond.firstDay, '2026-10-26')
+	// The bond survives the summary write (separate fields in one file).
+	setConvSummary(root, a, c, '聊过 bond')
+	assert.equal(readConvMemory(root, a, c).bond.msgs, 3)
+})
+
+test('moodFor: late night, long gap, busy day, calm', () => {
+	// Last message at noon → 10-27T15:00 is a 27h gap (past the 24h mood line).
+	const prior = { msgs: 10, msgsToday: 3, lastMessageAt: new Date('2026-10-26T12:00:00').getTime() }
+	assert.equal(moodFor(prior, new Date('2026-10-26T23:30:00').getTime()), '夜深了，还醒着')
+	assert.equal(moodFor(prior, new Date('2026-10-27T02:00:00').getTime()), '夜深了，还醒着')
+	assert.equal(moodFor(prior, new Date('2026-10-27T15:00:00').getTime()), '好久没聊，有点想你')
+	assert.equal(moodFor({ ...prior, msgsToday: 19 }, new Date('2026-10-26T19:00:00').getTime()), '聊得很热络')
+	assert.equal(moodFor(prior, new Date('2026-10-26T19:00:00').getTime()), '平静')
+	assert.equal(moodFor({ msgs: 0, msgsToday: 0 }, new Date('2026-10-26T19:00:00').getTime()), '刚认识')
+})
+
+test('bondLine renders the one-liner; buildMemoryBlock leads with it', () => {
+	const bond = { firstDay: '2026-10-01', msgs: 42, mood: '聊得很热络' }
+	const now = new Date('2026-10-26T12:00:00').getTime()
+	assert.equal(bondLine(bond, now), '我们认识第 26 天 · 聊过 42 条消息 · 此刻：聊得很热络')
+	assert.equal(bondLine(undefined, now), '')
+	assert.equal(bondLine({ firstDay: 'nope', msgs: 1 }, now), '')
+	const block = buildMemoryBlock({ conv: { summary: '', facts: [], updatedTurn: 1, bond }, recent: [] })
+	assert.ok(block.startsWith('<weixin_memory>\n【我们】我们认识第 26 天'), block)
+	const bare = buildMemoryBlock({ conv: { summary: 's', facts: [], updatedTurn: 1 }, recent: [] })
+	assert.ok(!bare.includes('【我们】'), bare)
 })

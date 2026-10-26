@@ -670,6 +670,7 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
       parts.push(`账号：${context.accountLabel ? `${context.accountLabel}（${context.accountId}）` : context.accountId}`)
       if (typeof context.paused === 'boolean') parts.push(`状态：${context.paused ? '已暂停（不收发消息）' : '正常收发'}`)
       if (context.lastSeenAt) parts.push(`最近收发：${context.lastSeenAt}`)
+      if (typeof context.bondLine === 'string' && context.bondLine !== '') parts.push(context.bondLine)
       if (context.allowlist) {
         const source = context.allowlist.source === 'account' ? '本账号专属名单' : '全局名单'
         parts.push(`发信人白名单：${context.allowlist.senders.length} 人（${source}）`)

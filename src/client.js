@@ -1869,7 +1869,8 @@ window.__ModuleLoader__.load({
 			},
 				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
 					c.conversationId === null ? t("(older conversation)", "（较早会话）") : c.conversationId,
-					c.summary ? ` — ${c.summary}` : ""),
+					c.summary ? ` — ${c.summary}` : "",
+					typeof c.bondLine === "string" && c.bondLine !== "" ? createElement("span", { style: { display: "block", color: C.labelTertiary } }, c.bondLine) : null),
 				c.conversationId === null ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.memoryConvClear({ accountId, conversationId: c.conversationId }))), disabled: busy, style: buttonStyleFor(busy) }, t("Clear", "清空"))));
 
 			const memoryPanel = accountId === "" ? null : createElement("div", { key: "memory", style: panelStyle },

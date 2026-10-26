@@ -27,6 +27,7 @@ import {
     addGlobalFact,
     removeGlobalFact,
     clearConvMemory,
+    bondLine,
 } from "./memory.js";
 import {
     listActiveOverrides,
@@ -427,7 +428,10 @@ export class WeixinLoginController extends TypertRemoteService {
             overrides: listActiveOverrides(root, { warn: (m) => logger.warn(m) }),
             memory: account === "" ? null : {
                 facts: readGlobalMemory(root, account, { warn: (m) => logger.warn(m) }).facts.map((f, i) => ({ index: i + 1, text: f.text, at: f.at })),
-                conversations: listConvMemories(root, account, { warn: (m) => logger.warn(m) }),
+                conversations: listConvMemories(root, account, { warn: (m) => logger.warn(m) }).map((conv) => ({
+                    ...conv,
+                    bondLine: bondLine(conv.bond),
+                })),
             },
         };
     }

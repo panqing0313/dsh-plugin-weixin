@@ -363,6 +363,21 @@ test('personaOverview seeds the builtin modes and reports overrides and memory',
   })
 })
 
+test('personaOverview attaches the affinity line to each conversation', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { bumpTurnAndBond } = await import('../src/memory.js')
+    const { setConvSummary } = await import('../src/memory.js')
+    bumpTurnAndBond(root, 'bot1', 'conv-heat', { now: new Date('2026-10-26T09:00:00').getTime() })
+    setConvSummary(root, 'bot1', 'conv-heat', '聊过天气')
+    const overview = await c.personaOverview({ accountId: 'bot1' })
+    const conv = overview.memory.conversations.find((entry) => entry.conversationId === 'conv-heat')
+    assert.ok(conv, 'the conversation is listed')
+    assert.match(conv.bondLine, /我们认识第 1 天 · 聊过 1 条消息/, conv.bondLine)
+    assert.ok(conv.summary === '聊过天气')
+  })
+})
+
 test('personaModeSave creates a custom mode, edits it, and refuses builtins', async () => {
   await withStateRoot(async (root) => {
     const c = controller()

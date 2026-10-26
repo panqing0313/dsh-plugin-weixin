@@ -66,6 +66,7 @@ import {
   readRecentWindow,
   addGlobalFact,
   removeGlobalFact,
+  bondLine,
 } from './memory.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
@@ -899,6 +900,8 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
         const recent = readRecentWindow(stateRoot, accountId, conversationId, { warn })
         const parts = []
+        const bond = bondLine(readConvMemory(stateRoot, accountId, conversationId, { warn }).bond)
+        if (bond !== '') parts.push(bond)
         parts.push(facts.length === 0 ? '长期记忆：还没有，用 /remember 教我。' : ['长期记忆：', ...facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
         parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
         parts.push(`最近消息窗口：${recent.length} 条`)
@@ -1009,6 +1012,11 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         senders: effectiveConfig.current.allowedSenders ?? [],
       },
       reminders: reminderScheduler,
+      // Affinity rides /status when memory is on; computed fresh per message
+      // like the rest of the status facts (the card can edit between messages).
+      bondLine: effectiveConfig.current.memoryEnabled !== false
+        ? bondLine(readConvMemory(stateRoot, accountId, message.conversationId, { warn }).bond)
+        : '',
       persona: personaCommands(message.conversationId),
     })
     if (commandReply !== undefined) {
