@@ -5,8 +5,8 @@
 ## 当前状态（2026-10-26）
 
 - **版本**：`0.9.6`，2026-10-26 已发布（npm `latest`、tag `v0.9.6`、GitHub release 三者齐全；注册表 `dist.shasum` `a2a1e8f7…` / `dist.integrity` `sha512-lC6LUv74…`、`gitHead` `fe1102b` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
-- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，随 0.9.7 发）。
-- **测试**：`npm test` → `tests 503 / pass 503 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。
+- **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
+- **测试**：`npm test` → `tests 518 / pass 518 / fail 0`（约 44s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -19,7 +19,8 @@
 - **观测**：消息流水 JSONL（按天滚动、文本截断 200 字符、失败只 warn）+ **工具审计 JSONL**（`<stateRoot>/audit/`，工具名 / 截断参数 / 账号 / 会话 / 触发者 / 结果是否带错，`callId` 配对；被 `/cancel` 打断的调用补 `aborted:true`）；设置卡 9 个页签（账号（登录 + 状态）/ 会话 / 配置 / 语音 / 消息流水 / **统计** / 定时提醒 / **个性化** / 关于）；消息流水页签带**导出记录**（最近 30 天 Markdown 浏览器直下）。
 - **语境增强**：`sourceContext` 来源块、`readLinks` 抓正文、`autoSendFiles` 产出文件自动送达。
 - **入口**：同一张卡片注册在三个位置——插件页（`plugins.bundle.config`）、宿主设置导航（`settings.section`，排在 dsh-im 之后）、以及**左侧栏的「微信」页**（`sidebar.panellist` 行 + `main` 键控面板，同一 id `dsh-weixin`）；面板页自带滚动、24/28px 边距与 920px 阅读宽度（卡片原本按 ~520px 对话框设计）。
-- **个性化与记忆**：`/mode` 切换对话模式（默认助手/女友/男友/朋友/**贾维斯** + **三个游戏模式** 海龟汤/成语接龙/文字冒险 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回；游戏列表分组显示）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词、**亲密度**（认识天数/消息数/确定性心情，进提示词 `/status` `/memory` 与设置卡）；设置卡「个性化」页签可视管理。
+- **个性化与记忆**：`/mode` 切换对话模式（默认助手/女友/男友/朋友/**贾维斯** + **三个游戏模式** 海龟汤/成语接龙/文字冒险 + 至多 8 个自定义，切换开一条新会话线，`/list` 可切回；游戏列表分组显示）、`/remember` `/forget` `/memory` 管理跨会话长期记忆（存满拒绝新增而不是挤掉最旧的）、每 N 回合后台侧会话自动更新会话摘要（不发任何微信消息）、最近消息窗口折进提示词、**亲密度**（认识天数/消息数/确定性心情，进提示词 `/status` `/memory` 与设置卡，且只对陪聊模式显示）；设置卡「个性化」页签可视管理，并**按会话**显示「模式 · 此刻状态 · 认识多久」。
+- **陪聊节奏与生活状态**：非「默认助手」模式下回复按人来的节奏走——首条停 0.2–2.4s 抖动（累时 ×1.35）、长回复拆 2–3 条气泡（条间 0.4–1.1s）、收尾短句单独成条；心情/在做什么/精力由「几点 + 隔了多久 + 今天聊了多少条」确定性推断（不调模型，5 分钟节流落盘 `memory/life-<账号>.json`），精力低时提示词里要求回得更短更慢。**「默认助手」不延迟、不分条、不注入状态**，`/status` `/memory` 的感情行同样只在陪聊模式出现。
 - **定时主动消息**：`/subscribe <时间> <提示词>`（每天/每周X/裸 HH:mm/一次性）到点开侧会话让 agent 带着人设与记忆生成一条再走标准出站管线（分片/限速继承），`/subscribelist` `/subscribecancel`；错过的到点 30 分钟内补发一次、否则丢弃，一次性到期自动移除；每账号上限 20 条。`/remind` 保持零模型消耗不变，两者互补。
 - **即时总结与导出**：`/summary` 现场让侧会话总结这段会话（不写回摘要，纯「看一眼」）；`/export [天数]` 把最近 N 天流水渲染成 Markdown——短的直接回复，长的落盘 `<stateRoot>/exports/`；设置卡消息流水页签的导出按钮走同一渲染，改为浏览器下载。
 - **免打扰时段**：`quietHoursEnabled` + `quietHoursStart`/`quietHoursEnd`（默认 23:00–07:00，支持跨午夜）。时段内到点的 `/remind` 与 `/subscribe` 全部重新排期到时段结束：提醒保留在盘上、订阅不消耗次数，夜里不响、早上不丢。
@@ -2528,3 +2529,23 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - `npm publish` 的 2FA 需要真 TTY：`yes '' | script -q /dev/null node bin/release.mjs <ver> --yes`
   能给到 pty 并把 ENTER 递进去，浏览器里点确认后全自动跑完（这次 0.9.6 一次通过）。
   收尾那行 `script: write master: Input/output error` 是 pty 关闭时的噪音，不影响结果。
+
+## 陪聊节奏与生活状态（2026-10-26，待随 0.9.7 发版）
+
+### 行为
+
+- **节奏**（`src/message/human-pace.js`）：`isCompanionMode(mode)` = 模式不是 `default`。`planCompanionReply` 给出 `{delayMs, bubbles, gapMs}`：首条延迟 `(240 + 字数×16) × jitter(0.8–1.25) × (精力<30 ? 1.35 : 1)`，夹在 220ms 与 `replyDelayMaxMs` 之间；长回复按段落优先、其次按句末标点切分，短于 6 字的片段并入上一条，**≤14 字的收尾句单独成条**，条数上限 `bubbleSplitMax`；含代码块整段不拆。`sendChunked` 新增 `message.bubbles` + `message.gapMs`，逐条发送、条间 `sleep(gapMs)`。
+- **状态**（`src/message/life-state.js`）：`baseEnergyFor(hour)` 给一天一条精力曲线（凌晨 22、上午 72、午饭后 58、晚间 46…），`activityFor(hour, weekend)` 给「在上班/在吃午饭/在家窝着…」，`inferMood` 按「隔了 ≥3 天 / 深夜 / 精力 ≤22 / ≤38 / ≥80 / 其余」六档给心情；跨会话共享、`LIFE_WRITE_INTERVAL_MS`（5 分钟）节流落盘 `memory/life-<账号>.json`，`persist:false` 供卡片只读。
+- **提示词**：`buildHumanStyleBlock()`（`<weixin_style>`，只对陪聊模式）教它「一次说一两句、别用标题列表、口语和 emoji 别每句都带」；`lifeBlock(life)`（`<weixin_life>`）给状态并要求「累了就回短一点，别把状态念给对方听」。拼接顺序 `persona → style → life → memory → recall → 用户文字`。
+- **卡片**：`personaOverview` 每个会话多返回 `modeId/modeName/life/lifeLine`（`readOrInferLifeState({persist:false})`），个性化页签那一行显示 `模式：女友 · 在家歇着 · 有点乏… · 精力 34/100 · 我们认识第 3 天`。`listConvMemories` 现在把**只有亲密度、还没有摘要**的新会话也列出来，否则卡片看不见刚开的线。
+- **「默认助手」的三重隔离**：不延迟不分条（`isCompanionMode` 为假直接早返回）、不注入 style/life 块、`/status` 与 `/memory` 不显示感情行（`companionHere()` 统一判断）。
+
+### 坑与教训
+
+- 作息/心情必须是**纯函数 + 节流落盘**：模型推断会让每条消息多一次调用，也让同一份状态在两次读之间漂移。
+- 亲密度与状态都挂在会话级文件上，但 `/mode` 切换会开新会话线——所以属性要存在 `conv` 文件（conversationId 维度）而不是 sessionId 维度，否则换模式就等于失忆。
+- 卡片测试的 hook 运行时按组件实例分槽后才能跨页签断言（见 0.9.6 那条）；本次新增的设置卡用例先连续 `render()` 六次再断言，因为页签内先取 `status()` 再取 `personaOverview()`，一次 flush 只推进一轮 effect。
+
+### 测试
+
+- `test/human-pace.test.js` 6 条、`test/life-state.test.js` 6 条、e2e `companion pacing`（女友恰好 2 条气泡逐字相等 / 默认助手 1 条整段）与 persona e2e 的顺序断言（`persona < style < life < memory < text`）、`test/login-remote.test.js` 的「每个会话的模式与推断状态」、`test/client-login-poll.test.js` 的「个性化页签按会话显示模式与状态」。全量 `npm test` → 518/518。
