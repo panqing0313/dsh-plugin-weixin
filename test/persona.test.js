@@ -157,6 +157,18 @@ test('a /mode switch round-trips persona-active.json WITHOUT erasing the card de
   }
 })
 
+test('the role builtins cover the shipped roster, each with a boundary paragraph', () => {
+  const roles = BUILTIN_MODES.filter((m) => m.game !== true)
+  assert.deepEqual(roles.map((m) => m.id), ['default', 'girlfriend', 'boyfriend', 'friend', 'jarvis'])
+  const jarvis = BUILTIN_MODES.find((m) => m.id === 'jarvis')
+  assert.equal(jarvis.name, '贾维斯')
+  assert.equal(jarvis.builtin, true)
+  assert.ok(jarvis.prompt.length > 80, 'a persona needs a real prompt body')
+  assert.match(jarvis.prompt, /边界/, 'every builtin says tone must not override facts')
+  assert.match(jarvis.prompt, /先给结论/, 'the butler style is the point of the mode')
+  assert.equal(BUILTIN_MODES.filter((m) => m.id === 'jarvis').length, 1, 'one id, one mode')
+})
+
 test('the game builtins carry playable rules and the game flag survives a rewrite', () => {
   const games = BUILTIN_MODES.filter((m) => m.game === true)
   assert.deepEqual(games.map((m) => m.name), ['海龟汤', '成语接龙', '文字冒险'])
