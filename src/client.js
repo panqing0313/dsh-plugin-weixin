@@ -37,7 +37,7 @@ window.__ModuleLoader__.load({
 		const PKG = "dsh-plugin-weixin";
 		// Kept in step with package.json by bin/release.mjs bumpVersion() — the card
 		// cannot import package.json, so the release script rewrites this line.
-		const PLUGIN_VERSION = "0.9.3";
+		const PLUGIN_VERSION = "0.9.4";
 		const NS = "dshPluginWeixin";
 
 		const TYPERT_REMOTE = {

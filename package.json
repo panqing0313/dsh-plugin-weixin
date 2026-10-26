@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-weixin",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "icon": "./assets/icon-128.png",
   "description": "Weixin (personal WeChat, iLink Bot API) channel plugin for DeepSeek Harness — command a DSH agent from WeChat, with images, files and voice-note transcription.",
   "type": "module",
