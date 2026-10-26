@@ -155,9 +155,13 @@ export class ReminderScheduler {
    * @param {(ms: number, callback: () => void) => unknown} [options.setTimeout] injectable for tests
    * @param {(timer: unknown) => void} [options.clearTimeout] injectable for tests
    */
-  constructor({ stateRoot, fire, warn = () => {}, setTimeoutRef = ((ms, cb) => setTimeout(cb, ms)), clearTimeoutRef = ((t) => clearTimeout(t)) }) {
+  constructor({ stateRoot, fire, warn = () => {}, setTimeoutRef = ((ms, cb) => setTimeout(cb, ms)), clearTimeoutRef = ((t) => clearTimeout(t)), quiet = null }) {
     this.stateRoot = stateRoot
     this.fire = fire
+    // Optional quiet-hours gate: (nowMs) => ms until the window ends, 0 when
+    // the moment is not quiet. A slot landing inside the window is pushed to
+    // the window's end — kept in the store, so a restart re-arms it.
+    this.quiet = quiet
     this.warn = warn
     this.setTimeoutRef = setTimeoutRef
     this.clearTimeoutRef = clearTimeoutRef
@@ -231,6 +235,16 @@ export class ReminderScheduler {
     const delay = Math.max(0, reminder.fireAt - Date.now())
     const timer = this.setTimeoutRef(delay, () => {
       this.timers.delete(reminder.id)
+      const quietMs = this.quiet === null ? 0 : this.quiet(Date.now())
+      if (quietMs > 0) {
+        // 免打扰时段: the item was not removed yet — keep it in the store with
+        // a pushed fireAt so it survives a restart, then re-arm for the end.
+        reminder.fireAt = Date.now() + quietMs
+        writeReminders(this.stateRoot, this.store, this.warn)
+        this.warn(`免打扰时段，提醒 ${reminder.id} 推迟到 ${new Date(reminder.fireAt).toLocaleString('zh-CN', { hour12: false })} 发送`)
+        this.#arm(reminder)
+        return
+      }
       this.store.items = this.store.items.filter((item) => item.id !== reminder.id)
       writeReminders(this.stateRoot, this.store, this.warn)
       // The send must never throw into the timer callback: a transport hiccup

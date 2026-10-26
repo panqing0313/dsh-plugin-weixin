@@ -21,6 +21,7 @@ import z from '@deepseek-ai/schemastery'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
+import { quietDelay } from './message/quiet-hours.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -134,6 +135,9 @@ export const Config = z.object({
   ),
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
+  quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
+  quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
+  quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
   ),
@@ -374,9 +378,15 @@ export function apply(ctx, config) {
         asrSettings === undefined ? undefined : new AsrBridge(asrSettings, { log: (line) => log(line), warn: (line) => warn(line) })
       if (asrBridge !== undefined) log(`voice transcription enabled via ${asrSettings.command}`)
 
+      // 免打扰时段: the gate reads the LIVE config at fire time (the card can
+      // flip the window mid-flight), reusing withSavedConfig so the saved
+      // settings outrank the composition exactly like everywhere else.
+      const quietGate = (now) => quietDelay(now, withSavedConfig(config))
+
       reminderScheduler = new ReminderScheduler({
         stateRoot,
         warn,
+        quiet: quietGate,
         fire: async (reminder) => {
           const transport = transports.get(reminder.accountId)
           if (transport === undefined) {
@@ -404,6 +414,7 @@ export function apply(ctx, config) {
       subscriptionScheduler = new SubscriptionScheduler({
         stateRoot,
         warn,
+        quiet: quietGate,
         fire: async (item) => {
           const transport = transports.get(item.accountId)
           if (transport === undefined) {

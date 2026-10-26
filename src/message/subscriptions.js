@@ -127,12 +127,16 @@ export class SubscriptionScheduler {
      * @param {(ms: number, callback: () => void) => unknown} [options.setTimeoutRef] injectable for tests
      * @param {(timer: unknown) => void} [options.clearTimeoutRef] injectable for tests
      */
-    constructor({ stateRoot, fire, warn = () => {}, setTimeoutRef = ((ms, cb) => setTimeout(cb, ms)), clearTimeoutRef = ((t) => clearTimeout(t)) }) {
+    constructor({ stateRoot, fire, warn = () => {}, setTimeoutRef = ((ms, cb) => setTimeout(cb, ms)), clearTimeoutRef = ((t) => clearTimeout(t)), quiet = null }) {
         this.stateRoot = stateRoot
         this.fire = fire
         this.warn = warn
         this.setTimeoutRef = setTimeoutRef
         this.clearTimeoutRef = clearTimeoutRef
+        // Optional quiet-hours gate: (nowMs) => ms until the window ends, 0
+        // when the moment is not quiet. A slot landing inside the window is
+        // re-armed for the window's end instead of being consumed.
+        this.quiet = quiet
         this.store = readSubscriptions(stateRoot, warn)
         this.timers = new Map()
         this.stopped = false
@@ -194,6 +198,17 @@ export class SubscriptionScheduler {
         const snapshot = { ...item }
         const current = this.store.items.find((entry) => entry.id === item.id)
         if (current === undefined) return
+        const quietMs = this.quiet === null ? 0 : this.quiet(Date.now())
+        if (quietMs > 0) {
+            // 免打扰时段: do not consume the slot — push fireAt to the window's
+            // end and re-arm; the normal consume+fire happens then. The item
+            // stays in the store, so a restart during the window re-arms it.
+            current.fireAt = Date.now() + quietMs
+            writeSubscriptions(this.stateRoot, this.store, this.warn)
+            this.#arm(current)
+            this.warn(`免打扰时段，订阅 ${item.id} 推迟到 ${formatStamp(current.fireAt)} 发送`)
+            return
+        }
         if (current.kind === 'once') this.#remove(current.id)
         else this.#advance(current, Date.now())
         current.lastFiredAt = Date.now()

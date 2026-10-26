@@ -337,7 +337,40 @@ export const FIELDS = [
       ],
     },
     {
-      group: "媒体",
+      group: "静音时段",
+    groupEn: "Quiet hours",
+    fields: [
+      {
+        path: "quietHoursEnabled",
+        type: T.boolean,
+        default: false,
+        label: "启用免打扰时段",
+        labelEn: "Enable quiet hours",
+        hint: "开启后，落在时段内的定时发送（/remind 提醒与 /subscribe 订阅）推迟到时段结束发出；回复消息不受影响。",
+        hintEn: "Timed sends (reminders, subscriptions) landing inside the window are pushed to its end; replies are never gated.",
+      },
+      {
+        path: "quietHoursStart",
+        type: T.string,
+        default: "23:00",
+        label: "免打扰开始",
+        labelEn: "Quiet from",
+        hint: "HH:mm（24 小时制）。",
+        hintEn: "HH:mm (24-hour clock).",
+      },
+      {
+        path: "quietHoursEnd",
+        type: T.string,
+        default: "07:00",
+        label: "免打扰结束",
+        labelEn: "Quiet until",
+        hint: "HH:mm；与开始时间相同视为未配置。",
+        hintEn: "HH:mm; equal to the start means not configured.",
+      },
+    ],
+  },
+  {
+    group: "媒体",
     groupEn: "Media",
     fields: [
       {
