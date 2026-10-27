@@ -4,9 +4,9 @@
 
 ## 当前状态（2026-10-26）
 
-- **版本**：`0.9.7`，2026-10-26 已发布（npm `latest`、tag `v0.9.7`、GitHub release 三者齐全；注册表 `dist.shasum` `d9c57ddf…` / `dist.integrity` `sha512-xQMIszgs…`、`gitHead` `c3fb808` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
+- **版本**：`0.9.8`，2026-10-27 已发布（npm `latest`、tag `v0.9.8`、GitHub release 三者齐全；注册表 `dist.shasum` `dbb8b5b8…` / `dist.integrity` `sha512-6EQnqzkp…`、`gitHead` `866a96b` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
 - **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
-- **测试**：`npm test` → `tests 559 / pass 559 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；待随 0.9.8 发版。
+- **测试**：`npm test` → `tests 560 / pass 560 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；**0.9.8 已发布**（发布记录见文末）。本轮再涨 1 条：发版脚本输出写入的回归（`writeOut` 吞掉 pty 消失的 EIO）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -2614,3 +2614,16 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - `test/login-remote.test.js` 18 条（新增：档案保存、事件增删改、小传只读、参数校验）。
 - `test/client-remote.test.js` 17 条（新增 4 个描述符，排序数组按字母插好）；e2e 的 summarizer 用例更新断言（fake 回声里含 JSON 模板，摘要取自模板样例）。
 - 全量 `npm test` → **559/559**（~47s）。
+
+## 发布 0.9.8（2026-10-27）
+
+- **发布**：`yes '' | script -q /dev/null node bin/release.mjs 0.9.8 --yes`。publish 成功（`+ dsh-plugin-weixin@0.9.8`），第 7 步 tag/push/GitHub release 全绿：`v0.9.8`、https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.8 。
+- **核验**（注册表滞后，publish 后轮询约 1 分钟才变）：`npm view version` → `0.9.8`、`dist-tags.latest = 0.9.8`、`dist.shasum dbb8b5b849780f5dc5c2d5a13a969ed3ae77b332`（= 本地 `dsh-plugin-weixin-0.9.8.tgz` 的 `shasum -a 1`）、`dist.integrity sha512-6EQnqzkpwMJUSMSMOzeModPo56yucno9Cn5WPdJRvaZU/fysp1Q2IxJ3nS8PgZwib+wCWsv3Op7Sui1GzSgesw==`、`gitHead 866a96b`（= `chore(release): 0.9.8`）。
+- **profile 钉版**：第 8/9 步又没跑（见下），手工把 `~/.dsh/profiles/desktop/package.json` 的 `^0.9.7` 改成 `^0.9.8`，用 App 自带 pnpm `install --prefer-offline` 刷锁（5.5s，`0.9.7 → 0.9.8`，锁文件两处 `dsh-plugin-weixin@0.9.8`）。核验安装副本：`0.9.8`、`PLUGIN_VERSION = "0.9.8"`、36 张 PNG、`proactive.js`/`stickers.js` 在、`memoryProfileSave` 2 处。
+
+### 坑与教训：发版脚本在 pty 消失后会「静默截断」
+
+- 现象：0.9.7 与 0.9.8 两次都是第 7 步（tag + release + push）成功之后，`[8] Wait for the registry` 的等待点再也没有输出，进程正常退出、`verifyPublished` 与 `installLocally`（第 9 步钉 profile）都没跑。
+- 根因：`npm publish` 只在真 pty 上打印 2FA 链接，所以发版要跑在 `script -q /dev/null` 里；**这个 wrapper 会在某个时刻关掉 pty**，之后任何 `process.stdout.write` 抛 `EIO` 就把整个脚本带走。上一轮只给 `say()` 加了 try/catch，而 `step/ok/note/warn/die` 与结尾的输出仍是裸写。
+- 修法（`45bb421` 之后、本轮再补）：新增 `export function writeOut(text)`，所有输出（`step/ok/note/warn/die/say`、头部与结尾）统一走它；pty 没了只是少几行日志，发布流程继续跑完第 8/9 步。`test/release-lockfile.test.js` 加了一条回归：把 `process.stdout.write` 换成抛 `EIO` 的函数，`writeOut` 必须不抛。
+- 教训：**发版脚本里「不可恢复的动作」之前的每一步都要按顺序做完、并把顺序写死**；把 tag 提到 publish 之后（0.9.7 的修法）只解决「发布了但没打 tag」，没解决「tag 了但没钉 profile」——输出层不致命才是根治。

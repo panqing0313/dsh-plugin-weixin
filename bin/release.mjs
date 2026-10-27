@@ -61,18 +61,37 @@ const C = process.stdout.isTTY
 	: { dim: '', red: '', green: '', yellow: '', bold: '', off: '' }
 
 let stepNumber = 0
+/**
+ * Every line this script prints goes through here.
+ *
+ * `npm publish` only prints its one-time-password URL when stdout is a pty
+ * wrapper (`script -q /dev/null`). When that wrapper exits — it can, minutes
+ * before the release ends — the next `process.stdout.write` throws EIO and
+ * takes the rest of the script with it. That is how 0.9.7 and 0.9.8 were
+ * published with their tag pushed but the profile left un-pinned: steps 8 and
+ * 9 never ran. Output is worth nothing once the terminal is gone, so it is
+ * best-effort and the release carries on.
+ */
+export function writeOut(text) {
+	try {
+		process.stdout.write(text)
+	} catch {
+		// the terminal is gone; the release itself does not depend on it
+	}
+}
+
 function step(title) {
 	stepNumber += 1
-	process.stdout.write(`\n${C.bold}[${stepNumber}] ${title}${C.off}\n`)
+	writeOut(`\n${C.bold}[${stepNumber}] ${title}${C.off}\n`)
 }
 function ok(message) {
-	process.stdout.write(`    ${C.green}✓${C.off} ${message}\n`)
+	writeOut(`    ${C.green}✓${C.off} ${message}\n`)
 }
 function note(message) {
-	process.stdout.write(`    ${C.dim}${message}${C.off}\n`)
+	writeOut(`    ${C.dim}${message}${C.off}\n`)
 }
 function warn(message) {
-	process.stdout.write(`    ${C.yellow}!${C.off} ${message}\n`)
+	writeOut(`    ${C.yellow}!${C.off} ${message}\n`)
 }
 
 /** Cleanup registered by the dry run, so a failure still restores the tree. */
@@ -87,8 +106,8 @@ let cleanup = () => {}
  */
 function die(message, hint) {
 	cleanup()
-	process.stdout.write(`\n${C.red}✗ ${message}${C.off}\n`)
-	if (hint) process.stdout.write(`  ${hint}\n`)
+	writeOut(`\n${C.red}✗ ${message}${C.off}\n`)
+	if (hint) writeOut(`  ${hint}\n`)
 	const error = new Error(message)
 	error.reported = true
 	throw error
@@ -525,11 +544,7 @@ function commitRelease(previousVersion) {
  * on is best-effort.
  */
 function say(text) {
-	try {
-		process.stdout.write(text)
-	} catch {
-		// the terminal is gone; the release itself does not depend on it
-	}
+	writeOut(text)
 }
 
 /**
@@ -754,8 +769,8 @@ function confirm(previousVersion) {
 }
 
 function main() {
-	process.stdout.write(`${C.bold}dsh-plugin-weixin release ${version ?? '<no version>'}${C.off}\n`)
-	if (dryRun) process.stdout.write(`${C.yellow}dry run: nothing will be committed, tagged or published${C.off}\n`)
+	writeOut(`${C.bold}dsh-plugin-weixin release ${version ?? '<no version>'}${C.off}\n`)
+	if (dryRun) writeOut(`${C.yellow}dry run: nothing will be committed, tagged or published${C.off}\n`)
 
 	preflight()
 
@@ -791,7 +806,7 @@ function main() {
 			undo()
 			cleanup = () => {}
 		}
-		process.stdout.write(`\n${C.green}${C.bold}Dry run for ${PKG_NAME}@${version} finished — tree unchanged.${C.off}\n`)
+		writeOut(`\n${C.green}${C.bold}Dry run for ${PKG_NAME}@${version} finished — tree unchanged.${C.off}\n`)
 		return
 	}
 
@@ -808,13 +823,13 @@ function main() {
 	}
 	installLocally()
 
-	process.stdout.write(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
-	process.stdout.write(`npm:      https://www.npmjs.com/package/${PKG_NAME}/v/${version}\n`)
+	writeOut(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
+	writeOut(`npm:      https://www.npmjs.com/package/${PKG_NAME}/v/${version}\n`)
 	const repo = git(['remote', 'get-url', 'origin'])
 		.replace(/^git@github\.com:/, '')
 		.replace(/^https:\/\/github\.com\//, '')
 		.replace(/\.git$/, '')
-	process.stdout.write(`release:  https://github.com/${repo}/releases/tag/v${version}\n`)
+	writeOut(`release:  https://github.com/${repo}/releases/tag/v${version}\n`)
 }
 
 /**

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { manifestVersionProblems, pinProfileSpec, VERSION_FILES, snapshotTextFiles } from '../bin/release.mjs'
+import { manifestVersionProblems, pinProfileSpec, VERSION_FILES, snapshotTextFiles, writeOut } from '../bin/release.mjs'
 
 /**
  * The release script's preflight guard, exercised on fixture manifests.
@@ -134,4 +134,28 @@ test('pinning does nothing when there is nothing to pin', () => {
   assert.equal(pinProfileSpec(withSpec('file:/tmp/dsh-plugin-weixin-0.8.0.tgz'), '0.9.6'), null)
   assert.equal(pinProfileSpec(JSON.stringify({ dependencies: {} }), '0.9.6'), null)
   assert.equal(pinProfileSpec('not json at all', '0.9.6'), null)
+})
+
+/**
+ * The terminal can die before the release does.
+ *
+ * `npm publish` only prints its 2FA URL on a pty, so the release is usually
+ * driven through `script -q /dev/null`. When that wrapper exits, the next
+ * stdout write throws EIO and used to take the script down with it — 0.9.7 and
+ * 0.9.8 both got published, tagged and released while steps 8 and 9 (verify,
+ * pin the profile dependency) never ran. Every printed line goes through
+ * writeOut, which must swallow exactly that failure.
+ */
+test('printing survives a terminal that closed mid-release', () => {
+	const original = process.stdout.write
+	process.stdout.write = () => {
+		const error = new Error('write EIO: i/o error')
+		error.code = 'EIO'
+		throw error
+	}
+	try {
+		assert.doesNotThrow(() => writeOut('still here\n'))
+	} finally {
+		process.stdout.write = original
+	}
 })
