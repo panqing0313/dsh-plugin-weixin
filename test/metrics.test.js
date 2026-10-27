@@ -68,3 +68,40 @@ test('empty names are ignored rather than creating a phantom counter', () => {
   metrics.gauge('', 1)
   assert.deepEqual(metrics.snapshot().counters, {})
 })
+
+test('the Prometheus text exposition splits labels and keeps one sample per key', async () => {
+  const { prometheusText } = await import('../src/metrics.js')
+  const registry = createMetrics()
+  registry.inc('inbound.accepted')
+  registry.inc('inbound.refused', 2)
+  registry.inc('group.ignored', 3, 'not-addressed')
+  registry.gauge('outbox.pending', 4)
+
+  const text = prometheusText(registry.snapshot(), { prefix: 'wx' })
+  assert.match(text, /^# TYPE wx_events counter$/m)
+  assert.match(text, /^wx_inbound_accepted 1$/m)
+  assert.match(text, /^wx_inbound_refused 2$/m)
+  // A labelled key becomes one sample with the label, never a twin without it —
+  // two shapes under one name makes Prometheus reject the whole family.
+  assert.match(text, /^wx_group_ignored\{label="not-addressed"\} 3$/m)
+  assert.equal((text.match(/wx_group_ignored/g) ?? []).length, 1)
+  assert.match(text, /^wx_outbox_pending 4$/m)
+  assert.match(text, /^wx_uptime_seconds [\d.]+$/m)
+})
+
+test('the snapshot writer leaves two parseable files and never a temp file', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { writeMetricsSnapshot } = await import('../src/metrics.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-metrics-'))
+  const registry = createMetrics()
+  registry.inc('outbound.settled', 7)
+  const result = await writeMetricsSnapshot(dir, registry.snapshot())
+  assert.deepEqual(result, { json: true, prom: true })
+  const json = JSON.parse(fs.readFileSync(path.join(dir, 'metrics.json'), 'utf8'))
+  assert.equal(json.counters['outbound.settled'], 7)
+  assert.ok(typeof json.writtenAt === 'number')
+  assert.match(fs.readFileSync(path.join(dir, 'metrics.prom'), 'utf8'), /dsh_weixin_outbound_settled 7/)
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['metrics.json', 'metrics.prom'])
+})

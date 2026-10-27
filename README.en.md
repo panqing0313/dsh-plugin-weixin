@@ -102,6 +102,15 @@ Currently published version: [`dsh-plugin-weixin@0.9.9`](https://www.npmjs.com/p
 - **0.2.0** — queueing / interjecting while busy, resend on timeout, source blocks, the settings card enters the host Settings.
 - **0.1.0 / 0.1.1** — first release: QR polling, the inbound loop started automatically after login, allowlist merging, automatic recovery of archived sessions.
 
+### With `npx` (no clone needed)
+
+```bash
+npx dsh-plugin-weixin            # installs into the default profile
+npx dsh-plugin-weixin --profile desktop
+```
+
+The package's `bin` points at the same `bin/install.mjs`, so `npx` and a source checkout take the same path.
+
 ### Option 2: install from source
 
 ```bash
@@ -548,6 +557,19 @@ Two messages that arrive without you asking:
 Both go to the conversation spoken in most recently, both send exactly one message (not three bubbles), and a failure leaves one log line and nothing else. The times use the `/subscribe` vocabulary (`每天 21:00`, `每周五 18:30`); an unparseable spec means no report that day, with a line in the log. Turn them off with `digestEnabled: false` / `memoryReviewEnabled: false`.
 
 `test/reports.test.js` pins the clock (only two seconds of slack, only what is due fires, a throw does not stop the next round) and the two prompts' hard constraints.
+
+### Metrics and soak (metricsExport · npm run metrics · npm run soak)
+
+Every 30 seconds the plugin writes its in-memory counters to two files: `<state dir>/metrics.json` (readable by the card and by a human) and `metrics.prom` (Prometheus text format). Reading them does not require the plugin to be running:
+
+```bash
+npm run metrics                 # Prometheus text, with dsh_weixin_snapshot_age_seconds appended
+npm run metrics -- --format json
+```
+
+Counters are **process-lifetime**, so a restart resets them — deliberately: a counter that accumulates for weeks hides questions like "what got slow this afternoon". The trailing `snapshot_age_seconds` lets a scraper tell "alive but idle" from "not running at all".
+
+`npm run soak` is the long-run check. It does not drive a model (that needs a real host and a real account, so it cannot run in CI); instead it pushes the parts that accumulate damage over days — the journal, outbox retries, memory files, retention sweeps, backup and restore — far above real traffic, and asserts invariants: nothing lost, `outbox.json` always parseable, retention never touches files it did not create, the end-of-run backup verifies and restores, RSS does not triple. Any broken invariant exits non-zero.
 
 ### Backups and restore (backupEnabled)
 

@@ -102,6 +102,15 @@ dsh-plugin-weixin
 - **0.2.0** —— 忙时排队/插话、超时补发、来源块、设置卡进入宿主 Settings。
 - **0.1.0 / 0.1.1** —— 首发：扫码轮询、登录后自动起入站循环、白名单合并、归档会话自动恢复。
 
+### 方式三：`npx`（不需要先 clone）
+
+```bash
+npx dsh-plugin-weixin            # 装进默认 profile
+npx dsh-plugin-weixin --profile desktop
+```
+
+包里的 `bin` 指向同一个 `bin/install.mjs`，所以 `npx` 和从源码跑是同一条路径。
+
 ### 方式二：从源码安装
 
 ```bash
@@ -539,6 +548,19 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 发送目标是「最近说过话的那个会话」；两边都只发一条消息（不是三条气泡），失败只在日志里留一行。时间用 `/subscribe` 那套写法：`每天 21:00`、`每周五 18:30`，写错就在当天不发并在日志里说明。想关掉：`digestEnabled: false` / `memoryReviewEnabled: false`。
 
 `test/reports.test.js` 守着调度（只提前两秒算「到点」、一次只触发该触发的、抛错不影响下一轮）与两个提示词的关键约束。
+
+### 指标与长稳（metricsExport · npm run metrics · npm run soak）
+
+插件每 30 秒把内存里的计数器写成两份文件：`<状态目录>/metrics.json`（卡片和人都能读）和 `metrics.prom`（Prometheus 文本格式）。读它们不需要插件在跑：
+
+```bash
+npm run metrics                 # Prometheus 文本，带 dsh_weixin_snapshot_age_seconds
+npm run metrics -- --format json
+```
+
+计数是**进程生命周期**的，重启归零 —— 这是刻意的：一个长期累积的计数器会掩盖「今天下午开始变慢」这类问题。文件末尾的 `snapshot_age_seconds` 让抓取端分得清「活着但没流量」和「根本没在跑」。
+
+长稳用 `npm run soak`：它不驱动模型（那需要真宿主和真账号，CI 里跑不了），而是把会随日子累积损坏的部分压到远高于真实流量的速率 —— 消息流水、出站队列重试、记忆文件、保留策略、备份恢复 —— 并断言不变量：没丢消息、`outbox.json` 始终可解析、保留策略不碰非它创建的文件、跑完备份能校验且能恢复、RSS 不涨过三倍。任何一条破了就以非零退出。
 
 ### 备份与恢复（backupEnabled）
 

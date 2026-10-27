@@ -30,7 +30,7 @@ import { createOutbox } from './message/outbox.js'
 import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outbound.js'
 import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
-import { createMetrics } from './metrics.js'
+import { createMetrics, writeMetricsSnapshot } from './metrics.js'
 import { ensureSecretModes, redactSecrets } from './credentials.js'
 import { neutralizeTags } from './message/fence.js'
 import { readScope, scopedConfig } from './config-scope.js'
@@ -54,6 +54,7 @@ let journalOutboundRef = null
 let hooks
 /** Counters the settings card reads (src/metrics.js); process lifetime only. */
 let metrics
+let metricsTimer
 let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
@@ -230,6 +231,7 @@ export const Config = z.object({
   retentionMediaDays: z.number().min(0).default(30).description('收到的图片/文件/语音保留天数；0 表示不清理。'),
   retentionExportsDays: z.number().min(0).default(60).description('/export 导出的 Markdown 保留天数；0 表示不清理。'),
   retentionLogsDays: z.number().min(0).default(30).description('vendor 每日日志保留天数；0 表示不清理。'),
+  metricsExport: z.boolean().default(true).description('每 30 秒把指标写到状态目录的 metrics.json / metrics.prom，方便外部抓取（npm run metrics 读取）。'),
   backupEnabled: z.boolean().default(true).description('每天自动备份一次状态目录（记忆、人设、订阅、流水、账号）；备份在 <状态目录>/backups，含账号 token，别外传。'),
   backupKeep: z.number().min(1).max(60).default(DEFAULT_KEEP).description('保留最近几份自动备份；更旧的会被删掉。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
@@ -586,6 +588,17 @@ export function apply(ctx, config) {
         loginController.outboxFlush = (options) => outbox.flush(options)
         loginController.outboxDropItem = (id) => outbox.drop(id)
       }
+      // The registry lives in memory; this timer is the only thing that makes it
+      // readable from outside the process. 30s matches what a local scraper
+      // expects, and the two files are tiny. `npm run metrics` is the read side.
+      metricsTimer = setInterval(() => {
+        if (withSavedConfig(config).metricsExport === false) return
+        void writeMetricsSnapshot(stateRoot, {
+          ...metrics.snapshot(),
+          gauges: { ...metrics.snapshot().gauges, 'outbox.pending': typeof outbox?.pending === 'function' ? outbox.pending().length : 0 },
+        }).catch((error) => errLog(`metrics snapshot failed: ${String(error?.message ?? error)}`))
+      }, 30_000)
+      metricsTimer.unref?.()
 
       const lock = acquireInstanceLock(stateRoot, { warn })
       if (lock.acquired === false) {
@@ -1144,6 +1157,7 @@ export function apply(ctx, config) {
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()
+      if (metricsTimer !== undefined) clearInterval(metricsTimer)
       if (lockHeartbeat !== undefined) clearInterval(lockHeartbeat)
       releaseInstanceLock(stateRoot)
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {

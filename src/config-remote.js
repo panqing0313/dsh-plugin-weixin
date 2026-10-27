@@ -647,6 +647,13 @@ export const FIELDS = [
       ],
     },
     {
+      group: "指标",
+      groupEn: "Metrics",
+      fields: [
+        { path: "metricsExport", type: T.boolean, default: true, label: "写出指标文件", labelEn: "Write metrics files", hint: "每 30 秒写 metrics.json / metrics.prom；npm run metrics 读它，重启后计数归零", hintEn: "Counters reset on restart; read them with npm run metrics" },
+      ],
+    },
+    {
       group: "备份",
       groupEn: "Backups",
       fields: [
