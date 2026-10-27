@@ -250,6 +250,8 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `quietHoursStart` | `'23:00'` | 免打扰开始（本地时间 `HH:mm`）。必须严格早于结束（或跨午夜），两端相等视为未配置 |
 | `quietHoursEnd` | `'07:00'` | 免打扰结束（本地时间 `HH:mm`）。跨午夜时段（如 23:00 → 07:00）按两段计算 |
 | `groupChatEnabled` | `false` | 参加群聊。默认关闭：对每条群消息都答的机器人，在真群里就是刷屏；私聊不受影响 |
+| `richContent` | `true` | 富内容：长代码块改发文件（缩进/语言/行数都在）、Markdown 表格转成对齐文本 |
+| `codeFileThreshold` | `1200` | 代码块超过多少字改发文件；更短的留在气泡里 |
 | `groupReplyWhen` | `'mention'` | 群里什么时候回：`mention` 只答被叫到的时候，`all` 每条都答 |
 | `groupShareMemory` | `false` | 群里是否也注入长期记忆、回忆片段与亲密度行。默认关闭——那些块是主人自己的私事 |
 | `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
@@ -629,6 +631,16 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 
 `test/proactive.test.js` 把每个闸门（时段、间隔、退避、每日上限、骰子）都单独钉住；
 e2e 的 `proactive` 用例在没有 inbound 消息的情况下验证它真的会自己发一条，并且只发一条。
+
+### 富内容（richContent · codeFileThreshold）
+
+微信气泡里只有纯文本，所以「支持 Markdown」没有意义，有意义的是**别再丢失 Markdown 承载的东西**：
+
+- **长代码块**（默认超过 1200 字）连同缩进、语言、行数一起写成文件（`snippets/`，如 `snippet-1.py`），作为附件发出；气泡里留一行「（代码 60 行、1800 字，已作为文件 snippet-1.py 发出）」。短代码块留在气泡里——两行示例作为附件反而更难读。
+- **Markdown 表格**变成按列对齐的文本（CJK 按两格宽算），比 `| a | b |` 好扫得多。
+- 流式写到一半、围栏还没闭合的代码块按正文处理，不会吞掉已经写出来的字。
+
+关掉 `richContent` 就回到旧行为：全部压平成一条文本。
 
 ### 群聊（groupChatEnabled · groupReplyWhen · groupShareMemory）
 

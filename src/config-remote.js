@@ -580,6 +580,14 @@ export const FIELDS = [
       ],
     },
     {
+      group: "富内容",
+      groupEn: "Rich replies",
+      fields: [
+        { path: "richContent", type: T.boolean, default: true, label: "富内容", labelEn: "Rich replies", hint: "长代码块改发文件（缩进、语言、行数都在），Markdown 表格转成对齐文本；关掉则一切按纯文本压平", hintEn: "Long code blocks ship as files and tables become aligned text" },
+        { path: "codeFileThreshold", type: T.number, default: 1200, min: 200, max: 20000, step: 100, unit: "字", unitEn: "chars", label: "代码块改发文件的阈值", labelEn: "Code block file threshold", hint: "更短的代码块留在气泡里", hintEn: "Shorter blocks stay in the bubble" },
+      ],
+    },
+    {
       group: "群聊",
       groupEn: "Group chats",
       fields: [

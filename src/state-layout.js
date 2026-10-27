@@ -39,6 +39,7 @@ export const STATE_LAYOUT = Object.freeze({
   auditDir: { kind: 'dir', relative: 'audit', label: '工具审计' },
   mediaInboundDir: { kind: 'dir', relative: 'media/inbound', label: '收到的媒体' },
   exportsDir: { kind: 'dir', relative: 'exports', label: '聊天导出' },
+  snippetsDir: { kind: 'dir', relative: 'snippets', label: '代码片段' },
   logsDir: { kind: 'dir', relative: 'logs', label: '运行日志' },
 });
 

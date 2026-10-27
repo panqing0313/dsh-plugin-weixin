@@ -2671,4 +2671,8 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 **14 群聊**（`src/message/groups.js`）：`isGroupMessage`（会话 ≠ 发送者）、`mentionsBot`（首行 + 名字，正则转义）、`groupReplyPolicy`（默认关 → 只答被叫到的）、`groupSharesMemory`（群默认不注入私事记忆）；入站处理器在限流之前拦下并记 `group.ignored` 指标；schema/表单加 `groupChatEnabled`/`groupReplyWhen`/`groupShareMemory`。测试：groups 单测 4 条 + 会话命令 3 段真实插件用例（默认不回 / 开启了也不乱回 / 被叫到才回）。**坑**：这套 zod 没有 `z.enum`，`z.enum(...)` 会让插件在 import 时直接抛 `TypeError`，测试表现为一直等到超时。
 
+**17 富内容**（`src/message/rich-content.js`）：`splitFences`（未闭合围栏按正文，流式中途不丢字）、`planRichContent`（≥`codeFileThreshold` 的代码块写成文件 + 气泡里留一行说明，短块留在气泡里）、`renderTables`/`tableToText`（CJK 按两格宽对齐）、`writeSnippets`（`snippets/`，时间戳前缀，失败只丢那一个文件）；`src/outbound.js` 的 `sendChunked` 在压平之前先过一遍，文字发完再发附件；状态布局加 `snippetsDir`。测试：rich-content 8 条 + rich-send 3 条（真发一条 + 一个附件、短块不加附件、关掉开关回旧行为）。**坑**：`configureOutbound` 里的 `snippetsDir` 必须从 `statePaths(stateRoot).snippetsDir.absolute` 取，第一版忘了 import `statePaths`，`node --check` 照样过（只查语法），要到运行时才炸。
+
+**17 富内容**（`src/message/rich-content.js`）：`splitFences`（未闭合围栏按正文，流式中途不丢字）、`planRichContent`（≥`codeFileThreshold` 的代码块写成文件 + 气泡里留一行说明，短块留在气泡里）、`renderTables`/`tableToText`（CJK 按两格宽对齐）、`writeSnippets`（`snippets/`，时间戳前缀，失败只丢那一个文件）；`src/outbound.js` 的 `sendChunked` 在压平之前先过一遍，文字发完再发附件；状态布局加 `snippetsDir`。测试：rich-content 8 条 + rich-send 3 条（真发一条 + 一个附件、短块不加附件、关掉开关回旧行为）。**坑**：`configureOutbound` 里的 `snippetsDir` 必须从 `statePaths(stateRoot).snippetsDir.absolute` 取，第一版忘了 import `statePaths`，`node --check` 照样过（只查语法），要到运行时才炸。
+
 未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。

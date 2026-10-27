@@ -9,6 +9,7 @@ import { channelFor } from './channel.js'
 import { HOOK_POINTS } from './hooks.js'
 import { chunkText } from './message/chunker.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
+import { planRichContent, writeSnippets } from './message/rich-content.js'
 import { listProducedFiles } from './media/outbound.js'
 
 /** Wired in setup; every field defaults so a test can exercise one sender. */
@@ -16,6 +17,8 @@ const runtime = {
   journal: null,
   outbox: undefined,
   hooks: undefined,
+  // Where long code blocks are written before they are sent as attachments.
+  snippetsDir: '',
   warn: () => {},
 }
 
@@ -24,6 +27,7 @@ export function configureOutbound(deps = {}) {
   if ('journal' in deps) runtime.journal = deps.journal
   if ('outbox' in deps) runtime.outbox = deps.outbox
   if ('hooks' in deps) runtime.hooks = deps.hooks
+  if ('snippetsDir' in deps) runtime.snippetsDir = deps.snippetsDir
   if (typeof deps.warn === 'function') runtime.warn = deps.warn
 }
 
@@ -92,13 +96,21 @@ export async function sendProducedFiles(params) {
  * would both ship markdown markers and risk an over-length message.
  *
  * @param {ILinkTransport} transport
- * @param {{ maxMessageLength: number, markdownMode?: 'strip'|'off' }} config
+ * @param {{ maxMessageLength: number, markdownMode?: 'strip'|'off', richContent?: boolean, codeFileThreshold?: number }} config
  * @param {{ conversationId: string, text: string, contextToken?: string }} message
  */
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function sendChunked(transport, config, message) {
-  const text = markdownToPlainText(message.text ?? '', resolveMarkdownMode(config))
+  // Rich replies (C17). Weixin has one body kind — plain text — so the useful
+  // move is not to "support Markdown" but to stop losing what Markdown carried:
+  // a long code block becomes a real file attachment (indentation, language and
+  // line count intact) and a table becomes column-aligned text. Short snippets
+  // stay inline; a two-line example reads better in the bubble.
+  const plan = config.richContent === false
+    ? { text: message.text ?? '', files: [] }
+    : planRichContent(message.text ?? '', { codeFileChars: config.codeFileThreshold })
+  const text = markdownToPlainText(plan.text, resolveMarkdownMode(config))
   runtime.journal?.({
     accountId: transport.accountId,
     conversationId: message.conversationId,
@@ -137,6 +149,37 @@ export async function sendChunked(transport, config, message) {
         return
       }
       throw error
+    }
+  }
+  if (plan.files.length > 0) await sendSnippets(transport, message, plan.files)
+}
+
+/**
+ * Attach the snippet files a rich reply planned.
+ *
+ * A file that cannot be written or sent costs one log line: the note in the
+ * text already told the reader a file was sent, but losing the whole reply over
+ * a pretty-printed code block would be worse.
+ */
+async function sendSnippets(transport, message, files) {
+  const dir = runtime.snippetsDir
+  if (dir === '') {
+    runtime.warn('rich reply produced snippet files but no snippet directory is configured; sending them inline is not possible at this point')
+    return
+  }
+  const { written } = writeSnippets(files, dir, { warn: runtime.warn })
+  const channel = channelFor(transport)
+  if (channel === undefined || channel.capabilities?.media !== true) return
+  for (const file of written) {
+    try {
+      await channel.sendMedia({
+        conversationId: message.conversationId,
+        filePath: file.path,
+        text: '',
+        contextToken: message.contextToken,
+      })
+    } catch (error) {
+      runtime.warn(`snippet ${file.name} could not be sent: ${String(error?.message ?? error)}`)
     }
   }
 }

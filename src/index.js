@@ -97,6 +97,7 @@ import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './mes
 import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
+import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler } from './message/proactive.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
@@ -196,6 +197,8 @@ export const Config = z.object({
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupShareMemory: z.boolean().default(false).description('把长期记忆、回忆片段和亲密度行也注入群回复。默认关闭：那些块里是主人自己的私事。'),
+  richContent: z.boolean().default(true).description('富内容：长代码块作为文件附件发出、Markdown 表格转成对齐文本。微信只有纯文本气泡，这两处是 Markdown 里最容易在纯文本里变形的东西。'),
+  codeFileThreshold: z.number().min(200).max(20000).default(1200).description('代码块超过多少字就改成发文件；更短的留在气泡里（两行代码读起来比附件顺）。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -580,7 +583,7 @@ export function apply(ctx, config) {
       }
       // Hand the send path its collaborators once, after both exist: the
       // journal sink above (null when journalling is off) and the outbox.
-      configureOutbound({ journal: journalOutboundRef, outbox, hooks, warn })
+      configureOutbound({ journal: journalOutboundRef, outbox, hooks, warn, snippetsDir: statePaths(stateRoot).snippetsDir.absolute })
 
       // Scheduled proactive messages (/subscribe): the bot speaks first
       // through its own side session. The prompt re-uses the exact injection
