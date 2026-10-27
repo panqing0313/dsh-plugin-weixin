@@ -405,18 +405,23 @@ function bumpVersion(previousVersion) {
 		ok(`README version line ${seen[1]} → ${version}`)
 	}
 
-	// The release list must gain a bullet, or the newest version silently has
+	// The release list lives in CHANGELOG.md (the README names features, not
+	// versions), and it must gain a bullet, or the newest version silently has
 	// no description of what it contains. New bullets go on top.
-	const firstBullet = readme.indexOf('\n- **')
-	if (firstBullet === -1) {
-		warn('README has no release list — add a bullet by hand')
-	} else if (readme.includes(`\n- **${version}**`)) {
-		ok('README release list already covers this version')
+	const changelogPath = path.join(ROOT, 'CHANGELOG.md')
+	const changelog = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8') : ''
+	const firstBullet = changelog.indexOf('\n- **')
+	if (changelog === '') {
+		warn('CHANGELOG.md is missing — add it, or the newest version will have no notes')
+	} else if (firstBullet === -1) {
+		warn('CHANGELOG.md has no release list — add a bullet by hand')
+	} else if (changelog.includes(`\n- **${version}**`)) {
+		ok('CHANGELOG.md already covers this version')
 	} else {
 		const at = firstBullet + 1
 		const bullet = `- **${version}** —— TODO: describe what changed in this release.\n`
-		fs.writeFileSync(readmePath, readme.slice(0, at) + bullet + readme.slice(at))
-		ok(`README release list gained a ${version} bullet at the top`)
+		fs.writeFileSync(changelogPath, changelog.slice(0, at) + bullet + changelog.slice(at))
+		ok(`CHANGELOG.md gained a ${version} bullet at the top`)
 		warn('replace the TODO text with what this release actually contains, then re-run')
 	}
 }

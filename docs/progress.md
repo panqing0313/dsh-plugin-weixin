@@ -2707,3 +2707,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **profile**：脚本第 10 步自己钉好了 —— `~/.dsh/profiles/desktop/package.json` `^0.9.8 → ^0.9.9`、锁文件刷新、装好的副本 `0.9.9` + `PLUGIN_VERSION = "0.9.9"` + `src/client.card.js` 在位；「重启后不会被回滚」这条这次是真的应验了。
 - **这次一次跑通**：`writeOut` 吞 EIO 的修复（`bce45d0`）让第 7–10 步在 pty 关闭后照样跑完 —— 0.9.7/0.9.8 那两次「tag 打了、后面全没跑」的手工收尾这次没有出现。`provenance: none` 那一行仍在，属于本机发布的既定事实（要 provenance 得推 tag 让 CI 发）。
 - **发布前的小插曲**：`npm whoami` 报 `E401`（`~/.npmrc` 里那个 token 是 10-26 的，已失效），`node bin/release.mjs 0.9.9 --dry-run` 在 preflight 就停住；`yes '' | script -q /dev/null npm login --auth-type=web` 重新登录后正常。
+
+## 文档双语化与 README 重排（2026-10-27）
+
+- **为什么要动**：README 940 行、前十屏全是版本日志 —— 想知道「怎么装、怎么连、出问题看哪儿」的人得先翻过十个版本的故事；而且只有中文，`dsh.market` 上点进来的英文用户直接退出。
+- **README 现在长什么样**：顶部一行语言切换（`简体中文 ｜ English`）+ 四枚徽章（npm 版本 / CI / license / DSH Market）+ 图标；紧接着一句「这是什么」和四个「你想做什么」入口（在微信里干活 → 安装/登录/授权；改行为 → 配置；某版改了什么 → CHANGELOG；出问题 → `npm run doctor`）；然后是「目录」—— 6 行、覆盖全部 16 个 `##` 与 35 个 `###`，42 个锚点全部可解析（用 GitHub 的 slug 规则验过，包括中文标题里 `·` 前后留下的双连字符）。
+- **版本日志搬到了 `CHANGELOG.md`**：「亮点」一节只留**现在能做什么**（多账号 / 账号级白名单 / 会话隔离 / 一键暂停 / 语音开箱即用 / 左侧栏入口），并写明「每个版本改了什么在 CHANGELOG.md」。十版历史原样迁过去（0.9.9 → 0.9.0），`# 更新日志` 开头一句说明这一页只回答「哪个版本改了什么」。
+- **发版脚本跟着改**：`bin/release.mjs` 的「版本列表必须有本版 bullet，否则置顶插一条 TODO」从 README 挪到 `CHANGELOG.md`（README 仍保留 `当前已发布版本：…` 那行供脚本更新，`VERSION_FILES` 不变）。`package.json` 的 `files` 加 `README.en.md` 与 `CHANGELOG.md`，两个文件都会进 npm 包。
+- **`README.en.md`**：968 行，结构一一对应（16 个 `##` + 35 个 `###` 同序、20 个代码块、127 行表格、13 个图片/徽章），英文锚点全部重算过。有意保留中文的只有三类：**运行时真的会打出来的字符串**（`备注名:`、`[表情:困了]`、`【语音转写】`、`（提醒：内容）`）、**被 `src/sessions.js` 正则解析的命令参数**（`/subscribe 每天 08:00`、`/mode 女友`、`/mode 海龟汤` —— 翻译了就等于教人用一个跑不通的命令，英文释义放在括号里）、以及**设置卡里由 `t(en, zh)` 双语输出的标签**（这层翻译由 `locale` 决定，文档只描述）。
+- **原文档的自相矛盾没顺手改掉**（避免两边不一致）：亮点点说 11 项体检、开发节注释里写「十项体检」；写「十二个内置角色」而表格列了 11 行 —— 这些留在原文里，中英两版都照原样翻。
+- 校验：`npm test` → **689/689**；`node bin/check.mjs` → `checked 145 files`；`test/release-lockfile.test.js` + `test/release-workflow.test.js` 13/13（发版列表改到 CHANGELOG 后仍然绿）。

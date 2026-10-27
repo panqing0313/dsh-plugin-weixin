@@ -65,6 +65,8 @@
     "assets",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
     "THIRD-PARTY-NOTICES.md",
     "LICENSE"
   ],
