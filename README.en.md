@@ -682,6 +682,18 @@ reworded old text can be replaced too; when long-term memory is full a correctio
 The snippets from recall search (`/recall`, automatic injection) also carry a line "order is by relevance, not by time; when the same topic conflicts, the later one wins",
 because what it returns is historical original text and the model must not treat an old claim as current fact.
 
+### Dry run (dryRun)
+
+With this on, the model says the plan first — what it intends to do, which commands it would run, which files it would touch — and then stops to ask. Reply with a whole-message 「执行」 (or 动手 / 可以 / go) and it proceeds.
+
+**It is not an approval gate.** The plugin has no way to veto a tool call before it runs (the `toolNotices` section explains why), so this works for exactly one reason: the model follows the prompt. That is also why tool notices stay on alongside it — one is a promise, the other is an immediate report after the fact.
+
+The permission is deliberately narrow: a whole-message yes. 「执行一下这个看看」 does not lift it.
+
+### Three things only a phone can check
+
+Outbound video, link cards / quoted replies, and outbound voice cannot be tested automatically. How to try each, and what is already known, is in [docs/manual-checks.md](docs/manual-checks.md). The link-card case has a passive listener now: if the server ever sends `appmsg`/`refermsg`, the plugin writes one audit line and one log line per conversation.
+
 ### Template packs (`npm run pack` · `packExport` / `packImport`)
 
 A whole "way of using the bot" fits in one JSON file you can hand to a friend: custom personas, rhythm and toggles, scheduled messages.

@@ -55,6 +55,8 @@ let hooks
 /** Counters the settings card reads (src/metrics.js); process lifetime only. */
 let metrics
 let metricsTimer
+/** ④ One audit line per unfamiliar shape per conversation, not one per message. */
+const unknownItemSeen = new Set()
 let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
@@ -105,6 +107,8 @@ import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { buildContactBlock, listContacts, readContact, saveContact, touchContact } from './message/contacts.js'
 import { describeAffinity, readAffinityHistory, recordAffinitySnapshot } from './message/affinity-history.js'
+import { buildDryRunBlock, describeDryRun, isGoAhead } from './message/dry-run.js'
+import { describeUnknownItems, firstSighting } from './message/unknown-items.js'
 import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler } from './message/proactive.js'
@@ -233,6 +237,7 @@ export const Config = z.object({
   retentionMediaDays: z.number().min(0).default(30).description('收到的图片/文件/语音保留天数；0 表示不清理。'),
   retentionExportsDays: z.number().min(0).default(60).description('/export 导出的 Markdown 保留天数；0 表示不清理。'),
   retentionLogsDays: z.number().min(0).default(30).description('vendor 每日日志保留天数；0 表示不清理。'),
+  dryRun: z.boolean().default(false).description('预演模式：让模型先给计划再动手，你回「执行」才真正执行。这不是强制拦截——插件拦不住工具调用，它只是让模型先说后做，所以危险工具提醒仍然同时生效。'),
   metricsExport: z.boolean().default(true).description('每 30 秒把指标写到状态目录的 metrics.json / metrics.prom，方便外部抓取（npm run metrics 读取）。'),
   backupEnabled: z.boolean().default(true).description('每天自动备份一次状态目录（记忆、人设、订阅、流水、账号）；备份在 <状态目录>/backups，含账号 token，别外传。'),
   backupKeep: z.number().min(1).max(60).default(DEFAULT_KEEP).description('保留最近几份自动备份；更旧的会被删掉。'),
@@ -1544,6 +1549,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // One timestamp for both the journal line and the recall exclusion, so the
     // message being answered can be recognised in the index without matching
     // on text alone.
+    // ④ A passive listener for shapes the vendored client does not know: it cannot
+    // render a link card, it can only tell us whether the server sends them.
+    for (const line of describeUnknownItems(message)) {
+      if (firstSighting(unknownItemSeen, line, `${message.conversationId}|${line}`)) {
+        fileLog.info(`unfamiliar inbound shape: ${line}`)
+        appendToolAudit(stateRoot, { tool: 'weixin/unknown-item', ok: true, summary: line })
+      }
+    }
     const journaledAt = Date.now()
     // Before anything reads the config for this message: layer the
     // conversation's overrides (if any) onto the account config.
@@ -1904,7 +1917,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     }
     // Prepend in ONE join so the order stays persona → memory → recall → user
     // text (a per-block prepend loop would silently reverse it).
-    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock].filter((block) => block !== '')
+    // ② 预演模式: a prompt-level agreement, not enforcement. The go-ahead check is
+    // the whole mechanism — one turn of planning, one word of permission.
+    const dryRunBlock = effectiveConfig.current.dryRun === true && isGoAhead(message.text) === false
+      ? buildDryRunBlock({ accountLabel: config.accountLabel ?? '' })
+      : ''
+    if (dryRunBlock !== '') log(describeDryRun())
+    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, dryRunBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // The user spoke: clear the proactive backoff. Reset before the turn so a

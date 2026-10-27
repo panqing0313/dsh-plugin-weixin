@@ -647,6 +647,13 @@ export const FIELDS = [
       ],
     },
     {
+      group: "预演",
+      groupEn: "Dry run",
+      fields: [
+        { path: "dryRun", type: T.boolean, default: false, label: "预演模式", labelEn: "Dry run", hint: "让它先说计划再动手，你回「执行」才真正执行；这不是强制拦截——插件拦不住工具调用", hintEn: "The model plans first and waits for 执行; it is a prompt-level agreement, not a veto" },
+      ],
+    },
+    {
       group: "指标",
       groupEn: "Metrics",
       fields: [
