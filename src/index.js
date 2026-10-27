@@ -27,6 +27,7 @@ import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstan
 import { createOutbox } from './message/outbox.js'
 import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
+import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -1145,6 +1146,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
   // first-contact enrolment takes effect on the very message that triggered
   // it, without touching the per-handler `accountConfig` capture above.
   const effectiveConfig = { current: accountConfig }
+  // Per-conversation overrides (config-scope.json) sit on top of the account
+  // config for exactly one message. Re-read on every message so the card can
+  // change a scope without a restart, and reset from `accountConfig` so an
+  // override never leaks into the next conversation.
+  const applyScope = (conversationId) => {
+    effectiveConfig.current = scopedConfig(accountConfig, readScope(stateRoot, accountId, conversationId, { warn }))
+  }
   // Persona + memory command handlers (/mode /remember /forget /memory), one
   // bundle per conversation. Every call re-reads its store: the settings card
   // can edit the mode table or the operator can /forget between two messages,
@@ -1309,6 +1317,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // message being answered can be recognised in the index without matching
     // on text alone.
     const journaledAt = Date.now()
+    // Before anything reads the config for this message: layer the
+    // conversation's overrides (if any) onto the account config.
+    applyScope(message.conversationId)
     if (config.messageJournal === true && message.type === 'text') {
       journalInbound?.({
         at: journaledAt,
