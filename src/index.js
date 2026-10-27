@@ -94,6 +94,7 @@ import {
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
+import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
@@ -192,6 +193,9 @@ export const Config = z.object({
   proactiveMaxPerDay: z.number().min(1).max(24).default(3).description('每个账号每天最多主动发几条。'),
   proactiveWindowStart: z.string().default('09:00').description('主动消息的时间窗开始，HH:mm；窗外（含夜里）一律不发。'),
   proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
+  groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
+  groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
+  groupShareMemory: z.boolean().default(false).description('把长期记忆、回忆片段和亲密度行也注入群回复。默认关闭：那些块里是主人自己的私事。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -1381,6 +1385,26 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       return
     }
 
+    // 1a-bis. Group policy (C14). The transport already turns a non-blank
+    //        group_id into the conversation id; what was missing is that nothing
+    //        downstream knew the difference, so the bot answered every message
+    //        in a group chat. Ignored messages are journaled (the turn never
+    //        happens) and counted, and they never reach the sender gate.
+    const groupDecision = groupReplyPolicy(message, effectiveConfig.current, {
+      botNames: [accountId, config.accountLabel ?? '', config.botName ?? ''],
+    })
+    if (groupDecision.reply === false) {
+      hooks?.emit(HOOK_POINTS.inboundRefused, {
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        reason: groupDecision.reason,
+      })
+      metrics?.inc('group.ignored', 1, groupDecision.reason)
+      log(`group message ignored (${groupDecision.reason}) from ${message.senderId} in ${message.conversationId}`)
+      return
+    }
+
     // 1b. Per-sender pacing. The account-wide limiter protects the Weixin
     //     account from a ban; this protects the bot (and the token bill) from
     //     one person sending thirty messages into a running turn. A refused
@@ -1639,7 +1663,10 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           warn,
         })
       : []
-    const memoryBlock = effectiveConfig.current.memoryEnabled === true
+    // A group shares one conversation key, and the memory blocks hold the
+    // owner's own facts — so a group gets an answer, not the dossier.
+    const memoryShared = groupSharesMemory(message, effectiveConfig.current)
+    const memoryBlock = effectiveConfig.current.memoryEnabled === true && memoryShared === true
       ? buildMemoryBlock({
           global: readGlobalMemory(stateRoot, accountId, { warn }),
           maxTokens: Number(effectiveConfig.current.memoryGlobalMaxTokens ?? 0),
@@ -1651,7 +1678,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // Remember the line even when the window came back empty: the next message
     // on this line is warm, so the window must not be re-read (and re-injected)
     // just because the first one had nothing to show yet.
-    if (coldLine && effectiveConfig.current.memoryEnabled === true) {
+    if (coldLine && effectiveConfig.current.memoryEnabled === true && memoryShared === true) {
       setConvRecentSession(stateRoot, accountId, message.conversationId, lineSessionId, { warn })
     }
     // Recall: the journal already holds every message, but nothing looked at
@@ -1659,7 +1686,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // a lossy summary. Search it locally first, and only pay for the block
     // when the search actually hits: small talk finds nothing and costs zero.
     let recallBlock = ''
-    if (effectiveConfig.current.memoryRecall !== false) {
+    if (effectiveConfig.current.memoryRecall !== false && memoryShared === true) {
       const recallHits = queryRecall(stateRoot, message.text, {
         accountId,
         conversationId: message.conversationId,

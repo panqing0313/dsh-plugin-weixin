@@ -249,6 +249,9 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `quietHoursEnabled` | `false` | 免打扰开关：开着时落在时段内的定时提醒与 /subscribe 主动消息都推迟到时段结束后再发（重新排期，不丢、不重复） |
 | `quietHoursStart` | `'23:00'` | 免打扰开始（本地时间 `HH:mm`）。必须严格早于结束（或跨午夜），两端相等视为未配置 |
 | `quietHoursEnd` | `'07:00'` | 免打扰结束（本地时间 `HH:mm`）。跨午夜时段（如 23:00 → 07:00）按两段计算 |
+| `groupChatEnabled` | `false` | 参加群聊。默认关闭：对每条群消息都答的机器人，在真群里就是刷屏；私聊不受影响 |
+| `groupReplyWhen` | `'mention'` | 群里什么时候回：`mention` 只答被叫到的时候，`all` 每条都答 |
+| `groupShareMemory` | `false` | 群里是否也注入长期记忆、回忆片段与亲密度行。默认关闭——那些块是主人自己的私事 |
 | `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
 | `voiceOutbound` | `false` | 音频附件按微信语音发出而不是文件（wav/silk 进程内转码，其余走 ffmpeg）。**默认关**：实测服务端接受机器人语音（ret=0）但不投递，开着会让附件无声消失；发送被拒时仍会自动降级为文件 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
@@ -626,6 +629,14 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 
 `test/proactive.test.js` 把每个闸门（时段、间隔、退避、每日上限、骰子）都单独钉住；
 e2e 的 `proactive` 用例在没有 inbound 消息的情况下验证它真的会自己发一条，并且只发一条。
+
+### 群聊（groupChatEnabled · groupReplyWhen · groupShareMemory）
+
+群消息的 `conversationId` 就是 `group_id`，回复地址一直是对的；缺的是判断——以前机器人对群里每一条消息都会答。
+
+现在默认**不进群**；开启后默认**只答被叫到的时候**（`@名字`，按首行里的机器人名字匹配，因为 iLink 不提供 @ 列表），`groupReplyWhen: "all"` 才逐条都答。
+
+私事也不跟着进群：群里的回复**不注入**长期记忆、回忆片段与亲密度行（`groupShareMemory: true` 才注入）。群共享一条会话线，所以群里的上下文是所有成员共用的——这条记在架构文档的「已知缺口」里。
 
 ### 工具审计（toolAudit）
 

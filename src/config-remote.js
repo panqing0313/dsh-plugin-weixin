@@ -580,6 +580,15 @@ export const FIELDS = [
       ],
     },
     {
+      group: "群聊",
+      groupEn: "Group chats",
+      fields: [
+        { path: "groupChatEnabled", type: T.boolean, default: false, label: "参加群聊", labelEn: "Answer in groups", hint: "默认关闭：对每条群消息都答的机器人，在真群里就是刷屏；私聊不受影响", hintEn: "Off by default: a bot that answers every group message is spam" },
+        { path: "groupReplyWhen", type: T.text, default: "mention", label: "什么时候回", labelEn: "When to answer", hint: "mention 只答被叫到的时候（按首行里的机器人名字匹配）；all 每条都答", hintEn: "mention = only when addressed by name; all = every message" },
+        { path: "groupShareMemory", type: T.boolean, default: false, label: "群里也用记忆", labelEn: "Memory in groups", hint: "开启后长期记忆、回忆片段与亲密度行进群回复；默认关闭，那些块是主人的私事", hintEn: "Off by default: those blocks hold the owner's private facts" },
+      ],
+    },
+    {
       group: "静音时段",
     groupEn: "Quiet hours",
     fields: [

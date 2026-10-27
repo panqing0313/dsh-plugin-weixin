@@ -2669,4 +2669,6 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 随后补上 **30 混沌/长稳**：`test/chaos.test.js`（固定种子的伪随机、三分之一发送失败）断言 outbox 不丢消息/不乱序/磁盘永远可解析、限流不超发、清理只删认得出的文件。
 
+**14 群聊**（`src/message/groups.js`）：`isGroupMessage`（会话 ≠ 发送者）、`mentionsBot`（首行 + 名字，正则转义）、`groupReplyPolicy`（默认关 → 只答被叫到的）、`groupSharesMemory`（群默认不注入私事记忆）；入站处理器在限流之前拦下并记 `group.ignored` 指标；schema/表单加 `groupChatEnabled`/`groupReplyWhen`/`groupShareMemory`。测试：groups 单测 4 条 + 会话命令 3 段真实插件用例（默认不回 / 开启了也不乱回 / 被叫到才回）。**坑**：这套 zod 没有 `z.enum`，`z.enum(...)` 会让插件在 import 时直接抛 `TypeError`，测试表现为一直等到超时。
+
 未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。

@@ -96,11 +96,12 @@ async function startFakeILink() {
   const baseUrl = `http://127.0.0.1:${server.address().port}`
 
   /** Queue one inbound text message; `from` defaults to the allowed operator. */
-  function deliver(text, messageId, from = ALLOWED) {
+  function deliver(text, messageId, from = ALLOWED, groupId = '') {
     seen.inboundTexts.push(text)
     queue.push({
       message_id: messageId,
       from_user_id: from,
+      group_id: groupId,
       message_type: 1,
       message_state: 2,
       context_token: 'CT',
@@ -143,7 +144,7 @@ function seedAccount(root, { baseUrl, token = 'tok-1' }) {
  * Apply the plugin against a fake host that records every agent session it is
  * asked to open, run `body`, then dispose exactly as the host would.
  */
-async function withPlugin(body) {
+async function withPlugin(body, overrides = {}) {
   const root = withStateRoot()
   const previousStateDir = process.env.DSH_WEIXIN_STATE_DIR
   process.env.DSH_WEIXIN_STATE_DIR = root
@@ -213,7 +214,7 @@ async function withPlugin(body) {
 
   const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
   try {
-    plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false }))
+    plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false, ...overrides }))
     seedAccount(root, { baseUrl: fake.baseUrl })
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
     await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, get deliverCalls() { return deliverCalls } })
@@ -699,4 +700,27 @@ test('the command table is the single source for /help, parsing and dispatch', a
   assert.deepEqual(parseSessionCommand('/new'), { command: 'new' })
   assert.deepEqual(parseSessionCommand('/订阅列表'), { command: 'subscribelist' })
   assert.equal(parseSessionCommand('/nonsense'), undefined)
+})
+
+test('a group chat is silent by default, and answers only when addressed once enabled', async () => {
+  // C14. Both failure modes are silent: the bot answering every group message
+  // (spam), and a group message slipping past the allowlist into a model turn.
+  const ROOM = 'room@chatroom'
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('今天吃什么', 'g1', ALLOWED, ROOM)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.deepEqual(sessionsOpened, [], 'groups are off by default, so nothing reaches the agent')
+    assert.deepEqual(fake.outbound, [], 'and nothing is said back into the group')
+  })
+
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('今天吃什么', 'g2', ALLOWED, ROOM)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.deepEqual(sessionsOpened, [], 'a group message that does not address the bot is ignored')
+  }, { groupChatEnabled: true })
+
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('@bot1 今天吃什么', 'g3', ALLOWED, ROOM)
+    await waitFor(() => sessionsOpened.length > 0, 'an addressed group message reaches the agent')
+  }, { groupChatEnabled: true })
 })
