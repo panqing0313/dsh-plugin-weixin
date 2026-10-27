@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { verifyAuditChain } from '../src/message/audit.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const results = []
@@ -154,6 +155,15 @@ function checkRecentErrors(root) {
   else note('recent log', `${latest}: ${errors.join(' | ').slice(0, 400)}`)
 }
 
+function checkAuditChain(root) {
+  const result = verifyAuditChain(root)
+  if (result.files === 0) return ok('audit chain', 'no audit lines yet')
+  if (result.broken !== null) {
+    return bad('audit chain', `${result.broken.file}:${result.broken.line} does not match its hash — the file was edited after it was written`)
+  }
+  ok('audit chain', `${result.chained} line(s) chained${result.unchained > 0 ? `, ${result.unchained} legacy` : ''}`)
+}
+
 function checkRegistryVersion() {
   const pkg = pkgJson()
   if (pkg.__error !== undefined) return
@@ -175,6 +185,7 @@ function main() {
   checkAccounts(root)
   checkLock(root)
   checkOutbox(root)
+  checkAuditChain(root)
   checkRecentErrors(root)
   checkRegistryVersion()
   if (config !== undefined && config.voiceOutbound === true) {

@@ -7,10 +7,101 @@
 // 为什么不是 ctx.logger：日志是给运维看的过程流，滚掉就没了；审计要能事后回答
 // 「昨天 15:20 是谁让 agent 删了那个目录」。所以它是独立文件、独立保留策略。
 
-import { mkdirSync, appendFileSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 
 export const MAX_AUDIT_ARGS_CHARS = 500
+
+/** Last hash seen per audit file, so appending does not re-read the whole day. */
+const lastHashes = new Map()
+
+function chainHash(prev, payload) {
+    return createHash('sha256').update(prev).update('\n').update(payload).digest('hex')
+}
+
+/** The hash of the last line in `file`, or '' for an empty/absent file. */
+function lastHash(file) {
+    const cached = lastHashes.get(file)
+    if (cached !== undefined) return cached
+    let text = ''
+    try {
+        const size = statSync(file).size
+        const fd = readFileSync(file)
+        // Only the tail matters: the last complete line.
+        text = fd.toString('utf8', Math.max(0, size - 8_192), size)
+    } catch {
+        return ''
+    }
+    const lines = text.split('\n').filter((line) => line.trim() !== '')
+    const last = lines.at(-1)
+    if (last === undefined) return ''
+    try {
+        const parsed = JSON.parse(last)
+        const h = typeof parsed.h === 'string' ? parsed.h : ''
+        lastHashes.set(file, h)
+        return h
+    } catch {
+        return ''
+    }
+}
+
+/**
+ * Walk the audit files oldest-first and verify the hash chain.
+ *
+ * Legacy lines (written before the chain existed) have no `h` and are counted as
+ * `unchained` rather than treated as tampering — the chain starts at the first
+ * line that has one.
+ *
+ * @returns {{ files: number, lines: number, chained: number, unchained: number,
+ *   broken: { file: string, line: number } | null }}
+ */
+export function verifyAuditChain(stateRoot) {
+    const dir = auditDir(stateRoot)
+    let files = 0
+    let lines = 0
+    let chained = 0
+    let unchained = 0
+    let broken = null
+    let names = []
+    try {
+        names = readdirSync(dir).filter((name) => name.endsWith('.jsonl')).sort()
+    } catch {
+        return { files: 0, lines: 0, chained: 0, unchained: 0, broken: null }
+    }
+    for (const name of names) {
+        // The chain restarts at each day file: one file, one chain.
+        let expectedPrev = ''
+        files += 1
+        let text = ''
+        try {
+            text = readFileSync(join(dir, name), 'utf8')
+        } catch {
+            continue
+        }
+        const entries = text.split('\n').filter((line) => line.trim() !== '')
+        for (let index = 0; index < entries.length; index += 1) {
+            lines += 1
+            let parsed
+            try {
+                parsed = JSON.parse(entries[index])
+            } catch {
+                if (broken === null) broken = { file: name, line: index + 1 }
+                continue
+            }
+            if (typeof parsed.h !== 'string') { unchained += 1; continue }
+            const { h, prev } = parsed
+            const payload = JSON.stringify(Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== 'prev' && key !== 'h')))
+            if (prev !== expectedPrev || chainHash(prev, payload) !== h) {
+                if (broken === null) broken = { file: name, line: index + 1 }
+            } else {
+                chained += 1
+            }
+            expectedPrev = h
+        }
+    }
+    return { files, lines, chained, unchained, broken }
+}
 export const DEFAULT_AUDIT_LIMIT = 100
 
 function dayStamp(at) {
@@ -77,7 +168,16 @@ export function appendToolAudit(stateRoot, entry, { warn } = {}) {
             ...(typeof entry.durationMs === 'number' ? { durationMs: entry.durationMs } : {}),
         })
         mkdirSync(auditDir(stateRoot), { recursive: true })
-        appendFileSync(auditPath(stateRoot, at), line + '\n')
+        const file = auditPath(stateRoot, at)
+        // Integrity: every line carries the previous line's hash, so a deleted or
+        // edited line breaks the chain at that point. This does not stop someone
+        // with write access from rewriting the whole file — it makes the rewrite
+        // visible to anyone who kept an earlier copy, which is the most a local
+        // log can honestly offer.
+        const prev = lastHash(file)
+        const h = chainHash(prev, line)
+        appendFileSync(file, `${line.slice(0, -1)},"prev":"${prev}","h":"${h}"}\n`)
+        lastHashes.set(file, h)
     } catch (error) {
         try {
             warn?.(`tool audit append failed: ${String(error)}`)
