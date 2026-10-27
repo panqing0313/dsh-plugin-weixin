@@ -4,10 +4,22 @@ import fs from 'node:fs'
 import path from 'node:path'
 import url from 'node:url'
 
-const CLIENT_PATH = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..', 'src', 'client.js')
+const SRC_DIR = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..', 'src')
+const CLIENT_PATH = path.join(SRC_DIR, 'client.js')
+const CARD_PATH = path.join(SRC_DIR, 'client.card.js')
+
+/**
+ * The card's sections live in a package-local lazy chunk now. Their bodies are
+ * one indentation level deeper than they were in the entry, so the patterns
+ * below end with `\n\t+` rather than a fixed number of tabs: the structure is
+ * the assertion, the nesting depth is not.
+ */
+function readCardSource() {
+  return fs.readFileSync(CARD_PATH, 'utf8')
+}
 
 test('the settings card is a real tablist with the two sections as tabs', () => {
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = readCardSource()
   // The card is hoisted to a named function (the settings.section slot reuses
   // the same component), so anchor on the component's own last statement.
   const card = client.match(/function WeixinSettingsCard\(\) \{[\s\S]*?\n\t\t\t\t\tsection\(TABS\[tab\]\?\.label \?\? "", TABS\[tab\]\?\.body\)\);/)
@@ -41,7 +53,7 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
 })
 
 test('the ASR panels save through one explicit bar, not on every click', () => {
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = readCardSource()
 
   // chooseSource only stages; it must no longer call setDownloadSettings.
   const choose = client.match(/const chooseSource = \(id\) => \{[\s\S]*?\n\t\t\t\};/)
@@ -85,7 +97,7 @@ test('the card reads the language from the service DSH actually provides', () =>
   assert.match(hook[0], /startsWith\("zh"\)/, 'the zh test must be explicit')
 })
 test('the About section never passes a style object as an element type', () => {
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = readCardSource()
   const about = client.match(/function AboutSection\(\{ ctx, t \}\) \{[\s\S]*?\n\t\t\}/)
   assert.ok(about, 'AboutSection must stay findable')
   // The white screen: createElement(panelStyle, ...) — the STYLE OBJECT was

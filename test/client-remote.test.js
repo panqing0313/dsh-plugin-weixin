@@ -20,6 +20,13 @@ import vm from 'node:vm'
 import { qrDataUrl } from '../src/qr-png.js'
 
 const CLIENT_PATH = new URL('../src/client.js', import.meta.url)
+/**
+ * The card's sections live in a package-local lazy chunk (client.card.js) now,
+ * one indentation level deeper than they were in the entry. Source-shape
+ * assertions read from here, with `\n\t+` for a closing brace: the shape is
+ * what matters, not the nesting depth.
+ */
+const CARD_PATH = new URL('../src/client.card.js', import.meta.url)
 
 /** Wire names must be usable as an RPC argument key and as an object property. */
 const WIRE_RE = /^[A-Za-z0-9_$.-]+$/
@@ -41,6 +48,20 @@ function loadClientModule() {
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
   vm.runInContext(source, sandbox)
+
+  // The bundle loads its settings card as a lazy chunk (src/client.card.js), so
+  // the fake loader must be able to materialize one the way the real one does:
+  // fetch the sibling script, let it register under `chunk`, then run its factory
+  // with the same `require`.
+  const chunkRegistrations = new Map()
+  const loadRegistration = sandbox.window.__ModuleLoader__.load
+  sandbox.window.__ModuleLoader__.load = (r) => {
+    if (r !== undefined && typeof r === 'object' && typeof r.chunk === 'string') {
+      chunkRegistrations.set(r.chunk, r)
+      return
+    }
+    loadRegistration(r)
+  }
   assert.ok(registration, 'client.js must register itself with __ModuleLoader__.load')
   return registration
 }
@@ -62,6 +83,18 @@ function fakeRequire(spec) {
   }
   if (spec === 'react/jsx-runtime') return { jsx: createElement, jsxs: createElement }
   throw new Error(`client.js required an unseeded module: ${spec}`)
+}
+
+/**
+ * The card is a lazy chunk (src/client.card.js) that the entry fetches through
+ * `require.async`. This file asserts on descriptors and inject lists, so it only
+ * needs the loader to be honest about the method existing.
+ */
+fakeRequire.async = async (spec) => {
+  const file = String(spec).replace(/^\.\//, '')
+  const found = chunkRegistrations.get(file)
+  if (found === undefined) throw new Error(`chunk ${file} did not register with __ModuleLoader__.load`)
+  return found.factory(fakeRequire)
 }
 
 /** Emulate the typert descriptor validation that runs during $mount. */
@@ -518,7 +551,7 @@ test('every state the card renders matches what the host actually reports', () =
   // `progress` percentage. The host reports only running/done/failed/idle and no
   // percentage, so that branch was dead code and the progress figure would have
   // been invented. Pin the vocabulary to the host's.
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
   // CLIENT_PATH is a URL, so resolve the host half as a sibling URL.
   const host = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
   const hostStatuses = new Set([...host.matchAll(/status: "(\w+)"/g)].map((m) => m[1]))
@@ -607,7 +640,9 @@ test('the model directory field offers the host chooser and says so when absent'
   // and typing an absolute path by hand is the likeliest way to get one. The
   // card must therefore expose the host's own chooser, and must explain itself
   // when the profile provides none.
-  const source = fs.readFileSync(CLIENT_PATH, 'utf8')
+  // The field is part of the card, which is the lazy chunk; the chooser helper
+  // it calls stayed in the entry. Read both.
+  const source = [fs.readFileSync(CLIENT_PATH, 'utf8'), fs.readFileSync(CARD_PATH, 'utf8')].join('\n')
   assert.match(source, /onClick: browseDir/, 'the directory field needs a browse button')
   assert.match(source, /await pickDirectory\(ctx\)/, 'browseDir must use the host chooser')
   assert.match(
@@ -683,7 +718,7 @@ test('clearing the proxy sends the empty value, not the stale one', () => {
   // T4 moved to a staged bar: the write is `saveDownloadSettings`, which must
   // pass the empty string for "direct" explicitly (same stale-state class of
   // bug, one level up).
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
 
   const save = client.match(/const saveProxy = async \(value\) => \{[\s\S]*?\n\t\t\t\};/)
   const bulk = client.match(/const saveDownloadSettings = async \(\) => \{[\s\S]*?\n\t\t\t\};/)
@@ -735,7 +770,7 @@ test('the log out button is offered only when bound, and stays non-primary', () 
   //     state where it can only report "nothing removed".
   //   - Making it the primary button puts "delete my credentials" where "scan
   //     to log in" belongs, one mis-click from the action the card exists for.
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
 
   const handler = client.match(/const leaveAccount = async \(\) => \{[\s\S]*?\n\t\t\t\};/)
   assert.ok(handler, 'leaveAccount must stay a findable handler')
@@ -762,7 +797,7 @@ test('the account editors are inline rows, never window.prompt', () => {
   // rename/allowlist editor silently did nothing — the button "worked",
   // the handler returned at `typeof next !== "string"`, no error anywhere.
   // The editors must therefore be inline rows committed by a button.
-  const client = fs.readFileSync(CLIENT_PATH, 'utf8')
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
 
   assert.doesNotMatch(client, /globalThis\.prompt/, 'window.prompt is unusable in Electron; the editors must be inline rows')
 

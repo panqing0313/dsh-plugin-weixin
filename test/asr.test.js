@@ -590,7 +590,13 @@ test('the model repo offered for download matches the platform that can load it'
   // costs a ~460MB download that the engine then cannot open, and picking the
   // CTranslate2 repo on Apple silicon wastes the GPU path. The client chooses
   // by platform, and both branches must stay present.
-  const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'client.js'), 'utf8')
+  // defaultAsrRepo() moved into the card's lazy chunk with the ASR panel that
+  // calls it, so read both files: the repo names and the platform branch are
+  // what this asserts, not which file they ended up in.
+  const source = [
+    fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'client.js'), 'utf8'),
+    fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'client.card.js'), 'utf8'),
+  ].join('\n')
   assert.match(source, /function defaultAsrRepo\(\)/)
   assert.match(source, /mlx-community\/whisper-small-mlx/)
   assert.match(source, /Systran\/faster-whisper-small/)

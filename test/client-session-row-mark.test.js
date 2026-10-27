@@ -249,6 +249,35 @@ async function mountRowSeat({ conversations } = {}) {
   let registration
   vm.createContext(sandbox)
   new vm.Script(source, { filename: CLIENT_PATH }).runInContext(sandbox)
+
+  // The bundle loads its settings card as a lazy chunk (src/client.card.js), so
+  // the fake loader must be able to materialize one the way the real one does:
+  // fetch the sibling script, let it register under `chunk`, then run its factory
+  // with the same `require`.
+  const chunkRegistrations = new Map()
+  const loadRegistration = sandbox.window.__ModuleLoader__.load
+  sandbox.window.__ModuleLoader__.load = (r) => {
+    if (r !== undefined && typeof r === 'object' && typeof r.chunk === 'string') {
+      chunkRegistrations.set(r.chunk, r)
+      return
+    }
+    loadRegistration(r)
+  }
+  // The card is a lazy chunk now, so the fake require needs the one method the
+  // real loader hands factories: `async(relativeChunk)` runs the sibling script
+  // in the same window and returns its exports.
+  require.async = async (spec) => {
+    const file = String(spec).replace(/^\.\//, '')
+    let found = chunkRegistrations.get(file)
+    if (found === undefined) {
+      const chunkSource = fs.readFileSync(path.join(path.dirname(CLIENT_PATH), file), 'utf8')
+      new vm.Script(chunkSource, { filename: file }).runInContext(sandbox)
+      found = chunkRegistrations.get(file)
+    }
+    if (found === undefined) throw new Error(`chunk ${file} did not register with __ModuleLoader__.load`)
+    return found.factory(require)
+  }
+
   await registration.factory(require).apply(ctx)
 
   const entry = registrations.get(ROW_SEAT)

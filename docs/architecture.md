@@ -76,7 +76,9 @@ persona / accounts / sessions）。保留策略 `src/message/retention.js` 按�
 
 - **微信原生表情包发不出去**：`MessageItemType` 里没有贴纸类型，只能发图片气泡（36 张内置图）。
 - **bot 语音条服务端不投递**：`ret=0` 接受但对方收不到（两次真机实测），所以 `voiceOutbound` 默认关。
-- **`src/client.js` 仍是单文件**（约 3500 行）：它是 `window.__ModuleLoader__.load({id, factory})` 的单模块打包，
-  拆分需要先摸清 loader 的多模块协议；界面 Section 都在同一个 factory 闭包里共享常量。
-  入口侧已拆出 `src/outbound.js`（2000 → 1891 行）。
+- **设置卡的拆分只到"一个 chunk"这一步**：界面九个 Section 与卡片本体已经搬进 `src/client.card.js`
+  （2452 行），入口 `src/client.js` 从 3590 行降到 1278 行，靠 loader 的包内 lazy chunk 协议
+  （`register({id, chunk, factory})` + `require.async("./client.card.js")`）在激活时取回。
+  再往下拆成几个 chunk 是可行的，但每多一个 chunk 就多一次取回，收益不足以抵消；保持一个。
+  服务端侧已拆出 `src/outbound.js`（2000 → 1891 行）。
 - 会话级配置覆盖（`config-scope.js`）目前只覆盖 15 个"行为"键，安全键（白名单、媒体上限）永不可覆盖。
