@@ -681,3 +681,24 @@ test('a pack exports what is shareable and imports additively through the contro
     })
   })
 })
+
+test('contacts are per sender, and the card only sees the account it asked for', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ accountId: 'acc-main' }))
+
+    const saved = await c.contactSave({ contactId: 'wxid_lin', call: '小林', profile: '{"likes":["美式"]}' })
+    assert.equal(saved.ok, true)
+    assert.equal(saved.contact.profile.call, '小林')
+
+    const listed = await c.contacts({})
+    assert.equal(listed.accountId, 'acc-main')
+    assert.equal(listed.contacts.length, 1)
+    assert.deepEqual(listed.contacts[0].profile.likes, ['美式'])
+
+    // Another account's directory is a different set of files, not a filter.
+    assert.deepEqual((await c.contacts({ accountId: 'acc-other' })).contacts, [])
+    await assert.rejects(c.contactSave({ contactId: '', call: 'x' }), (error) => error.code === 'bad_contact')
+    await assert.rejects(c.contactSave({ contactId: 'wxid_lin', profile: 'not json' }), (error) => error.code === 'bad_contact')
+  })
+})

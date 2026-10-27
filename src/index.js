@@ -103,6 +103,8 @@ import { createTranslator, resolveLocale } from './i18n.js'
 import { routeFor, sideRouteFor } from './model-route.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
+import { buildContactBlock, listContacts, readContact, saveContact, touchContact } from './message/contacts.js'
+import { describeAffinity, readAffinityHistory, recordAffinitySnapshot } from './message/affinity-history.js'
 import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler } from './message/proactive.js'
@@ -1527,6 +1529,8 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         parts.push(store.facts.length === 0
           ? '长期记忆：还没有，用 /remember 教我。'
           : ['长期记忆：', ...store.facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
+        const affinity = describeAffinity(readAffinityHistory(stateRoot, accountId, conversationId, { warn }))
+        if (affinity !== '') parts.push(['最近的关系曲线：', affinity].join('\n'))
         if (store.superseded.length > 0) {
           parts.push(['改过的说法：', ...store.superseded.slice(-5).map((entry) => `- ${entry.text} → ${entry.by}`)].join('\n'))
         }
@@ -1857,6 +1861,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // A group shares one conversation key, and the memory blocks hold the
     // owner's own facts — so a group gets an answer, not the dossier.
     const memoryShared = groupSharesMemory(message, effectiveConfig.current)
+    // ⑦ In a group, whose message is this? A name card, not a second memory: it
+    // holds the call name and what was written down about that person, and it is
+    // injected only for the person actually talking.
+    let contactBlock = ''
+    if (isGroupMessage(message)) {
+      const known = readContact(stateRoot, accountId, message.senderId, { warn })
+      if (known !== undefined) contactBlock = buildContactBlock(known, { senderId: message.senderId })
+      touchContact(stateRoot, accountId, message.senderId, { warn })
+    }
     const memoryBlock = effectiveConfig.current.memoryEnabled === true && memoryShared === true
       ? buildMemoryBlock({
           global: readGlobalMemory(stateRoot, accountId, { warn }),
@@ -1891,7 +1904,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     }
     // Prepend in ONE join so the order stays persona → memory → recall → user
     // text (a per-block prepend loop would silently reverse it).
-    const blocks = [personaBlock, styleBlock, lifeBlockText, memoryBlock, recallBlock].filter((block) => block !== '')
+    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // The user spoke: clear the proactive backoff. Reset before the turn so a
@@ -1979,6 +1992,17 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       // and every memorySummaryTurns of them fires a background summary into
       // conv memory — fire-and-forget, it must never delay or fail the reply.
       memorySummarizer?.afterTurn(accountId, message.conversationId)
+      // ⑥ One row per day, written by the turn that already bumped the bond: a
+      // sparkline later needs history, and history needs exactly one writer.
+      if (effectiveConfig.current.memoryEnabled !== false && memoryShared === true) {
+        try {
+          const bondNow = readConvMemory(stateRoot, accountId, message.conversationId, { warn })?.bond
+          const lifeNow = companion ? readOrInferLifeState(stateRoot, accountId, { bond: bondNow, warn, persist: false }) : undefined
+          recordAffinitySnapshot(stateRoot, accountId, message.conversationId, { bond: bondNow, life: lifeNow, warn })
+        } catch (error) {
+          errLog(`affinity snapshot failed: ${String(error?.message ?? error)}`)
+        }
+      }
       // A late reply already went out through onLateReply; sending the empty
       // text here would be a stray message.
       if (reply.late === true) return

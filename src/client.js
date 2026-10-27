@@ -237,6 +237,28 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/contacts`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "contacts",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/contacts:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/contacts:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/contactSave`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "contactSave",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/contactSave:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/contactSave:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/packExport`,
 					service: "weixinLoginController",
 					namespace: "weixin",

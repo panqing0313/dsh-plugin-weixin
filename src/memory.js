@@ -104,7 +104,7 @@ function sanitizeFacts(raw) {
  * they talk to every day. Free-text facts still exist for everything else; this
  * is the part worth a stable slot in the prompt.
  */
-function sanitizeProfile(value) {
+export function sanitizeProfile(value) {
     const empty = { call: '', schedule: '', likes: [], dislikes: [], dates: [] };
     if (value === null || typeof value !== 'object') return empty;
     const raw = value;
