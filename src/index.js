@@ -24,6 +24,7 @@ import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfi
 import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
+import { createOutbox } from './message/outbox.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -38,6 +39,9 @@ import { DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from './message/rate-li
  * has to cross scopes exactly once — null before setup means "not recording".
  */
 let journalOutboundRef = null
+
+/** The durable outbox for undelivered text; set once the plugin's setup runs. */
+let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
@@ -441,6 +445,20 @@ export function apply(ctx, config) {
       // One writer per state directory. A second DSH window used to overwrite
       // this one's files silently; now it says so once and carries on (the
       // writes are atomic, so the damage is bounded to last-writer-wins).
+      // The outbox: a reply that could not be delivered is written to disk and
+      // retried, because a reminder nobody receives is worse than one sent late.
+      outbox = createOutbox({
+        stateRoot,
+        transportFor: (accountId) => transports.get(accountId),
+        warn,
+        log,
+      })
+      outbox.start()
+      if (loginController !== undefined) {
+        loginController.outboxFlush = (options) => outbox.flush(options)
+        loginController.outboxDropItem = (id) => outbox.drop(id)
+      }
+
       const lock = acquireInstanceLock(stateRoot, { warn })
       if (lock.acquired === false) {
         warn(
@@ -911,6 +929,7 @@ export function apply(ctx, config) {
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
+      outbox?.stop()
       if (lockHeartbeat !== undefined) clearInterval(lockHeartbeat)
       releaseInstanceLock(stateRoot)
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
@@ -1881,11 +1900,22 @@ async function sendChunked(transport, config, message) {
   const gapMs = Number(message.gapMs)
   for (let index = 0; index < chunks.length; index += 1) {
     if (index > 0 && Number.isFinite(gapMs) && gapMs > 0) await sleep(gapMs)
-    await transport.send({
-      conversationId: message.conversationId,
-      type: 'text',
-      text: chunks[index],
-      contextToken: message.contextToken,
-    })
+    const chunk = { conversationId: message.conversationId, type: 'text', text: chunks[index], contextToken: message.contextToken }
+    try {
+      await transport.send(chunk)
+    } catch (error) {
+      // A send that fails here used to lose the text forever: the model had
+      // already written it and nothing held a copy. Queue it instead — the
+      // outbox retries with backoff and survives a restart. Only the first
+      // failing chunk is queued together with the rest, so a reply does not
+      // arrive half-delivered out of order later on.
+      const pending = chunks.slice(index).join('')
+      if (outbox !== undefined) {
+        outbox.enqueue({ accountId: transport.accountId, conversationId: message.conversationId, text: pending, contextToken: message.contextToken })
+        warn(`send failed (${String(error?.message ?? error)}); queued ${pending.length} chars for retry`)
+        return
+      }
+      throw error
+    }
   }
 }

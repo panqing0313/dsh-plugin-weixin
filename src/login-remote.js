@@ -21,6 +21,7 @@ import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist, setAccountLabel, setAccountPaused } from "./account-registry.js";
 import { readSavedConfig, stateDir } from "./state.js";
 import { DEFAULT_RETENTION, directoryUsage } from "./message/retention.js";
+import { readOutbox } from "./message/outbox.js";
 import { remoteMethods } from "./typert-js.js";
 import { readGlobalMemory, listConvMemories, addGlobalFact, removeGlobalFact, clearConvMemory, bondLine, addEvent, removeEvent, completeEvent, saveProfile, formatEvents } from "./memory.js";
 import {
@@ -148,6 +149,9 @@ export class WeixinLoginController extends TypertRemoteService {
          * is missing instead of pretending the feature is broken.
          */
         this.remindersProvider = undefined;
+        /** Set by the plugin's setup: the live outbox. */
+        this.outboxFlush = undefined;
+        this.outboxDropItem = undefined;
     }
 
     /** Start (or resume) a QR login; returns {qrcodeUrl, qrDataUrl, sessionKey, status}. */
@@ -655,6 +659,41 @@ export class WeixinLoginController extends TypertRemoteService {
      * kept. The card shows it under 「统计」 so an operator can tell a year of
      * history from a week without opening a terminal.
      */
+    /**
+     * Undelivered text held by the outbox. A reply that could not be sent is
+     * kept on disk rather than lost; the card lists it so the operator can retry
+     * or drop it instead of wondering whether the bot answered.
+     */
+    outbox() {
+        const store = readOutbox(stateDir());
+        return {
+            items: store.items.map((item) => ({
+                id: item.id,
+                accountId: item.accountId,
+                conversationId: item.conversationId,
+                text: item.text,
+                createdAt: item.createdAt,
+                attempts: item.attempts,
+                lastError: item.lastError,
+            })),
+        };
+    }
+
+    /** Ask the plugin to retry everything now. */
+    async outboxRetry() {
+        const flush = this.outboxFlush;
+        if (typeof flush !== "function") return { ok: false, reason: "outbox-not-wired" };
+        const result = await flush({ force: true });
+        return { ok: true, ...result };
+    }
+
+    /** Drop one queued item by id. */
+    outboxDrop({ id }) {
+        const drop = this.outboxDropItem;
+        if (typeof drop !== "function") return { ok: false, reason: "outbox-not-wired" };
+        return { ok: drop(id) };
+    }
+
     async storage() {
         const live = readSavedConfig();
         return {
@@ -864,4 +903,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

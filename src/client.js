@@ -178,6 +178,35 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journalExport:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/outbox`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "outbox",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/outbox:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/outboxRetry`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "outboxRetry",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/outboxRetry:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/outboxDrop`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "outboxDrop",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/outboxDrop:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/outboxDrop:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/storage`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -2171,6 +2200,7 @@ window.__ModuleLoader__.load({
 		function StatsSection({ ctx, t }) {
 			const [stats, setStats] = react.useState(null);
 			const [storage, setStorage] = react.useState(null);
+			const [outbox, setOutbox] = react.useState(null);
 			const [days, setDays] = react.useState(14);
 			const [error, setError] = react.useState("");
 			const [busy, setBusy] = react.useState(false);
@@ -2187,6 +2217,11 @@ window.__ModuleLoader__.load({
 						setStorage(await callRemote(() => ctx.remote.weixin.storage()));
 					} catch {
 						setStorage(null);
+					}
+					try {
+						setOutbox(await callRemote(() => ctx.remote.weixin.outbox()));
+					} catch {
+						setOutbox(null);
 					}
 				} catch (e) {
 					setError(String(e?.message ?? e));
@@ -2249,6 +2284,39 @@ window.__ModuleLoader__.load({
 			const hourAxis = createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.labelTertiary } },
 				createElement("span", null, "00"), createElement("span", null, "06"), createElement("span", null, "12"), createElement("span", null, "18"), createElement("span", null, "23"));
 
+			const queued = Array.isArray(outbox?.items) ? outbox.items : [];
+			const retryNow = async () => {
+				try {
+					await callRemote(() => ctx.remote.weixin.outboxRetry());
+				} catch {
+					// The refresh below shows whatever is still queued.
+				}
+				load();
+			};
+			const dropOne = async (id) => {
+				try {
+					await callRemote(() => ctx.remote.weixin.outboxDrop({ id }));
+				} catch {
+					// Nothing to do but refresh.
+				}
+				load();
+			};
+			const queuedRows = queued.map((item) =>
+				createElement("div", { key: item.id, style: { display: "flex", gap: 8, alignItems: "baseline", fontSize: 12, lineHeight: "18px", color: C.labelSecondary } },
+					createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, String(item.text ?? "").slice(0, 80)),
+					createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, `${item.attempts ?? 0}\u00d7`),
+					createElement("button", { style: buttonStyleFor(busy), onClick: () => dropOne(item.id) }, t("Drop", "丢弃"))));
+			const outboxPanel = createElement("div", { key: "outbox", style: { display: "flex", flexDirection: "column", gap: 4 } },
+				createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+					createElement("p", { style: { ...captionStyle, margin: 0, flex: "1 1 auto" } }, t("Undelivered messages", "待发送") + ` \u2014 ${queued.length}`),
+					createElement("button", { disabled: queued.length === 0 || busy, style: buttonStyleFor(queued.length === 0 || busy), onClick: retryNow }, t("Retry now", "立即重试"))),
+				queued.length === 0
+					? createElement("p", { style: captionStyle }, t("Everything written so far has been delivered.", "写好的消息都已经发出去了。"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, queuedRows),
+				createElement("p", { style: captionStyle },
+					t("A reply that could not be sent is kept on disk and retried with backoff.",
+						"发不出去的消息会存在本地并按退避重试，DSH 重启也不会丢。")));
+
 			const mb = (bytes) => `${(Number(bytes ?? 0) / 1024 / 1024).toFixed(1)} MB`;
 			const retention = storage?.retention;
 			const storagePanel = storage === null ? null : createElement("div", { key: "storage", style: { display: "flex", flexDirection: "column", gap: 4 } },
@@ -2289,6 +2357,7 @@ window.__ModuleLoader__.load({
 				createElement("p", { style: captionStyle },
 					t("Computed live from the message journal. \u2191 sent by the bot, \u2193 received.",
 						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")),
+				outboxPanel,
 				storagePanel);
 			}
 
