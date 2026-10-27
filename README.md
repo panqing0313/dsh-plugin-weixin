@@ -781,6 +781,9 @@ stdin，从 stdout 逐行读 JSON。任何满足「读一行 `{"wav": "..."}` �
 
 ```bash
 npm test                       # node --test "test/**/*.test.js"
+npm run check                  # 语法 + 打包元数据（CI 先跑这个）
+npm run doctor                 # 十项体检：账号/白名单/锁/积压/日志/版本
+npm run vendor                 # 校验 vendor/ 是否仍等于记录的 tarball
 node bin/login.js              # 真实扫码登录
 ```
 
@@ -825,6 +828,7 @@ npm run release 0.4.0                # 正式发布
 
 ## 文档
 
+- [架构与排障](docs/architecture.md) —— 消息怎么进来、怎么出去，出问题先看哪里
 - [实施方案](docs/plan.md)
 - [移植审查清单](docs/hermes-port-audit.md)
 - [进度记录](docs/progress.md)
