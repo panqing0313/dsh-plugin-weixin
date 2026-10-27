@@ -38,7 +38,7 @@
  * resets a setting the operator already saved.
  *
  * Usage:
- *   node bin/install.mjs [--profile <name>] [--uninstall]
+ *   node bin/install.mjs [--profile <name>] [--uninstall] [--pin]
  * @module dsh-weixin/install
  */
 import fs from 'node:fs'
@@ -51,6 +51,11 @@ function readFlag(name) {
   return i === -1 || i + 1 >= argv.length ? undefined : argv[i + 1]
 }
 const uninstall = argv.includes('--uninstall')
+// C35: copying files is enough to try the plugin once, and never enough for it
+// to survive a restart — the profile's own `pnpm install` puts the published
+// version back. `--pin` makes the install durable: point the profile's
+// dependency at the version being copied and refresh its lockfile.
+const pin = argv.includes('--pin')
 
 const PKG_NAME = 'dsh-plugin-weixin'
 const ROW_ID = 'dsh-weixin'
@@ -400,6 +405,27 @@ for (const [key, raw] of Object.entries(migrated)) {
 fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
 fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
 process.stdout.write(`wrote operator settings → ${settingsPath}\n`)
+
+if (pin) {
+  const { pinProfileDependency } = await import('./lib/profile-pin.mjs')
+  const outcome = pinProfileDependency({
+    profile: profileName,
+    version: ownVersion,
+    dshHome,
+    ok: (line) => process.stdout.write(`${line}\n`),
+    warn: (line) => process.stderr.write(`${line}\n`),
+    note: (line) => process.stdout.write(`  ${line}\n`),
+  })
+  if (outcome.pinned === false && outcome.reason === 'no-profile-package') {
+    process.stdout.write('提示：这个 profile 没有 package.json，只能靠复制 —— 重启后会被覆盖。\n')
+  }
+} else {
+  process.stdout.write(
+    `\n提示：这次只是复制文件。profile 里的依赖仍写着已发布的版本，\n` +
+      `DSH 下次启动执行 pnpm install 时会把这份副本换回那个版本。\n` +
+      `要长期生效，加 --pin 重跑一次（会改 profile 的 package.json 并刷新锁文件）。\n`,
+  )
+}
 
 process.stdout.write(
   `\n完成。接下来：\n` +

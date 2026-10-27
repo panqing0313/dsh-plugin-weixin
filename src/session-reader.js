@@ -132,11 +132,19 @@ export function readAssistantReply({ events, afterSeq = -1 }) {
 
 /**
  * Build a short progress line for a turn that has not settled yet.
+ *
+ * The elapsed time is part of the line because "still thinking" says nothing
+ * about whether the turn is stuck; "已 42 秒" does. It is also what makes a
+ * changed-tool re-announcement distinguishable from a repeat (C16).
+ *
  * @param {readonly string[]} pendingTools
+ * @param {number} [elapsedMs] how long the turn has been running
  */
-export function describePending(pendingTools) {
-  if (pendingTools.length === 0) return 'thinking…'
+export function describePending(pendingTools, elapsedMs = 0) {
+  const seconds = Math.max(0, Math.round(Number(elapsedMs) / 1000))
+  const clock = seconds >= 60 ? `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s` : `${seconds}s`
+  if (pendingTools.length === 0) return `thinking… (${clock})`
   const shown = pendingTools.slice(0, 3).join(', ')
   const more = pendingTools.length > 3 ? ` +${pendingTools.length - 3}` : ''
-  return `running: ${shown}${more}`
+  return `running: ${shown}${more} (${clock})`
 }

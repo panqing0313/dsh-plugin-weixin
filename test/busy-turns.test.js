@@ -266,6 +266,43 @@ test('progress streams: a changed tool set is re-announced, an unchanged one is 
   assert.ok(readNotes.length >= 1, 'a changed tool set must be re-announced')
 })
 
+test('a running tool is reported before the quiet fallback would have fired', async () => {
+  const notes = []
+  const { agent, push } = streamingAgent()
+  const { AgentBridge } = await import('../src/agent-bridge.js')
+  const agents = {
+    get: () => undefined,
+    async create() { return { agent, dispose: async () => {} } },
+  }
+  const ctx = { get: (n) => (n === 'agents' ? agents : undefined) }
+  const { SessionLines } = await import('../src/sessions.js')
+  const bridge = new AgentBridge({
+    ctx,
+    cwd: '/tmp',
+    lines: new SessionLines({ warn: () => {} }),
+    // Thinking would wait 5s; a tool that is actually running is reported at 40ms.
+    progressAfterMs: 5_000,
+    progressToolAfterMs: 40,
+    progressEveryMs: 10_000,
+    pollMs: 10,
+    maxWaitMs: 400,
+  })
+  // The tool call has to be pushed AFTER deliver() has taken its `before`
+  // snapshot, or readAssistantReply filters it out as pre-existing history.
+  const timer = setTimeout(() => {
+    push({ type: 'turn/start', seq: 0, time: Date.now(), data: {} })
+    push({ type: 'tool/call', seq: 1, time: Date.now(), data: { callId: 'c1', name: 'bash' } })
+  }, 20)
+  try {
+    await bridge.deliver({ conversationId: 'p-fast', text: 'go', onProgress: (note) => { notes.push(note) } })
+  } finally {
+    clearTimeout(timer)
+  }
+  assert.ok(notes.length >= 1, 'the tool note must go out long before progressAfterMs')
+  assert.ok(notes.some((note) => String(note).includes('bash')), 'and it names the tool')
+  assert.ok(notes.every((note) => /\(\d+s\)/.test(String(note))), 'every note carries the elapsed clock')
+})
+
 test('a queued message resolves with its own reply; the receipt goes through onProgress', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)

@@ -230,8 +230,11 @@ test('readAssistantReply tracks in-flight tool calls', () => {
   const reply = readAssistantReply({ events })
   assert.deepEqual(reply.pendingTools, ['read'])
   assert.equal(reply.sawTurnBoundary, true)
-  assert.equal(describePending(reply.pendingTools), 'running: read')
-  assert.equal(describePending([]), 'thinking…')
+  assert.equal(describePending(reply.pendingTools), 'running: read (0s)')
+  assert.equal(describePending([]), 'thinking… (0s)')
+  assert.equal(describePending(['bash'], 12_000), 'running: bash (12s)')
+  assert.equal(describePending(['bash'], 125_000), 'running: bash (2m05s)')
+  assert.notEqual(describePending(['bash'], 1_000), describePending(['bash'], 2_000), 'the elapsed clock moves the line')
 })
 
 test('describePending reflects tool changes for streaming progress', () => {

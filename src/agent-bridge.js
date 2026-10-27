@@ -131,6 +131,10 @@ export class AgentBridge {
     this.createTimeoutMs = options.createTimeoutMs ?? 30_000
     this.progressAfterMs = options.progressAfterMs ?? 45_000
     this.progressEveryMs = options.progressEveryMs ?? 60_000
+    // C16: a turn that is visibly running a tool is worth reporting sooner than
+    // one that is only thinking - the user can see the difference in what they
+    // asked for, and 45s of silence during `npm test` reads as a dead bot.
+    this.progressToolAfterMs = options.progressToolAfterMs ?? 8_000
     this.maxWaitMs = options.maxWaitMs ?? 20 * 60_000
     this.pollMs = options.pollMs ?? 1_000
     // Session lines: which of a conversation's sessions the next message goes
@@ -955,7 +959,10 @@ export class AgentBridge {
     const startedAt = Date.now()
     const deadline = startedAt + this.maxWaitMs
     let lastProgressAt = 0
-    let lastProgressNote = ''
+    // Compared as a SET, not as the rendered line: the line now carries the
+    // elapsed clock, so every render differs and "unchanged state is never
+    // repeated" would stop holding if the text were the key.
+    let lastProgressTools = null
     let lateAnnounced = false
 
     while (Date.now() < deadline) {
@@ -991,13 +998,23 @@ export class AgentBridge {
       // every progressEveryMs, so "running: bash" becoming "running: read"
       // reaches the user while one long unchanged tool never spams.
       if (onProgress) {
-        const note = describePending(reply.pendingTools)
+        const elapsed = Date.now() - startedAt
+        const note = describePending(reply.pendingTools, elapsed)
+        // Two thresholds, whichever comes first: a turn that is only thinking
+        // waits for progressAfterMs, one that is visibly running a tool is
+        // reported at progressToolAfterMs so `npm test` does not look like a
+        // dead bot for 20 seconds.
+        const toolRunning = reply.pendingTools.length > 0
+        const firstAfterMs = toolRunning && this.progressToolAfterMs > 0
+          ? Math.min(this.progressAfterMs, this.progressToolAfterMs)
+          : this.progressAfterMs
+        const toolKey = reply.pendingTools.join(',')
         const due = lastProgressAt === 0
-          ? Date.now() - startedAt >= this.progressAfterMs
-          : note !== lastProgressNote && Date.now() - lastProgressAt >= this.progressEveryMs
+          ? elapsed >= firstAfterMs
+          : toolKey !== lastProgressTools && Date.now() - lastProgressAt >= this.progressEveryMs
         if (due) {
           lastProgressAt = Date.now()
-          lastProgressNote = note
+          lastProgressTools = toolKey
           await onProgress(note)
         }
       }
