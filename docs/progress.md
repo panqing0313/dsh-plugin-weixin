@@ -6,7 +6,7 @@
 
 - **版本**：`0.9.8`，2026-10-27 已发布（npm `latest`、tag `v0.9.8`、GitHub release 三者齐全；注册表 `dist.shasum` `dbb8b5b8…` / `dist.integrity` `sha512-6EQnqzkp…`、`gitHead` `866a96b` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
 - **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
-- **测试**：`npm test` → `tests 560 / pass 560 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；**0.9.8 已发布**（发布记录见文末）。本轮再涨 1 条：发版脚本输出写入的回归（`writeOut` 吞掉 pty 消失的 EIO）。
+- **测试**：`npm test` → `tests 630 / pass 630 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；**0.9.8 已发布**（发布记录见文末）。本轮再涨 1 条：发版脚本输出写入的回归（`writeOut` 吞掉 pty 消失的 EIO）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -2627,3 +2627,44 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - 根因：`npm publish` 只在真 pty 上打印 2FA 链接，所以发版要跑在 `script -q /dev/null` 里；**这个 wrapper 会在某个时刻关掉 pty**，之后任何 `process.stdout.write` 抛 `EIO` 就把整个脚本带走。上一轮只给 `say()` 加了 try/catch，而 `step/ok/note/warn/die` 与结尾的输出仍是裸写。
 - 修法（`45bb421` 之后、本轮再补）：新增 `export function writeOut(text)`，所有输出（`step/ok/note/warn/die/say`、头部与结尾）统一走它；pty 没了只是少几行日志，发布流程继续跑完第 8/9 步。`test/release-lockfile.test.js` 加了一条回归：把 `process.stdout.write` 换成抛 `EIO` 的函数，`writeOut` 必须不抛。
 - 教训：**发版脚本里「不可恢复的动作」之前的每一步都要按顺序做完、并把顺序写死**；把 tag 提到 publish 之后（0.9.7 的修法）只解决「发布了但没打 tag」，没解决「tag 了但没钉 profile」——输出层不致命才是根治。
+
+
+## 审计清单 A–F 推进（2026-10-27，第 1–12、24、28、29、32、36 条 + 13 的入口侧）
+
+用户给了 36 条按 A–F 分组的审计项，要求「一条条过、一条条做」。已完成并各自提交（全量测试每步都绿）：
+
+| # | 问题 | 落地 |
+|---|---|---|
+| 1 | 长轮询一次 rejection 杀宿主 | `#loop` 内 catch → 计数 → 退避（2s/30s）→ 继续；`start()` 兜住整个循环；`test/inbound-resilience.test.js` 2 条 |
+| 2 | 链接抓取无超时/无私网过滤/串行 | 统一 deadline、最多 3 跳、逐跳校验 redirect、私网与元数据地址拒绝、含凭据拒绝、5 分钟缓存、并发三个链接 |
+| 3 | 状态文件非原子写、无迁移 | `src/atomic.js`（temp + fsync + rename），所有 JSON 存储改走它，带 `schemaVersion` |
+| 4 | 状态目录无限增长 | `src/message/retention.js` 按文件名日期清理五类；`/stats` 显示占用；保留天数可配 |
+| 5 | 多实例无跨进程锁 | `src/instance-lock.js`，pid + 30s 心跳，90s 过期接管，第二个实例只警告不阻断 |
+| 6 | 出站队列只在内存 | `src/message/outbox.js`，磁盘持久化、按会话保序、指数退避、上限 50、卡片可重试/丢弃 |
+| 7 | 无按发送者限流、队列无上限 | `src/message/sender-limit.js`（滑动窗口 20/分钟，每窗口只提示一次）+ 单会话排队上限 6 |
+| 8 | 无 Channel 抽象 | `src/channel.js`：`sendText`/`sendMedia`/`setTyping` + capabilities，三个发送点统一 |
+| 9 | 命令硬编码分支 | `src/sessions.js` 的 `COMMANDS` 表统一解析/帮助/分发 |
+| 10 | 无扩展 Hook | `src/hooks.js` 五个订阅点，监听器抛错不影响消息 |
+| 11 | 配置作用域只有全局+账号 | `src/config-scope.js` 会话级覆盖 15 个行为键，安全键永不可覆盖 |
+| 12 | 状态层散落 | `src/state-layout.js` 一张表定义 16 项状态，清理/统计/文档都引用它 |
+| 13 | 两个巨型文件 | 入口侧拆出 `src/outbound.js`（`index.js` 2000 → 1891 行）；`client.js` 未拆（见「已知缺口」） |
+| 24 | 无 doctor | `bin/doctor.mjs` 十项检查（现 11 项，含审计链） |
+| 28 | 无 CI | `.github/workflows/ci.yml`，Node 20/22 |
+| 29 | 无语法/打包门槛 | `bin/check.mjs`（`npm run check`） |
+| 32 | vendor 无漂移检测 | `vendor/openclaw-weixin.manifest.json`（26 文件 sha256）+ `npm run vendor` |
+| 36 | 文档缺架构与排障 | `docs/architecture.md` |
+
+随后继续做了（同样逐条提交）：
+
+| # | 落地 |
+|---|---|
+| 23 | `src/metrics.js` 计数器（收到/拒绝/发出/回合 + outbox 积压）经 hook 总线接线，统计页签显示，带 uptime |
+| 25 | `src/credentials.js`：所有日志经 `redactSecrets` 掩码；启动时把账号文件与 config.json 强制 0600 |
+| 26 | `src/message/fence.js`：用户文本（以及抓来的网页正文）里的 `weixin_*` 标签被中和，无法伪造/闭合我们的提示块 |
+| 27 | 审计日志哈希链（`prev` + `h`，按天一条链），`verifyAuditChain()` 供 doctor 检查；旧行算 `unchained` 不算篡改 |
+| 32 | 见上 |
+| 21 | `openThreadLines`：主动开口时用「未完成的事件 / 人物小传 / 会话摘要」挑话题，且明确要求不要复述 |
+| 34 | 人设包导出/导入（`weixin-persona-pack` v1），只新增不覆盖，卡片有导出/粘贴导入 |
+| 19 | `src/tokens.js` 估算 + `memoryGlobalMaxTokens`（0 = 仅按字符），记忆块按 token 也按字符双限 |
+
+未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、30 混沌/长稳、31 发布 provenance、33 i18n 抽取、35 一键安装。
