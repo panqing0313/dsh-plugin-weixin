@@ -30,6 +30,7 @@ import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
 import { createMetrics } from './metrics.js'
 import { ensureSecretModes, redactSecrets } from './credentials.js'
+import { neutralizeTags } from './message/fence.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
@@ -1514,7 +1515,10 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     //    message — the agent gets a one-line reason instead, and the user's
     //    question still reaches the model. Best-effort by design: a dead host
     //    costs a bounded fetch, not the turn.
-    let prompt = message.text
+    // Untrusted text first, and only it: any `weixin_` tag a user types is
+    // neutralised here, before the plugin starts prepending blocks of its own
+    // (src/message/fence.js). Later prepends are trusted and never touched.
+    let prompt = neutralizeTags(message.text)
     const linkUrls = config.readLinks === true ? extractUrls(message.text) : []
     if (linkUrls.length > 0) {
       log(`fetching ${linkUrls.length} link(s) from inbound message ${message.id}`)
@@ -1528,7 +1532,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         ),
       )
       const linkBlock = describeLinkResults(linkResults)
-      if (linkBlock !== undefined) prompt = `${message.text}\n\n${linkBlock}`
+      // Fetched page text is as untrusted as the message itself: a page can
+      // contain our tag syntax just as easily as a user can.
+      if (linkBlock !== undefined) prompt = `${neutralizeTags(message.text)}\n\n${neutralizeTags(linkBlock)}`
     }
     if (Array.isArray(message.media) && message.media.length > 0) {
       // `transport.cdnBaseUrl` is already normalized at construction, so only
