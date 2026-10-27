@@ -2687,6 +2687,6 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 **16 流式进度**：`describePending(pendingTools, elapsedMs)` 现在带上已用时间（`running: bash (12s)`、`(2m05s)`），第一次进度提示分两种触发：只是「在想」时等 `progressAfterMs`（默认 45s → **20s**），有工具真的在跑时只用 `progressToolAfterMs`（新配置，默认 8s）——「跑 npm test 时 45 秒静默」不再像死掉。之后仍是「工具集变化 + 至少隔 progressEveryMs」才重发。测试：core +2 条断言、busy-turns +1（5s 的静默阈值下，工具在 40ms 提示、且每行带秒数）。
 
-**35 一键安装**：新增 `bin/lib/profile-pin.mjs`（`pinProfileSpec` 文本级改写 + `pinProfileDependency({profile, version, dshHome, spawn})`，release.mjs 改成从这里 import 并 re-export），`bin/install.mjs` 新增 `--pin`：装完把 profile 的 `dependencies` 指向 `^<当前版本>` 并用 App 自带 pnpm 刷锁文件；不带 `--pin` 时明确打印「重启会被换回已发布版本」。测试：`test/profile-pin.test.js` 4 条（只改 caret 范围且不重排缩进、`file:` 原样不动、pin 后按注入的 spawn 刷锁、无 package.json 只警告、刷锁失败仍保留改动并提示）。
+**35 一键安装**：新增 `bin/lib/profile-pin.mjs`（`pinProfileSpec` 文本级改写 + `pinProfileDependency({profile, version, dshHome, spawn})`，release.mjs 改成从这里 import 并 re-export），`bin/install.mjs` 新增 `--pin`：装完把 profile 的 `dependencies` 指向 `^<当前版本>` 并用 App 自带 pnpm 刷锁文件；不带 `--pin` 时明确打印「会不会被换回已发布版本，取决于 profile 声明的版本是否与装进去的一致」。**坑**：`--pin` 只对已发布版本成立（源码版本号没发布时 pin 过去 pnpm 找不到包）；本仓库长期靠「装临时副本」验证未发布改动，因为锁与 package.json 一致时 pnpm 不覆盖本地改过的包文件 —— 两条都写进 README 了。测试：`test/profile-pin.test.js` 4 条（只改 caret 范围且不重排缩进、`file:` 原样不动、pin 后按注入的 spawn 刷锁、无 package.json 只警告、刷锁失败仍保留改动并提示）。
 
 未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。

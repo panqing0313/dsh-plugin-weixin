@@ -102,12 +102,18 @@ node bin/install.mjs --uninstall
 同时会把两个**可选**依赖（`qrcode-terminal`、`silk-wasm`）搬到 profile 的 `node_modules`——
 不搬的话它们只在这个仓库里可见，装到 profile 后会静默降级。
 
-> **注意：这份安装会活到下一次 App 启动。** 桌面端每次启动都会在 `<profile>/` 里跑一次
-> `pnpm install`，按 `package.json` + `pnpm-lock.yaml` 里声明的版本**从 npm 重装插件**——
-> 手工复制进去的源码会被整个覆盖（新增的文件直接消失，表现为「重启前后功能不一样」）。
-> 所以：**当场验证**用这个脚本；**装好并长期生效**请把 `<profile>/package.json` 的
-> `dsh-plugin-weixin` 指向已发布版本（如 `^0.9.5`）并同步锁文件，或者直接用设置卡的
-> 「插件」面板装 npm 上那一份。
+> **注意：这份安装能活多久，取决于 profile 里声明的版本。**
+>
+> - 声明的范围和装进去的版本**一致**时，App 启动时的 `pnpm install` 认为无事可做，副本保留（本地改过的文件不会被覆盖）；
+> - 声明的范围**变了**（例如 profile 还写着 `^0.9.3`、你却装进了 0.9.5），它会从 registry 装回声明范围里的版本，手工复制的源码整个被覆盖——新增的文件直接消失，表现就是「重启前后功能不一样」，侧边栏入口就是这么消失过一次。
+>
+> 想让安装长期稳定，加 `--pin`：
+>
+> ```bash
+> node bin/install.mjs --profile desktop --pin
+> ```
+>
+> `--pin` 把 profile 的 `dependencies` 指向当前这份代码的版本（`^<version>`），并用 App 自带的那份 pnpm 刷新锁文件。它只在**已发布版本**上有意义：源码版本号还没发布时，pin 过去只会让 pnpm 找不到包——那种情况先用临时副本验证，发版之后再 `--pin`。非 caret 的声明（比如 `file:...tgz`）不会被改写，只提示。
 
 重启 DSH 后生效。
 
