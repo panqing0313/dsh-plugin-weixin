@@ -336,6 +336,7 @@ export function buildRecallBlock(hits, { now } = {}) {
     return [
         '<weixin_recall>',
         '以下是从本地历史消息里按关键词检索到的原文片段，可能和当前问题相关，也可能只是词面巧合；用它补充细节，不要强行引用：',
+        '顺序是按相关度排的，不是按时间；同一个话题前后说法不一致时，以时间较晚的那条为准（旧的是当时的说法，新的是现在的）。',
         ...lines,
         '</weixin_recall>',
     ].join('\n')

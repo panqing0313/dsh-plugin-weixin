@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createMemorySummarizer } from '../src/memory-summarizer.js'
-import { readConvMemory, readGlobalMemory, setConvSummary, setDigest } from '../src/memory.js'
+import { addGlobalFact, readConvMemory, readGlobalMemory, setConvSummary, setDigest } from '../src/memory.js'
 import { appendJournal } from '../src/message/journal.js'
 
 let root
@@ -260,4 +260,28 @@ test('the memory model route rides along to the side session', async () => {
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(bridge.calls.length, 1)
   assert.deepEqual(bridge.calls[0].route, route)
+})
+
+test('a correction in the reply replaces the fact it names, instead of joining it', async () => {
+  const bridge = fakeBridge()
+  seedJournal()
+  addGlobalFact(root, ACCOUNT, '用户住在北京', { warn: () => {}, now: 1000 })
+  const sum = summarizer(bridge, { memoryEnabled: true, memorySummaryTurns: 1 })
+  sum.afterTurn(ACCOUNT, CONV)
+  await Promise.resolve()
+  assert.equal(bridge.calls.length, 1)
+  assert.match(bridge.calls[0].prompt, /supersedes/)
+  assert.match(bridge.calls[0].prompt, /用户住在北京/)
+  bridge.settleAll(JSON.stringify({
+    summary: '聊到搬家',
+    facts: [{ text: '用户搬到杭州了', supersedes: ['用户住在北京'] }],
+    events: [],
+    profile: {},
+  }))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const store = readGlobalMemory(root, ACCOUNT, { warn: () => {} })
+  const texts = store.facts.map((fact) => fact.text)
+  assert.ok(texts.includes('用户搬到杭州了'), 'the new value is stored')
+  assert.ok(!texts.includes('用户住在北京'), 'and the old one is gone, not sitting beside it')
+  assert.ok(store.superseded.some((entry) => entry.text === '用户住在北京'), 'the replaced text is kept as history')
 })

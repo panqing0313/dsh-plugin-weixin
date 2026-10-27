@@ -724,3 +724,19 @@ test('a group chat is silent by default, and answers only when addressed once en
     await waitFor(() => sessionsOpened.length > 0, 'an addressed group message reaches the agent')
   }, { groupChatEnabled: true })
 })
+
+test('a correction replaces the fact it names, and /memory shows what changed', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/remember 我住在北京', 'm1')
+    await waitFor(() => fake.outbound.length >= 1, 'first /remember answered')
+    fake.deliver('/remember 我住在北京 → 我搬到杭州了', 'm2')
+    await waitFor(() => fake.outbound.length >= 2, 'correction answered')
+    fake.deliver('/memory', 'm3')
+    await waitFor(() => fake.outbound.length >= 3, '/memory answered')
+    const last = fake.outbound.at(-1).text
+    assert.match(last, /我搬到杭州了/)
+    assert.ok(!last.includes('1. 我住在北京'), 'the old fact is gone from the numbered list')
+    assert.match(last, /改过的说法/)
+    assert.match(last, /我住在北京 → 我搬到杭州了/)
+  })
+})

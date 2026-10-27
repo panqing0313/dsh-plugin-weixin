@@ -1310,9 +1310,25 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       },
       remember: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'
-        if (arg === undefined || String(arg).trim() === '') return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏'
-        const result = addGlobalFact(stateRoot, accountId, arg, { warn, maxFacts: modeConfig().memoryGlobalMaxFacts })
-        if (result.added === true) return `已记住：${arg}\n（/memory 可以查看全部，/forget <编号> 可以删除）`
+        if (arg === undefined || String(arg).trim() === '') {
+          return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏\n改口用箭头：/remember 我搬到杭州了 → 我住在杭州'
+        }
+        // Explicit correction (C18): `旧 → 新` replaces the old fact instead of
+        // leaving both for the model to choose from.
+        const arrow = String(arg).match(/^(.+?)\s*(?:→|->|=>)\s*(.+)$/)
+        const text = arrow === null ? String(arg).trim() : arrow[2].trim()
+        const supersedes = arrow === null ? [] : [arrow[1].trim()]
+        const result = addGlobalFact(stateRoot, accountId, text, {
+          warn,
+          maxFacts: modeConfig().memoryGlobalMaxFacts,
+          supersedes,
+        })
+        if (result.added === true) {
+          const replaced = Array.isArray(result.superseded) && result.superseded.length > 0
+            ? `\n（原来的「${result.superseded.join('」「')}」已作废）`
+            : ''
+          return `已记住：${text}${replaced}\n（/memory 可以查看全部，/forget <编号> 可以删除）`
+        }
         if (result.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
         if (result.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
         return '没存上，写入记忆文件失败了（详见日志）。'
@@ -1353,6 +1369,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         parts.push(store.facts.length === 0
           ? '长期记忆：还没有，用 /remember 教我。'
           : ['长期记忆：', ...store.facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
+        if (store.superseded.length > 0) {
+          parts.push(['改过的说法：', ...store.superseded.slice(-5).map((entry) => `- ${entry.text} → ${entry.by}`)].join('\n'))
+        }
         parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
         parts.push(`最近消息窗口：${recent.length} 条`)
         return parts.join('\n\n')

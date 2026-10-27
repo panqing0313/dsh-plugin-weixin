@@ -60,7 +60,11 @@ const unique = (items) => [...new Set(items.map((item) => String(item).trim()).f
  * summary entirely.
  *
  * @param {string} text
- * @returns {{ summary: string, facts: string[], events: {text: string, when: string}[], profile: object } | undefined}
+ * Each fact may also name the fact it replaces ("supersedes"): that is how a
+ * correction reaches the store, instead of the new value sitting next to the old
+ * one for the model to pick between (C18).
+ *
+ * @returns {{ summary: string, facts: { text: string, supersedes: string[] }[], events: {text: string, when: string}[], profile: object } | undefined}
  */
 export function parseMemoryReply(text) {
     const source = String(text ?? '').trim()
@@ -76,11 +80,18 @@ export function parseMemoryReply(text) {
     }
     if (parsed === null || typeof parsed !== 'object') return undefined
     const summary = typeof parsed.summary === 'string' ? parsed.summary.trim().slice(0, 1200) : ''
-    const facts = Array.isArray(parsed.facts)
-        ? unique(parsed.facts.map((entry) => (typeof entry === 'string' ? entry : entry?.text)))
-            .filter((entry) => entry.length <= 120)
-            .slice(0, MAX_EXTRACTED_FACTS)
-        : []
+    const seenFacts = new Set()
+    const facts = []
+    for (const entry of Array.isArray(parsed.facts) ? parsed.facts : []) {
+        const text = String((typeof entry === 'string' ? entry : entry?.text) ?? '').trim().slice(0, 120)
+        if (text === '' || seenFacts.has(text.toLowerCase())) continue
+        seenFacts.add(text.toLowerCase())
+        const supersedes = Array.isArray(entry?.supersedes)
+            ? entry.supersedes.map((old) => String(old ?? '').trim()).filter((old) => old !== '').slice(0, 3)
+            : []
+        facts.push(supersedes.length > 0 ? { text, supersedes } : { text, supersedes: [] })
+        if (facts.length >= MAX_EXTRACTED_FACTS) break
+    }
     const events = Array.isArray(parsed.events)
         ? parsed.events
             .map((entry) => (entry !== null && typeof entry === 'object'
@@ -197,13 +208,15 @@ export function createMemorySummarizer({ bridge, stateRoot, config, route, logge
                 '你要为一段微信聊天维护长期记忆。下面是最近的对话记录，以及已经记下的东西。',
                 '只输出一个 JSON 对象，不要代码块、不要解释。字段：',
                 '{"summary": "这段会话的摘要，包含正在聊的话题、正在做的事、已经决定的事",',
-                ' "facts": ["值得长期记住的关于对方的事实，最多三条；没有就给空数组"],',
+                ' "facts": [{"text": "值得长期记住的关于对方的事实，最多三条",',
+                '            "supersedes": ["如果这条推翻了【已经记下的】里的某条，把那条的原文抄在这里；没有就空数组"]}],',
                 ' "events": [{"text": "约定要做或需要提醒的事", "when": "YYYY-MM-DD，没有明确日期就填空字符串"}],',
                 ' "profile": {"call": "对方希望怎么被称呼，没有就空字符串",',
                 '             "schedule": "对方作息的一句话，例如 早上七点起、夜里两点睡",',
                 '             "likes": ["喜欢的东西"], "dislikes": ["不喜欢或忌口的东西"],',
                 '             "dates": [{"label": "生日", "date": "YYYY-MM-DD"}]}}',
                 `摘要不超过 ${Math.min(400, maxChars)} 字。facts 只写对方本人身上、以后还用得上的信息，不要把这次的闲聊复述一遍。`,
+                '如果对方改变了以前说过的设定（换了工作、改了称呼、不再忌口、搬家了、分手了……），新的那条把旧的写进 supersedes，别让两条互相矛盾的记录同时存在。',
                 '没有内容可填的字段留空字符串或空数组，不要编造。',
                 '',
                 '【已经记下的】',
@@ -239,7 +252,15 @@ export function createMemorySummarizer({ bridge, stateRoot, config, route, logge
             }
             const maxFacts = Number(current.memoryGlobalMaxFacts) || DEFAULT_MEMORY_GLOBAL_MAX_FACTS
             for (const fact of extracted.facts) {
-                addGlobalFact(stateRoot, accountId, fact, { warn: errLog, weight: EXTRACTED_FACT_WEIGHT, maxFacts })
+                const result = addGlobalFact(stateRoot, accountId, fact.text, {
+                    warn: errLog,
+                    weight: EXTRACTED_FACT_WEIGHT,
+                    maxFacts,
+                    supersedes: fact.supersedes,
+                })
+                if (Array.isArray(result?.superseded) && result.superseded.length > 0) {
+                    log(`memory: replaced ${result.superseded.length} earlier fact(s) with "${fact.text}" for ${accountId}`)
+                }
             }
             for (const event of extracted.events) {
                 addEvent(stateRoot, accountId, event, { warn: errLog })

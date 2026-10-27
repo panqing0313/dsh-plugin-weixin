@@ -45,7 +45,7 @@ after(() => {
 
 test('global facts: add, read back, duplicate refused', () => {
 	const dir = join(root, 'global')
-	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0 })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [] })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '用户对花生过敏', { warn }), { added: true })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '  用户对花生过敏  ', { warn }), { added: false, reason: 'duplicate' })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '', { warn }), { added: false, reason: 'empty' })
@@ -179,7 +179,7 @@ test('a broken memory file degrades to empty, not a throw', () => {
 	mkdirSync(join(dir, 'memory'), { recursive: true })
 	writeFileSync(join(dir, 'memory', 'global-b@im.bot.json'), '{ broken')
 	warns.length = 0
-	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0 })
+	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [] })
 	assert.ok(warns.length === 1, `warned once: ${JSON.stringify(warns)}`)
 })
 
@@ -338,4 +338,44 @@ test('a token budget stops the memory list before a character budget would', () 
   assert.ok(estimateTokens(byTokens) <= estimateTokens(byChars), 'the token cap must not grow the block')
   assert.ok(byTokens.length < byChars.length, 'Chinese text hits the token cap well before the character cap')
   assert.equal(buildMemoryBlock({ global, conv: undefined, recent: [], now: 0, maxChars: 5000, maxTokens: 0 }).length, byChars.length, 'zero means no token cap')
+})
+
+test('a fact can replace the one it contradicts, and the old text is kept as history', () => {
+	const dir = join(root, 'supersede')
+	addGlobalFact(dir, 'a@im.bot', '用户住在北京', { warn, now: 1000 })
+	const result = addGlobalFact(dir, 'a@im.bot', '用户搬到杭州了，住在杭州', { warn, now: 2000, supersedes: ['用户住在北京'] })
+	assert.equal(result.added, true)
+	assert.deepEqual(result.superseded, ['用户住在北京'])
+	const store = readGlobalMemory(dir, 'a@im.bot', { warn })
+	assert.deepEqual(store.facts.map((fact) => fact.text), ['用户搬到杭州了，住在杭州'])
+	assert.deepEqual(store.superseded, [{ text: '用户住在北京', at: 2000, by: '用户搬到杭州了，住在杭州' }])
+})
+
+test('supersede matching is loose about wording and keeps the newest fact only', () => {
+	const dir = join(root, 'supersede-loose')
+	addGlobalFact(dir, 'b@im.bot', '用户不喜欢吃香菜', { warn, now: 1000 })
+	addGlobalFact(dir, 'b@im.bot', '用户讨厌香菜', { warn, now: 1100 })
+	// The new text is longer than the old one, so a substring match in either
+	// direction is what makes a paraphrase still land.
+	const result = addGlobalFact(dir, 'b@im.bot', '用户现在能吃香菜了', { warn, now: 2000, supersedes: ['不喜欢吃香菜'] })
+	assert.equal(result.added, true)
+	assert.deepEqual(result.superseded, ['用户不喜欢吃香菜'])
+	const texts = readGlobalMemory(dir, 'b@im.bot', { warn }).facts.map((fact) => fact.text)
+	assert.ok(texts.includes('用户讨厌香菜'), 'an unrelated fact with no matching words survives')
+	assert.ok(!texts.includes('用户不喜欢吃香菜'))
+})
+
+test('superseding on a full store still works: the correction is not refused by the cap', () => {
+	const dir = join(root, 'supersede-cap')
+	for (let index = 0; index < 3; index += 1) {
+		addGlobalFact(dir, 'c@im.bot', `第 ${index} 条事实`, { warn, now: 1000 + index, maxFacts: 3 })
+	}
+	const blocked = addGlobalFact(dir, 'c@im.bot', '第 4 条', { warn, now: 2000, maxFacts: 3 })
+	assert.deepEqual(blocked, { added: false, reason: 'cap' })
+	const result = addGlobalFact(dir, 'c@im.bot', '第 0 条事实（已更新）', { warn, now: 2000, maxFacts: 3, supersedes: ['第 0 条事实'] })
+	assert.equal(result.added, true)
+	const texts = readGlobalMemory(dir, 'c@im.bot', { warn }).facts.map((fact) => fact.text)
+	assert.equal(texts.length, 3)
+	assert.ok(texts.includes('第 0 条事实（已更新）'))
+	assert.ok(!texts.includes('第 0 条事实'))
 })

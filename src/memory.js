@@ -22,6 +22,8 @@ import { atomicWriteJson } from './atomic.js';
 import { readJournal } from './message/journal.js';
 
 export const DEFAULT_MEMORY_GLOBAL_MAX_FACTS = 30;
+/** How many replaced facts to keep for display, newest last (C18). */
+export const DEFAULT_SUPERSEDED_MAX = 20
 export const DEFAULT_MEMORY_GLOBAL_MAX_CHARS = 1500;
 export const DEFAULT_MEMORY_CONV_MAX_CHARS = 1200;
 export const DEFAULT_MEMORY_RECENT_TURNS = 5;
@@ -156,6 +158,15 @@ export function readGlobalMemory(stateRoot, accountId, { warn = noopWarn, now = 
     const parsed = readJsonSafe(globalMemoryPath(stateRoot, accountId), {}, warn, 'global memory');
     return {
         facts: sanitizeFacts(parsed.facts),
+        // Facts that were explicitly replaced (C18). Kept so "I said it changed"
+        // is visible in /memory instead of the old value silently vanishing, and
+        // so an operator can tell a correction from a deletion.
+        superseded: Array.isArray(parsed.superseded)
+            ? parsed.superseded
+                .filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.text === 'string')
+                .slice(-DEFAULT_SUPERSEDED_MAX)
+                .map((entry) => ({ text: entry.text, at: Number(entry.at) || 0, by: typeof entry.by === 'string' ? entry.by : '' }))
+            : [],
         profile: sanitizeProfile(parsed.profile),
         events: sanitizeEvents(parsed.events, now),
         digest: typeof parsed.digest === 'string' ? parsed.digest.trim() : '',
@@ -175,22 +186,53 @@ export function addGlobalFact(stateRoot, accountId, text, {
     maxFacts = DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
     maxChars = DEFAULT_MEMORY_GLOBAL_MAX_CHARS,
     weight = DEFAULT_FACT_WEIGHT,
+    supersedes = [],
 } = {}) {
     const trimmed = String(text ?? '').trim();
     if (trimmed === '') return { added: false, reason: 'empty' };
     const memory = readGlobalMemory(stateRoot, accountId, { warn });
-    const key = trimmed.toLowerCase().replace(/\s+/g, ' ');
-    if (memory.facts.some((fact) => fact.text.toLowerCase().replace(/\s+/g, ' ') === key)) {
-        return { added: false, reason: 'duplicate' };
+    const key = normalizeFact(trimmed);
+    // "I changed my mind" (C18). A model-extracted fact may name the fact it
+    // contradicts; those are replaced in place instead of piling up beside the
+    // old one, where a later injection would hand the model both versions and
+    // let it pick. Matching is deliberately loose (substring either way) so a
+    // paraphrase of the old text still lands.
+    const wanted = (Array.isArray(supersedes) ? supersedes : []).map(normalizeFact).filter((entry) => entry !== '');
+    const replaced = [];
+    if (wanted.length > 0) {
+        memory.facts = memory.facts.filter((fact) => {
+            const factKey = normalizeFact(fact.text);
+            const hit = wanted.some((entry) => factKey.includes(entry) || entry.includes(factKey));
+            if (hit) replaced.push(fact.text);
+            return hit === false;
+        });
     }
-    if (memory.facts.length >= maxFacts) return { added: false, reason: 'cap' };
+    if (memory.facts.some((fact) => normalizeFact(fact.text) === key)) {
+        // Already recorded (and, if it was superseded above, it still counts as
+        // recorded - the correction is what changed).
+        return replaced.length > 0
+            ? { added: false, reason: 'duplicate', superseded: replaced }
+            : { added: false, reason: 'duplicate' };
+    }
+    if (memory.facts.length >= maxFacts) return replaced.length > 0 ? { added: false, reason: 'cap', superseded: replaced } : { added: false, reason: 'cap' };
     if (memory.facts.reduce((sum, fact) => sum + fact.text.length, 0) + trimmed.length > maxChars) {
         return { added: false, reason: 'cap' };
     }
     memory.facts.push({ text: trimmed, at: now, weight: clampWeight(weight) });
+    if (replaced.length > 0) {
+        memory.superseded = [
+            ...(Array.isArray(memory.superseded) ? memory.superseded : []),
+            ...replaced.map((text) => ({ text, at: now, by: trimmed })),
+        ].slice(-DEFAULT_SUPERSEDED_MAX);
+    }
     return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
-        ? { added: true }
+        ? { added: true, ...(replaced.length > 0 ? { superseded: replaced } : {}) }
         : { added: false, reason: 'write-failed' };
+}
+
+/** Comparison key for a fact: case- and whitespace-insensitive. */
+function normalizeFact(text) {
+    return String(text ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 /** Remove by 1-based index (the numbering /forget and /memory show). */
