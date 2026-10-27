@@ -538,6 +538,17 @@ The "Stats" tab of the settings card reports send/receive volume for the last 7/
 and the most active conversations. Every number is **computed on the spot** from the local message journal (no caching, no upload), so it is always consistent with the "Message journal" tab.
 `test/stats.test.js` and the stats cases in `test/login-remote.test.js` guard this behavior.
 
+### Daily digest and memory review (digestEnabled · memoryReviewEnabled)
+
+Two messages that arrive without you asking:
+
+- **Daily digest** (default 每天 21:00): recounts today's journal — how many messages in and out, which conversation was busiest, which events are still open — and a side session writes three to five natural sentences around it. **Every number comes from the journal**, and the prompt forbids inventing conversations that did not happen.
+- **Memory review** (default 每周日 20:00): lists what it remembers by number (profile, digest, up to eight facts) and asks whether any of it is wrong. Corrections stay the two commands you already have: `/remember old → new` and `/forget <n>`. **The review itself never edits memory** — automatic corrections exist, but letting a model rewrite what it believes about you at midnight is a different thing entirely.
+
+Both go to the conversation spoken in most recently, both send exactly one message (not three bubbles), and a failure leaves one log line and nothing else. The times use the `/subscribe` vocabulary (`每天 21:00`, `每周五 18:30`); an unparseable spec means no report that day, with a line in the log. Turn them off with `digestEnabled: false` / `memoryReviewEnabled: false`.
+
+`test/reports.test.js` pins the clock (only two seconds of slack, only what is due fires, a throw does not stop the next round) and the two prompts' hard constraints.
+
 ### Backups and restore (backupEnabled)
 
 Retention **deletes** old files (journal 180 days, audit 90, media 30, …) and until now nothing kept a

@@ -24,6 +24,7 @@ import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfi
 import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { DEFAULT_KEEP, createBackup } from './backup.js'
+import { DEFAULT_DIGEST_WHEN, DEFAULT_REVIEW_WHEN, ReportScheduler, buildDigestPrompt, buildReviewPrompt, describeReport, pickConversation } from './message/reports.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { createOutbox } from './message/outbox.js'
 import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outbound.js'
@@ -231,6 +232,10 @@ export const Config = z.object({
   retentionLogsDays: z.number().min(0).default(30).description('vendor 每日日志保留天数；0 表示不清理。'),
   backupEnabled: z.boolean().default(true).description('每天自动备份一次状态目录（记忆、人设、订阅、流水、账号）；备份在 <状态目录>/backups，含账号 token，别外传。'),
   backupKeep: z.number().min(1).max(60).default(DEFAULT_KEEP).description('保留最近几份自动备份；更旧的会被删掉。'),
+  digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
+  digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
+  memoryReviewEnabled: z.boolean().default(true).description('每周到点发一条记忆核对：「我记住的这些还准吗」，你回 /remember 或 /forget 纠正。'),
+  memoryReviewWhen: z.string().default(DEFAULT_REVIEW_WHEN).description('记忆核对时间，形如「每周日 20:00」。'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
   ),
@@ -436,6 +441,7 @@ export function apply(ctx, config) {
     let subscriptionScheduler
     let proactiveScheduler
     let retentionTimer
+    let reportScheduler
     const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
@@ -638,6 +644,57 @@ export function apply(ctx, config) {
       firstSweep.unref?.()
       retentionTimer = setInterval(sweep, SWEEP_INTERVAL_MS)
       retentionTimer.unref?.()
+
+      // 日报与记忆核对: one clock, two kinds of report. Both write through a side
+      // session so they cost the cheap route, and both send exactly one message —
+      // a report that spams three bubbles at 21:00 is worse than none.
+      reportScheduler = new ReportScheduler({
+        config: () => withSavedConfig(config),
+        warn,
+        fire: async (kind) => {
+          const live = withSavedConfig(config)
+          const accountId = [...transports.keys()].find((id) => pickConversation(listConvMemories(stateRoot, id)) !== undefined)
+          if (accountId === undefined) {
+            warn(`${kind} report skipped: no conversation has ever been spoken in`)
+            return
+          }
+          const transport = transports.get(accountId)
+          const conversationId = pickConversation(listConvMemories(stateRoot, accountId))
+          if (transport === undefined || conversationId === undefined) return
+          const now = Date.now()
+          const day = formatStamp(now)
+
+          let prompt
+          if (kind === 'review') {
+            const global = readGlobalMemory(stateRoot, accountId, { warn })
+            prompt = buildReviewPrompt({ day, facts: global.facts, profile: global.profile, digest: global.digest })
+          } else {
+            const entries = readJournalRange(stateRoot, { accountId, conversationId, days: 1, now })
+            const total = { in: 0, out: 0, all: entries.length }
+            const perConversation = new Map()
+            for (const entry of entries) {
+              if (entry.dir === 'in') total.in += 1
+              else total.out += 1
+              const id = entry.conversationId ?? conversationId
+              perConversation.set(id, (perConversation.get(id) ?? 0) + 1)
+            }
+            const conversations = [...perConversation].map(([id, all]) => ({ conversationId: id, all })).sort((a, b) => b.all - a.all)
+            const global = readGlobalMemory(stateRoot, accountId, { warn })
+            const events = (global.events ?? []).filter((event) => event.done !== true)
+            const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
+            prompt = buildDigestPrompt({ day, total, conversations, events, summary: conv.summary })
+          }
+
+          const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute() })
+          const text = typeof result?.text === 'string' ? result.text.trim() : ''
+          if (text === '' || text === '（已取消）') {
+            log(`${kind} report produced nothing to send`)
+            return
+          }
+          await sendChunked(transport, live, { conversationId, text })
+          log(`${describeReport(kind, now)} delivered to ${conversationId}`)
+        },
+      }).start()
 
       reminderScheduler = new ReminderScheduler({
         stateRoot,
@@ -1080,6 +1137,7 @@ export function apply(ctx, config) {
 
     return async () => {
       cancelled = true
+      reportScheduler?.stop()
       reminderScheduler?.stop()
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()

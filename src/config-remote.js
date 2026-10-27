@@ -637,6 +637,16 @@ export const FIELDS = [
       ],
     },
     {
+      group: "汇报",
+      groupEn: "Reports",
+      fields: [
+        { path: "digestEnabled", type: T.boolean, default: true, label: "每天发日报", labelEn: "Daily digest", hint: "到点发一条当天简报（聊了什么、还有哪些待办）；只报流水里的真实数字，不编内容", hintEn: "One message a day: what was talked about and what is still open, from the journal only" },
+        { path: "digestWhen", type: T.text, default: "每天 21:00", label: "日报时间", labelEn: "Digest time", hint: "形如「每天 21:00」或「每周五 18:30」；看不懂就当天不发", hintEn: "e.g. 每天 21:00 / 每周五 18:30" },
+        { path: "memoryReviewEnabled", type: T.boolean, default: true, label: "每周核对记忆", labelEn: "Weekly memory review", hint: "把记着的事编号列出来问一句「还准吗」，你回 /remember 旧 → 新 或 /forget 编号 纠正", hintEn: "Lists what it remembers and asks if it is still right" },
+        { path: "memoryReviewWhen", type: T.text, default: "每周日 20:00", label: "核对时间", labelEn: "Review time", hint: "形如「每周日 20:00」", hintEn: "e.g. 每周日 20:00" },
+      ],
+    },
+    {
       group: "备份",
       groupEn: "Backups",
       fields: [
