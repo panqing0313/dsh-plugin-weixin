@@ -782,6 +782,16 @@ function main() {
 	installLocally()
 
 	writeOut(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
+	// C31: a publish from this machine carries no provenance attestation —
+	// npm only signs one inside a supported CI, where the OIDC identity can be
+	// exchanged for a signature. Say so rather than let the gap be invisible.
+	if (process.env.GITHUB_ACTIONS !== 'true') {
+		writeOut(
+			`${C.yellow}provenance: none${C.off} — this tarball has no attestation, because npm signs one only in CI.\n` +
+				`  The durable path is the tag: push v${version} and .github/workflows/release.yml\n` +
+				`  publishes the same version from that tag with --provenance.\n`,
+		)
+	}
 	writeOut(`npm:      https://www.npmjs.com/package/${PKG_NAME}/v/${version}\n`)
 	const repo = git(['remote', 'get-url', 'origin'])
 		.replace(/^git@github\.com:/, '')

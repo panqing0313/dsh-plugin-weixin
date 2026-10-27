@@ -880,6 +880,20 @@ ln -sfn ~/.dsh/profiles/node_modules/@deepseek-ai/dsh-llm            node_module
 
 ## 发布
 
+### 发布出处（provenance）
+
+npm 能给一个 tarball 附一份**来源证明**：它由这份仓库、这次提交、这个 CI 构建出来，签名由 CI 的 OIDC 身份换来。这份证明只在你用 `npm view dsh-plugin-weixin --json` 看 `dist.attestations` 时存在 —— 手工在自己电脑上 `npm publish` 是拿不到的，npm 会直接拒绝 `--provenance`。
+
+所以有两条路：
+
+| 做法 | 结果 |
+|---|---|
+| 本机 `node bin/release.mjs <version>` | 打 tag、建 release、装本机 profile，**没有 provenance**（脚本会明说） |
+| 推 tag `v<version>` | `.github/workflows/release.yml` 在 CI 里从那个 tag 装依赖、跑全量测试、核对 tag 与 `package.json` 版本一致，然后 `npm publish --provenance` —— 有 provenance |
+
+CI 那条路需要仓库 secret `NPM_TOKEN`（npm 的 Automation token），以及 workflow 里 `id-token: write`（已在文件里声明）。
+
+
 一条命令做完整条发布链路（校验 → 测试 → 改版本号 → 打包核验 → 发布 → 打标签 → GitHub Release）：
 
 ```bash

@@ -1,0 +1,76 @@
+name: release
+
+# A published tarball should be able to prove it came from this repository and
+# this commit. npm can only attach that proof (a provenance attestation, signed
+# via the CI provider's OIDC identity) when the publish runs inside a supported
+# CI — `npm publish --provenance` fails on a laptop on purpose. So the durable
+# path is here: push a tag, CI builds the same tarball from that tag, runs the
+# suite, and only then publishes.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  # Required for the OIDC token npm exchanges for a provenance attestation.
+  id-token: write
+  # Checkout only; nothing here writes to the repository.
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # A publish is irreversible: never let two runs race on the same tag.
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: fast checks (syntax + packaging rules)
+        run: npm run check
+      - name: full suite
+        run: npm test
+        env:
+          DSH_WEIXIN_LINKS_ALLOW_PRIVATE: '1'
+      - name: the tag and package.json must agree
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $tag does not match package.json $version — refusing to publish"
+            exit 1
+          fi
+      - name: package
+        # release.mjs owns the local/manual path (version bump, README bullet,
+        # tarball). In CI the tag already carries the version, so only the
+        # artefact itself is worth building — this is also what npm would ship.
+        run: npm pack --dry-run
+      - name: publish with provenance
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: the registry must now serve this version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          for attempt in $(seq 1 10); do
+            if [ "$(npm view dsh-plugin-weixin@$version version 2>/dev/null)" = "$version" ]; then
+              echo "registry now serves $version"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::the registry never served $version"
+          exit 1

@@ -45,5 +45,16 @@ if (problems.length > 0) {
   for (const line of problems) process.stdout.write(`✗ ${line}\n`)
   process.exitCode = 1
 } else {
-  process.stdout.write('✓ every source file parses, packaging metadata intact\n')
+  // C31: a provenance attestation is only possible from CI, so the workflow that
+// does the publish has to exist for the claim to be true.
+const releaseWorkflow = path.join(ROOT, '.github', 'workflows', 'release.yml')
+if (fs.existsSync(releaseWorkflow)) {
+	const text = fs.readFileSync(releaseWorkflow, 'utf8')
+	if (!text.includes('npm publish --provenance')) problems.push('.github/workflows/release.yml does not ask for provenance')
+	if (!text.includes('id-token: write')) problems.push('.github/workflows/release.yml cannot get an OIDC token (missing id-token: write)')
+} else {
+	console.log('· no .github/workflows/release.yml — publishes from CI are not wired up')
+}
+
+process.stdout.write('✓ every source file parses, packaging metadata intact\n')
 }
