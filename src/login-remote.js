@@ -20,6 +20,7 @@ import { logger } from "../vendor/openclaw-weixin/util/logger.js";
 import { redactToken } from "../vendor/openclaw-weixin/util/redact.js";
 import { allowlistForAccount, isAccountPaused, readRegistry, setAccountAllowlist, setAccountLabel, setAccountPaused } from "./account-registry.js";
 import { readSavedConfig, stateDir } from "./state.js";
+import { DEFAULT_RETENTION, directoryUsage } from "./message/retention.js";
 import { remoteMethods } from "./typert-js.js";
 import { readGlobalMemory, listConvMemories, addGlobalFact, removeGlobalFact, clearConvMemory, bondLine, addEvent, removeEvent, completeEvent, saveProfile, formatEvents } from "./memory.js";
 import {
@@ -649,6 +650,25 @@ export class WeixinLoginController extends TypertRemoteService {
      * busiest conversations — computed from the journal on every read, so it
      * can never disagree with the journal tab next to it.
      */
+    /**
+     * How much room the state directory is taking, and how long each class is
+     * kept. The card shows it under 「统计」 so an operator can tell a year of
+     * history from a week without opening a terminal.
+     */
+    async storage() {
+        const live = readSavedConfig();
+        return {
+            usage: directoryUsage(stateDir()),
+            retention: {
+                journalDays: Number(live.retentionJournalDays ?? DEFAULT_RETENTION.journalDays),
+                auditDays: Number(live.retentionAuditDays ?? DEFAULT_RETENTION.auditDays),
+                mediaDays: Number(live.retentionMediaDays ?? DEFAULT_RETENTION.mediaDays),
+                exportsDays: Number(live.retentionExportsDays ?? DEFAULT_RETENTION.exportsDays),
+                logsDays: Number(live.retentionLogsDays ?? DEFAULT_RETENTION.logsDays),
+            },
+        };
+    }
+
     async stats(options) {
         const opts = options ?? {};
         const daysRaw = Number(opts.days);
@@ -844,4 +864,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

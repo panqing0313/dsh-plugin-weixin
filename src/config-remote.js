@@ -548,6 +548,17 @@ export const FIELDS = [
       ],
     },
     {
+      group: "保留策略",
+      groupEn: "Retention",
+      fields: [
+        { path: "retentionJournalDays", type: T.number, default: 180, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "消息流水保留", labelEn: "Journal retention", hint: "0 表示永不清理", hintEn: "0 keeps it forever" },
+        { path: "retentionAuditDays", type: T.number, default: 90, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "审计保留", labelEn: "Audit retention", hint: "0 表示永不清理", hintEn: "0 keeps it forever" },
+        { path: "retentionMediaDays", type: T.number, default: 30, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "媒体保留", labelEn: "Media retention", hint: "收到的图片/文件/语音", hintEn: "inbound images, files and voice" },
+        { path: "retentionExportsDays", type: T.number, default: 60, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "导出保留", labelEn: "Export retention", hint: "/export 生成的 Markdown", hintEn: "markdown written by /export" },
+        { path: "retentionLogsDays", type: T.number, default: 30, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "日志保留", labelEn: "Log retention", hint: "vendor 每日日志", hintEn: "the vendor's daily log" },
+      ],
+    },
+    {
       group: "静音时段",
     groupEn: "Quiet hours",
     fields: [

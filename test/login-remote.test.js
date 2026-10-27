@@ -596,3 +596,24 @@ test('the structured memory: profile edits, events, and the digest show up in th
     await assert.rejects(() => c.memoryEventDone({ accountId: 'bot1', index: 'x' }), (error) => error.code === 'index is required')
   })
 })
+
+test('storage reports the state directory and the retention windows', async () => {
+  await withStateRoot(async (root) => {
+    fs.mkdirSync(path.join(root, 'journal'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'journal', 'journal-2020-01-01.jsonl'), 'old line\n')
+    fs.mkdirSync(path.join(root, 'audit'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'audit', 'audit-2020-01-01.jsonl'), 'entry\n')
+
+    const c = controller()
+    const report = await c.storage()
+    assert.ok(report.usage.journal > 0, 'the journal size is reported')
+    assert.ok(report.usage.total >= report.usage.journal + report.usage.audit)
+    assert.deepEqual(report.retention, {
+      journalDays: 180,
+      auditDays: 90,
+      mediaDays: 30,
+      exportsDays: 60,
+      logsDays: 30,
+    })
+  })
+})

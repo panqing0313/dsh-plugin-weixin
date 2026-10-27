@@ -178,6 +178,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/journalExport:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/storage`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "storage",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/storage:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/stats`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -2161,6 +2170,7 @@ window.__ModuleLoader__.load({
 		 */
 		function StatsSection({ ctx, t }) {
 			const [stats, setStats] = react.useState(null);
+			const [storage, setStorage] = react.useState(null);
 			const [days, setDays] = react.useState(14);
 			const [error, setError] = react.useState("");
 			const [busy, setBusy] = react.useState(false);
@@ -2171,6 +2181,13 @@ window.__ModuleLoader__.load({
 					const r = await callRemote(() => ctx.remote.weixin.stats({ days }));
 					setError("");
 					setStats(r);
+					// Disk usage is independent of the window; a failure here must
+					// not take the whole tab down with it.
+					try {
+						setStorage(await callRemote(() => ctx.remote.weixin.storage()));
+					} catch {
+						setStorage(null);
+					}
 				} catch (e) {
 					setError(String(e?.message ?? e));
 				} finally {
@@ -2232,6 +2249,21 @@ window.__ModuleLoader__.load({
 			const hourAxis = createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: C.labelTertiary } },
 				createElement("span", null, "00"), createElement("span", null, "06"), createElement("span", null, "12"), createElement("span", null, "18"), createElement("span", null, "23"));
 
+			const mb = (bytes) => `${(Number(bytes ?? 0) / 1024 / 1024).toFixed(1)} MB`;
+			const retention = storage?.retention;
+			const storagePanel = storage === null ? null : createElement("div", { key: "storage", style: { display: "flex", flexDirection: "column", gap: 4 } },
+				createElement("p", { style: { ...captionStyle, marginBottom: 2 } },
+					t("Disk usage", "磁盘占用"), ` — ${mb(storage.usage?.total)}`),
+				createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, lineHeight: "18px", color: C.labelSecondary } },
+					createElement("span", null, t("Journal", "消息流水"), ": ", mb(storage.usage?.journal), retention === undefined ? null : ` (${retention.journalDays} ${t("days", "天")})`),
+					createElement("span", null, t("Audit", "审计"), ": ", mb(storage.usage?.audit), retention === undefined ? null : ` (${retention.auditDays} ${t("days", "天")})`),
+					createElement("span", null, t("Media", "媒体"), ": ", mb(storage.usage?.media), retention === undefined ? null : ` (${retention.mediaDays} ${t("days", "天")})`),
+					createElement("span", null, t("Exports", "导出"), ": ", mb(storage.usage?.exports)),
+					createElement("span", null, t("Logs", "日志"), ": ", mb(storage.usage?.logs))),
+				createElement("p", { style: captionStyle },
+					t("Older files are swept once a day; the windows live in the settings tab.",
+						"超过保留期的文件每天自动清理一次，保留天数在「配置项」页签里改。")));
+
 			const convRows = conversations.map((c) => createElement("div", {
 				key: `${c.accountId}|${c.conversationId}`,
 				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
@@ -2256,7 +2288,8 @@ window.__ModuleLoader__.load({
 							createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, convRows))),
 				createElement("p", { style: captionStyle },
 					t("Computed live from the message journal. \u2191 sent by the bot, \u2193 received.",
-						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")));
+						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")),
+				storagePanel);
 			}
 
 		function ConfigSection({ ctx, t }) {

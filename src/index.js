@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
+import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -176,6 +177,11 @@ export const Config = z.object({
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
+  retentionJournalDays: z.number().min(0).default(180).description('消息流水保留天数；0 表示不清理。设置卡「统计」页签显示磁盘占用。'),
+  retentionAuditDays: z.number().min(0).default(90).description('工具审计保留天数；0 表示不清理。'),
+  retentionMediaDays: z.number().min(0).default(30).description('收到的图片/文件/语音保留天数；0 表示不清理。'),
+  retentionExportsDays: z.number().min(0).default(60).description('/export 导出的 Markdown 保留天数；0 表示不清理。'),
+  retentionLogsDays: z.number().min(0).default(30).description('vendor 每日日志保留天数；0 表示不清理。'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
   ),
@@ -364,6 +370,7 @@ export function apply(ctx, config) {
     let reminderScheduler
     let subscriptionScheduler
     let proactiveScheduler
+    let retentionTimer
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -430,6 +437,32 @@ export function apply(ctx, config) {
       // flip the window mid-flight), reusing withSavedConfig so the saved
       // settings outrank the composition exactly like everywhere else.
       const quietGate = (now) => quietDelay(now, withSavedConfig(config))
+
+      // Retention: state grows all day; a nightly sweep keeps it bounded. It
+      // runs once shortly after start (a laptop is not up at 03:00) and then
+      // daily, unref'd so it never holds the host open.
+      const retentionConfig = () => {
+        const live = withSavedConfig(config)
+        return {
+          journalDays: Number(live.retentionJournalDays ?? DEFAULT_RETENTION.journalDays),
+          auditDays: Number(live.retentionAuditDays ?? DEFAULT_RETENTION.auditDays),
+          mediaDays: Number(live.retentionMediaDays ?? DEFAULT_RETENTION.mediaDays),
+          exportsDays: Number(live.retentionExportsDays ?? DEFAULT_RETENTION.exportsDays),
+          logsDays: Number(live.retentionLogsDays ?? DEFAULT_RETENTION.logsDays),
+        }
+      }
+      const sweep = () => {
+        try {
+          const result = sweepRetention(stateRoot, { retention: retentionConfig(), warn })
+          log(describeSweep(result))
+        } catch (error) {
+          warn(`retention sweep failed: ${String(error?.message ?? error)}`)
+        }
+      }
+      const firstSweep = setTimeout(sweep, 60_000)
+      firstSweep.unref?.()
+      retentionTimer = setInterval(sweep, SWEEP_INTERVAL_MS)
+      retentionTimer.unref?.()
 
       reminderScheduler = new ReminderScheduler({
         stateRoot,
@@ -861,6 +894,7 @@ export function apply(ctx, config) {
       reminderScheduler?.stop()
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
+      if (retentionTimer !== undefined) clearInterval(retentionTimer)
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
