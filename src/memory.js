@@ -551,6 +551,40 @@ export function readRecentWindow(stateRoot, accountId, conversationId, {
  * with nothing at all injects nothing, so turning memory on costs zero
  * tokens until there is something to remember.
  */
+/**
+ * Lines a proactive message may use to pick up an old thread (C21).
+ *
+ * A bot that opens with "今天过得怎么样" every time is pleasant for a week and
+ * wallpaper after that. The plugin already knows what was left hanging — the
+ * event list, the person digest, the conversation summary — so the proactive
+ * prompt gets those as *topic candidates*, wrapped in their own tag and told
+ * explicitly not to recite them ("我记得你说过…" is exactly the uncanny version).
+ *
+ * Empty when nothing is known: silence is better than a generic opener.
+ */
+export function openThreadLines(global, conv, now, { max = 3 } = {}) {
+  const lines = []
+  const events = Array.isArray(global?.events) ? global.events : []
+  for (const event of events) {
+    if (event === null || typeof event !== 'object') continue
+    if (event.done === true || typeof event.text !== 'string' || event.text.trim() === '') continue
+    const when = typeof event.when === 'string' && event.when !== '' ? `[${event.when}] ` : ''
+    lines.push(`- 之前提到过的事：${when}${event.text.trim()}`)
+    if (lines.length >= max) break
+  }
+  const digest = typeof global?.digest === 'string' ? global.digest.trim() : ''
+  if (digest !== '') lines.push(`- 你们最近的情况：${digest.slice(0, 160)}`)
+  const summary = typeof conv?.summary === 'string' ? conv.summary.trim() : ''
+  if (lines.length === 0 && summary !== '') lines.push(`- 上次聊到：${summary.slice(0, 120)}`)
+  if (lines.length === 0) return []
+  return [
+    '<weixin_threads>',
+    '这些是你们之前聊过、还没收尾的事。只用来挑话题，不要直接复述，也不要说「我记得你说过」这种话：',
+    ...lines,
+    '</weixin_threads>',
+  ]
+}
+
 export function buildMemoryBlock({
     global,
     conv,

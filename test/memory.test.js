@@ -26,6 +26,7 @@ import {
 	formatProfile,
 	formatEvents,
 	DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
+  openThreadLines,
 } from '../src/memory.js'
 import { appendJournal } from '../src/message/journal.js'
 
@@ -300,4 +301,28 @@ test('the digest leads the block, the profile follows, and the budget squeezes f
 	assert.ok(tight.includes(longDigest))
 	assert.equal(tight.includes('对花生过敏'), false, 'a budget that only fits the digest keeps only the digest')
 	assert.equal(tight.includes('称呼：'), false)
+})
+
+test('openThreadLines offers open threads, and nothing when it knows nothing', () => {
+  assert.deepEqual(openThreadLines({ events: [], digest: '' }, {}, 0), [])
+  assert.deepEqual(openThreadLines(undefined, undefined, 0), [])
+
+  const global = {
+    events: [
+      { text: '周五要交的方案', when: '2026-10-30', done: false },
+      { text: '已经做完的事', when: '2026-10-20', done: true },
+      { text: '给他带的书', when: '', done: false },
+    ],
+    digest: '在读一本关于灯塔的书。',
+  }
+  const lines = openThreadLines(global, {}, 0)
+  assert.equal(lines[0], '<weixin_threads>')
+  assert.equal(lines.at(-1), '</weixin_threads>')
+  assert.ok(lines.some((line) => line.includes('[2026-10-30] 周五要交的方案')), 'a dated open event is offered')
+  assert.ok(lines.some((line) => line.includes('给他带的书')), 'an undated open event is offered')
+  assert.ok(lines.every((line) => line.includes('已经做完的事') === false), 'a finished event is not a topic')
+  assert.ok(lines.some((line) => line.includes('灯塔')), 'the digest is offered as background')
+
+  const fallback = openThreadLines({ events: [], digest: '' }, { summary: '上次在讨论周末去哪儿。' }, 0)
+  assert.ok(fallback.some((line) => line.includes('周末去哪儿')), 'with no events, the conversation summary stands in')
 })

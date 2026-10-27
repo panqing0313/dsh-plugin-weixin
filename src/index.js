@@ -90,6 +90,7 @@ import {
   formatProfile,
   listConvMemories,
   setConvRecentSession,
+  openThreadLines,
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
@@ -683,9 +684,10 @@ export function apply(ctx, config) {
           const personaBlock = buildPersonaBlock(candidate.mode)
           const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id })
           const lifeBlockText = life === null ? '' : lifeBlock(life)
+          const globalMemory = readGlobalMemory(stateRoot, candidate.accountId, { warn })
           const memoryBlock = live.memoryEnabled === true
             ? buildMemoryBlock({
-                global: readGlobalMemory(stateRoot, candidate.accountId, { warn }),
+                global: globalMemory,
                 conv: convMemory,
                 recent: readRecentWindow(stateRoot, candidate.accountId, candidate.conversationId, { turns: 3 }),
                 now,
@@ -706,6 +708,7 @@ export function apply(ctx, config) {
             '<weixin_proactive>',
             `现在是 ${formatStamp(now)}。${sinceHours === null ? '对方有一阵子没说话了。' : `对方已经 ${sinceHours} 小时没说话了。`}`,
             '你想主动给对方发一条消息——就像你在微信里随手发的一条：可以说说你此刻在做什么，问问对方怎么样了，或者提起之前聊过的一件事。',
+            ...openThreadLines(globalMemory, convMemory, now),
             '一两句话，口语，别一次问好几个问题，也别追问对方去哪儿了。',
             '不要说「我主动来找你」「打扰了」这类话，也不要解释你为什么发这条消息。',
             ...(lastOwn === '' ? [] : [`你上一次主动发的是：「${lastOwn}」，这次别重复。`]),
