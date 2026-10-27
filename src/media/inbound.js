@@ -342,7 +342,30 @@ export async function downloadInboundMedia(params) {
       ...(params.dir === undefined ? {} : { dir: params.dir }),
       ...(params.token === undefined ? {} : { token: params.token }),
     })
-    return { ok: true, ...saved, kind, mime: mimeForName(saved.name, kind) }
+    const result = { ok: true, ...saved, kind, mime: mimeForName(saved.name, kind) }
+    // A video is the one attachment the model cannot open by itself (C22). It
+    // CAN read images, and ffmpeg already ships in the voice path, so a few
+    // stills turn "an mp4 you cannot read" into "three frames you can look at".
+    // Best effort: no ffmpeg, an unreadable codec or a zero-length clip leaves
+    // the file exactly as it was delivered before.
+    if (kind === 'video' && params.extractFrames !== false) {
+      try {
+        const { extractVideoFrames } = await import('./video-frames.js')
+        const stills = extractVideoFrames(saved.path, {
+          ...(params.ffmpegPath === undefined ? {} : { ffmpegPath: params.ffmpegPath }),
+          ...(params.warn === undefined ? {} : { warn: params.warn }),
+        })
+        if (stills.frames.length > 0) {
+          result.frames = stills.frames
+          if (typeof stills.durationSeconds === 'number') result.durationSeconds = stills.durationSeconds
+        } else if (typeof stills.error === 'string') {
+          result.framesError = stills.error
+        }
+      } catch (error) {
+        result.framesError = String(error?.message ?? error)
+      }
+    }
+    return result
   } catch (error) {
     if (error instanceof InboundMediaError) return { ok: false, reason: error.message, code: error.code }
     return { ok: false, reason: String(error?.message ?? error), code: 'unexpected' }
@@ -548,7 +571,14 @@ export function describeInboundMedia(saved, caption) {
       return `${head}\n这是微信 SILK 格式的语音，本机未安装转码模块，无法解码为可播放音频${reason}；如需内容请告知用户。`
     }
     if (item.kind === 'video') {
-      return `${head}\n这是一个视频文件，请用 read 工具处理（无法直接读取视频帧时请说明）。`
+      const length = typeof item.durationSeconds === 'number' ? `，时长 ${item.durationSeconds.toFixed(1)} 秒` : ''
+      if (Array.isArray(item.frames) && item.frames.length > 0) {
+        const lines = item.frames.map((frame) => `- ${frame.atSeconds}s：${frame.path}`).join('\n')
+        const extra = typeof item.framesError === 'string' ? `（部分帧未能抽取：${item.framesError}）` : ''
+        return `${head}\n这是一个视频文件${length}。已从中抽取 ${item.frames.length} 帧静图${extra}：\n${lines}\n请用 read_image 工具查看这些帧来了解视频内容；视频本身无法直接读取，需要更精确的画面时请告知用户。`
+      }
+      const why = typeof item.framesError === 'string' ? `（抽帧失败：${item.framesError}）` : ''
+      return `${head}\n这是一个视频文件${length}${why}，视频帧未能提取，无法直接读取内容；如需了解视频内容，请让用户描述或发送截图。`
     }
     return `${head}\n请用 read 工具读取这个文件的内容。`
   })

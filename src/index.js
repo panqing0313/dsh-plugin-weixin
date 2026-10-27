@@ -197,6 +197,7 @@ export const Config = z.object({
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupShareMemory: z.boolean().default(false).description('把长期记忆、回忆片段和亲密度行也注入群回复。默认关闭：那些块里是主人自己的私事。'),
+  videoFrames: z.boolean().default(true).description('收到视频时用本机 ffmpeg 抽几帧静图交给模型（模型读不了视频，但能看图）。需要的机器上装了 ffmpeg；抽帧失败只影响那一条视频的内容理解，文件照常保存。'),
   richContent: z.boolean().default(true).description('富内容：长代码块作为文件附件发出、Markdown 表格转成对齐文本。微信只有纯文本气泡，这两处是 Markdown 里最容易在纯文本里变形的东西。'),
   codeFileThreshold: z.number().min(200).max(20000).default(1200).description('代码块超过多少字就改成发文件；更短的留在气泡里（两行代码读起来比附件顺）。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
@@ -1579,7 +1580,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       const failures = []
       for (const media of message.media) {
         const download = media.kind === 'voice' ? downloadInboundVoice : downloadInboundMedia
-        const result = await download({ media, cdnBaseUrl, maxBytes: maxInboundMediaBytes, bridge: asrBridge })
+        const result = await download({
+          media,
+          cdnBaseUrl,
+          maxBytes: maxInboundMediaBytes,
+          bridge: asrBridge,
+          extractFrames: effectiveConfig.current.videoFrames !== false,
+          warn,
+        })
         if (result.ok) {
           log(
             `saved inbound ${result.kind} to ${result.path} (${result.bytes} bytes)` +

@@ -2675,4 +2675,6 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 **17 富内容**（`src/message/rich-content.js`）：`splitFences`（未闭合围栏按正文，流式中途不丢字）、`planRichContent`（≥`codeFileThreshold` 的代码块写成文件 + 气泡里留一行说明，短块留在气泡里）、`renderTables`/`tableToText`（CJK 按两格宽对齐）、`writeSnippets`（`snippets/`，时间戳前缀，失败只丢那一个文件）；`src/outbound.js` 的 `sendChunked` 在压平之前先过一遍，文字发完再发附件；状态布局加 `snippetsDir`。测试：rich-content 8 条 + rich-send 3 条（真发一条 + 一个附件、短块不加附件、关掉开关回旧行为）。**坑**：`configureOutbound` 里的 `snippetsDir` 必须从 `statePaths(stateRoot).snippetsDir.absolute` 取，第一版忘了 import `statePaths`，`node --check` 照样过（只查语法），要到运行时才炸。
 
+**22 语音/视频**：出站语音确认是服务端不投递（两次实测），默认按文件发；入站语音已有 ASR 转写；**入站视频新增抽帧**（`src/media/video-frames.js`：`probeDurationSeconds` 从 ffmpeg banner 解析时长、`planSampleTimes` 避开首帧黑场、`extractVideoFrames` 抽三帧 PNG、失败只影响那条视频），`describeInboundMedia` 的 video 分支改成列出帧的时间点与路径 + `read_image` 指引；配置 `videoFrames`。测试：video-frames 4 条（含真 ffmpeg 生成 4 秒 testsrc 抽帧断言 PNG 头与顺序，未装 ffmpeg 时跳过）。
+
 未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。

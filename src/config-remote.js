@@ -580,6 +580,13 @@ export const FIELDS = [
       ],
     },
     {
+      group: "视频",
+      groupEn: "Video",
+      fields: [
+        { path: "videoFrames", type: T.boolean, default: true, label: "视频抽帧", labelEn: "Sample video frames", hint: "模型读不了视频，用 ffmpeg 抽三帧静图给它看；没装 ffmpeg 或解码失败时只影响那一条视频", hintEn: "The model cannot read video; ffmpeg stills let it look" },
+      ],
+    },
+    {
       group: "富内容",
       groupEn: "Rich replies",
       fields: [
