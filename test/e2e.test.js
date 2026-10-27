@@ -449,6 +449,10 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
 test('readLinks on: a pasted URL is fetched and its text reaches the agent; a dead link becomes one line; off: nothing is fetched', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 
+  // The fake web lives on 127.0.0.1, which the SSRF policy refuses by default
+  // (see src/message/links.js) — this env var is the documented test seam for
+  // exactly that. Everything else about the fetch path is production's.
+  process.env.DSH_WEIXIN_LINKS_ALLOW_PRIVATE = '1'
   for (const readLinks of [true, false]) {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-links-${readLinks}-`))
     process.env.DSH_WEIXIN_STATE_DIR = stateRoot

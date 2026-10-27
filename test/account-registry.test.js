@@ -129,3 +129,38 @@ test('allowlist override set, effective, cleared, and kept across a re-touch', (
   assert.deepEqual(readRegistry().bot1.allowedSenders, ['friend-a'])
   assert.deepEqual(readRegistry().bot1.allowedChats, ['room-1'])
 })
+
+/**
+ * A crash during a write must not cost the user their state.
+ *
+ * Every JSON store is written through a temp file that is fsynced and then
+ * renamed over the target, and carries a schemaVersion stamp so an old file can
+ * be normalised on read. The failure this prevents is not an exception the user
+ * ever sees — it is the "it forgot everything" report that follows a torn file.
+ */
+test('a write is atomic and the schema stamp never leaks into the entry map', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { atomicWriteJson } = await import('../src/atomic.js')
+
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'dsh-weixin-atomic-'))
+  try {
+    const file = path.join(dir, 'nested', 'state.json')
+    assert.equal(atomicWriteJson(file, { schemaVersion: 1, alpha: { paused: true } }), true)
+    const leftovers = fs.readdirSync(path.dirname(file)).filter((name) => name.endsWith('.tmp'))
+    assert.deepEqual(leftovers, [], 'the temp file must be renamed away, not left behind')
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { schemaVersion: 1, alpha: { paused: true } })
+
+    // An unwritable target reports false instead of throwing: losing a write is
+    // a warning, never a crashed turn.
+    const blocked = path.join(dir, 'nested')
+    fs.chmodSync(blocked, 0o500)
+    try {
+      assert.equal(atomicWriteJson(path.join(blocked, 'denied.json'), { x: 1 }, { warn() {} }), false)
+    } finally {
+      fs.chmodSync(blocked, 0o700)
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -19,6 +19,7 @@
 // @module dsh-weixin/account-registry
 import fs from 'node:fs'
 import path from 'node:path'
+import { atomicWriteJson } from './atomic.js'
 import { stateDir } from './state.js'
 
 /** Absolute path of the registry file. */
@@ -30,7 +31,12 @@ export function registryFile() {
 export function readRegistry() {
   try {
     const parsed = JSON.parse(fs.readFileSync(registryFile(), 'utf8'))
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      // The schema stamp shares the object with the account entries; it is
+      // metadata, not an account, so it must not leak into the map.
+      delete parsed.schemaVersion
+      return parsed
+    }
     process.emitWarning(`dsh-weixin: ignoring ${registryFile()}: expected a JSON object`)
   } catch (error) {
     if (error?.code !== 'ENOENT') {
@@ -42,15 +48,9 @@ export function readRegistry() {
 
 /** Write the whole registry atomically; failure warns but never throws. */
 export function writeRegistry(registry, warn = () => {}) {
-  const file = registryFile()
-  const temp = `${file}.${process.pid}.tmp`
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(temp, `${JSON.stringify(registry, null, 2)}\n`, 'utf8')
-    fs.renameSync(temp, file)
-  } catch (error) {
-    warn(`dsh-weixin: could not persist ${file}: ${String(error?.message ?? error)}`)
-  }
+  atomicWriteJson(registryFile(), { schemaVersion: 1, ...registry }, {
+    warn: (message) => warn(`dsh-weixin: could not persist the registry: ${message}`),
+  })
 }
 
 /**

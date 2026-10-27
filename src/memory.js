@@ -17,6 +17,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { atomicWriteJson } from './atomic.js';
 import { readJournal } from './message/journal.js';
 
 export const DEFAULT_MEMORY_GLOBAL_MAX_FACTS = 30;
@@ -61,15 +62,20 @@ function readJsonSafe(file, fallback, warn, label) {
     }
 }
 
+/** Current schema of every file under <stateRoot>/memory/. */
+export const MEMORY_SCHEMA_VERSION = 2;
+
+/**
+ * Persist one memory file.
+ *
+ * Atomic (temp + fsync + rename): a torn write here reads back as "the file is
+ * corrupt", which the readers treat as an empty memory — the failure mode the
+ * user experiences as "it forgot my allergy". The schema version is stamped so
+ * older files can be recognised and normalised on read.
+ */
 function writeJsonSafe(file, value, warn, label) {
-    try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-        return true;
-    } catch (error) {
-        warn(`${label} write failed: ${String(error)}`);
-        return false;
-    }
+    const ok = atomicWriteJson(file, { ...value, schemaVersion: MEMORY_SCHEMA_VERSION }, { warn: (message) => warn(`${label} write failed: ${message}`) });
+    return ok;
 }
 
 function clampWeight(value) {

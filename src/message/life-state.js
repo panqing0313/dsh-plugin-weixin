@@ -13,7 +13,8 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
+import path from 'node:path'
+import { atomicWriteJson } from '../atomic.js';
 
 const noopWarn = () => {};
 
@@ -68,9 +69,7 @@ export function readLifeState(stateRoot, accountId, { warn = noopWarn } = {}) {
 export function writeLifeState(stateRoot, accountId, life, { warn = noopWarn } = {}) {
   try {
     const file = lifeFilePath(stateRoot, accountId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(life, null, 2)}\n`);
-    return true;
+    return atomicWriteJson(file, { schemaVersion: 1, ...life }, { warn: (message) => warn(`life state not written (${message})`) });
   } catch (error) {
     warn(`life state not written (${String(error)})`);
     return false;

@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { atomicWriteJson } from '../atomic.js'
 import { parseWhen } from './scheduler.js'
 
 export const MAX_SUBSCRIPTIONS_PER_ACCOUNT = 20
@@ -108,11 +109,7 @@ export function readSubscriptions(stateRoot, warn = () => {}) {
 }
 
 export function writeSubscriptions(stateRoot, store, warn = () => {}) {
-    try {
-        fs.writeFileSync(storePath(stateRoot), `${JSON.stringify(store, null, 2)}\n`)
-    } catch (error) {
-        warn(`subscriptions.json write failed: ${error.message}`)
-    }
+    atomicWriteJson(storePath(stateRoot), { schemaVersion: 1, ...store }, { warn: (message) => warn(`subscriptions.json write failed: ${message}`) })
 }
 
 /**

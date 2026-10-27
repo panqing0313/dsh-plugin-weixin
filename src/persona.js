@@ -14,6 +14,7 @@
  * or refuses tasks would break the plugin's job.
  */
 import fs from 'node:fs';
+import { atomicWriteJson } from './atomic.js';
 import path from 'node:path';
 
 export const DEFAULT_MODE_ID = 'default';
@@ -168,6 +169,9 @@ export const BUILTIN_MODES = [
 /** A warn line costs nothing when the caller has nowhere to send it. */
 const noopWarn = () => {};
 
+/** Schema stamp for persona-modes.json / persona-active.json. */
+export const PERSONA_SCHEMA_VERSION = 1;
+
 function modesPath(stateRoot) {
     return path.join(stateRoot, MODES_FILE);
 }
@@ -208,8 +212,7 @@ export function readPersonaStore(stateRoot, { warn = noopWarn } = {}) {
     } catch {
         const seeded = BUILTIN_MODES.map((mode) => ({ ...mode }));
         try {
-            fs.mkdirSync(stateRoot, { recursive: true });
-            fs.writeFileSync(file, `${JSON.stringify({ modes: seeded }, null, 2)}\n`);
+            atomicWriteJson(file, { schemaVersion: PERSONA_SCHEMA_VERSION, modes: seeded }, { warn });
         } catch (error) {
             warn(`persona store seed failed: ${String(error)}`);
         }
@@ -237,7 +240,7 @@ export function readPersonaStore(stateRoot, { warn = noopWarn } = {}) {
     }
     if (changed === true) {
         try {
-            fs.writeFileSync(file, `${JSON.stringify({ modes }, null, 2)}\n`);
+            atomicWriteJson(file, { schemaVersion: PERSONA_SCHEMA_VERSION, modes }, { warn });
         } catch (error) {
             warn(`persona store reseed failed: ${String(error)}`);
         }
@@ -247,8 +250,7 @@ export function readPersonaStore(stateRoot, { warn = noopWarn } = {}) {
 
 /** Persist a whole catalog (the settings card sends the edited list). */
 export function writePersonaStore(stateRoot, modes, { warn = noopWarn } = {}) {
-    fs.mkdirSync(stateRoot, { recursive: true });
-    fs.writeFileSync(modesPath(stateRoot), `${JSON.stringify({ modes }, null, 2)}\n`);
+    atomicWriteJson(modesPath(stateRoot), { schemaVersion: PERSONA_SCHEMA_VERSION, modes }, { warn });
 }
 
 /** Resolve a mode by id; unknown or blank ids fall back to `default`, never throw. */
@@ -285,7 +287,11 @@ function readActiveFile(stateRoot, { warn }) {
 function readActiveRaw(stateRoot, { warn }) {
     try {
         const parsed = JSON.parse(fs.readFileSync(activePath(stateRoot), 'utf8'));
-        return parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) ? {} : parsed;
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        // The version stamp lives in the same object; it is not an override and
+        // must not travel back out through a round-trip.
+        delete parsed.schemaVersion;
+        return parsed;
     } catch {
         return {};
     }
@@ -315,8 +321,7 @@ export function writeGlobalDefaultMode(stateRoot, modeId, { warn = noopWarn } = 
     const wanted = typeof modeId === 'string' ? modeId.trim() : '';
     if (wanted === '') delete parsed[GLOBAL_DEFAULT_KEY];
     else parsed[GLOBAL_DEFAULT_KEY] = wanted;
-    fs.mkdirSync(stateRoot, { recursive: true });
-    fs.writeFileSync(activePath(stateRoot), `${JSON.stringify(parsed, null, '\t')}\n`);
+    atomicWriteJson(activePath(stateRoot), { schemaVersion: PERSONA_SCHEMA_VERSION, ...parsed }, { warn });
 }
 
 /** The mode a conversation currently talks in, override or global default. */
@@ -357,8 +362,7 @@ export function writeAccountDefaultMode(stateRoot, accountId, modeId, { warn = n
     const wanted = typeof modeId === 'string' ? modeId.trim() : '';
     if (wanted === '') delete raw[key];
     else raw[key] = wanted;
-    fs.mkdirSync(stateRoot, { recursive: true });
-    fs.writeFileSync(activePath(stateRoot), `${JSON.stringify(raw, null, 2)}\n`);
+    atomicWriteJson(activePath(stateRoot), { schemaVersion: PERSONA_SCHEMA_VERSION, ...raw }, { warn });
     return wanted === '' ? '' : raw[key];
 }
 

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { atomicWriteJson } from '../atomic.js'
 
 /**
  * Durable scheduled messages: `/remind <when> <text>` stores a reminder, a
@@ -109,7 +110,9 @@ function formatLabel(date) {
 export function readReminders(stateRoot) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(stateRoot, 'reminders.json'), 'utf8'))
-    if (raw !== null && typeof raw === 'object' && Number.isFinite(raw.seq) && Array.isArray(raw.items)) return raw
+    if (raw !== null && typeof raw === 'object' && Number.isFinite(raw.seq) && Array.isArray(raw.items)) {
+      return { seq: raw.seq, items: raw.items }
+    }
   } catch {
     // first run, or a truncated write — start over
   }
@@ -124,15 +127,9 @@ export function readReminders(stateRoot) {
  * @param {{ seq: number, items: Reminder[] }} store
  */
 export function writeReminders(stateRoot, store, warn = () => {}) {
-  try {
-    fs.mkdirSync(stateRoot, { recursive: true })
-    const file = path.join(stateRoot, 'reminders.json')
-    const tmp = `${file}.tmp-${process.pid}`
-    fs.writeFileSync(tmp, JSON.stringify(store, null, 2))
-    fs.renameSync(tmp, file)
-  } catch (error) {
-    warn(`writing reminders.json failed: ${String(error?.message ?? error)}`)
-  }
+  atomicWriteJson(path.join(stateRoot, 'reminders.json'), { schemaVersion: 1, ...store }, {
+    warn: (message) => warn(`writing reminders.json failed: ${message}`),
+  })
 }
 
 /**

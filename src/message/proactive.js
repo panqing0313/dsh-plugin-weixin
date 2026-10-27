@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { atomicWriteJson } from '../atomic.js'
 import { parseClockHHmm } from './quiet-hours.js'
 import { formatStamp } from './subscriptions.js'
 
@@ -82,14 +83,9 @@ export function readProactiveState(stateRoot, accountId, { warn = () => {} } = {
 }
 
 export function writeProactiveState(stateRoot, accountId, state, { warn = () => {} } = {}) {
-  try {
-    fs.mkdirSync(path.join(stateRoot, 'memory'), { recursive: true })
-    fs.writeFileSync(proactiveFilePath(stateRoot, accountId), `${JSON.stringify(state, null, 2)}\n`)
-    return true
-  } catch (error) {
-    warn(`could not write proactive state for ${accountId}: ${String(error)}`)
-    return false
-  }
+  return atomicWriteJson(proactiveFilePath(stateRoot, accountId), { schemaVersion: 1, ...state }, {
+    warn: (message) => warn(`could not write proactive state for ${accountId}: ${message}`),
+  })
 }
 
 function minutesOf(value, fallback) {

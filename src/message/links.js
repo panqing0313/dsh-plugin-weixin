@@ -35,6 +35,14 @@ export const MAX_LINK_BODY_BYTES = 512 * 1024
 export const LINK_TIMEOUT_MS = 8_000
 /** Redirects followed per URL. Three is already generous for a chat link. */
 export const MAX_REDIRECTS = 3
+/**
+ * Loopback is refused by default. The one exception is a test seam: the e2e
+ * test serves its "web" from 127.0.0.1 because there is no other way to have a
+ * deterministic page offline. Set the env var in a test run only — a real
+ * deployment must never set it, or the SSRF policy is gone.
+ */
+const allowPrivateLinks = () => process.env.DSH_WEIXIN_LINKS_ALLOW_PRIVATE === '1'
+
 /** Cached fetch results, so a link pasted twice in a minute is fetched once. */
 export const LINK_CACHE_TTL_MS = 5 * 60_000
 export const LINK_CACHE_MAX_ENTRIES = 64
@@ -92,7 +100,7 @@ export function checkFetchableUrl(raw) {
   if (parsed.username !== '' || parsed.password !== '') {
     return { reason: '链接里带账号密码，不抓' }
   }
-  if (isPrivateHost(parsed.hostname)) {
+  if (allowPrivateLinks() === false && isPrivateHost(parsed.hostname)) {
     return { reason: '指向本机或内网地址，不抓' }
   }
   return { url: parsed.toString() }
@@ -193,7 +201,11 @@ async function fetchLinkTextUncached(url, { doFetch, maxChars, timeoutMs, maxRed
   for (let hop = 0; ; hop += 1) {
     const checked = checkFetchableUrl(current)
     if ('reason' in checked) return { ok: false, url, reason: checked.reason }
-    if (await resolvesToPrivate(new URL(checked.url).hostname, lookupImpl)) {
+    const host = new URL(checked.url).hostname
+    // An IP literal is already settled by checkFetchableUrl above; only names
+    // need the extra DNS step (a public name with a private A record).
+    const literal = isPrivateHost(host) || /^[\d.]+$/.test(host) || host.includes(':')
+    if (allowPrivateLinks() === false && literal === false && (await resolvesToPrivate(host, lookupImpl))) {
       return { ok: false, url, reason: '链接解析到内网地址，不抓' }
     }
     const remaining = deadlineAt - Date.now()
