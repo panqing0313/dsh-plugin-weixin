@@ -915,8 +915,8 @@ CI 那条路需要仓库 secret `NPM_TOKEN`（npm 的 Automation token），以�
 一条命令做完整条发布链路（校验 → 测试 → 改版本号 → 打包核验 → 发布 → 打标签 → GitHub Release）：
 
 ```bash
-npm run release 0.4.0 -- --dry-run   # 预演：不提交、不发布，跑完还原工作区
-npm run release 0.4.0                # 正式发布
+npm run release 0.9.11 -- --dry-run   # 预演：不提交、不发布，跑完还原工作区
+npm run release 0.9.11                # 正式发布
 ```
 
 脚本按「实际能跑通的顺序」执行，每一步都对应一次手工发布踩过的坑：
@@ -928,10 +928,19 @@ npm run release 0.4.0                # 正式发布
 | 版本号 | 改 `package.json`，同步 README 的「当前已发布版本」行与 `CHANGELOG.md` 的版本列表 | README 曾长期写着 0.1.0 而 npm 上已是 0.2.0 |
 | 打包核验 | `npm pack` 后检查文件清单（不缺 `bin/asr-bridge.py`、无 `__pycache__`/测试文件），并**在临时解压目录里真跑一次 `bin/asr-bridge.py`** | 证明要上传的那个包本身可用，而不只是测试通过 |
 | 提交 | 一个 `chore(release): x.y.z` 提交 | |
-| 发布 | `npm publish`，然后**轮询 registry 直到版本真的可见** | npm 会先返回成功、再异步处理上传；立刻查询读到的是旧版本，看起来像失败 |
-| 核验 | 比对 registry 的 `dist.shasum` 与本地 tarball | 确认线上包就是本地构建的那个 |
-| 标签 | 打 `v x.y.z`、推 main 与 tag、按提交日志生成 GitHub Release | |
-| 安装 | `node bin/install.mjs --profile $DSH_PROFILE` | 本机自测 |
+| 发布 | `npm publish`（2FA 链接只在真终端里显示，所以要用 `script -q /dev/null` 套一层 pty） | |
+| 标签 | **紧接发布**就打 `v x.y.z`、推 main 与 tag、按提交日志生成 GitHub Release | 上传已被接受，而「已发布但没 tag」的窗口里崩一次，下次发布会把这一版内容重复报一遍 |
+| 等待 registry | 轮询到版本真的可见（最多 3 分钟） | npm 先返回成功再异步处理上传；刚发完的几分钟里 `npm view` 仍会读到旧版本，甚至 404 |
+| 核验 | 比对 registry 的 `dist.shasum` 与本地 tarball、`dist-tags.latest` | 确认线上包就是本地构建的那个 |
+| 安装 | `node bin/install.mjs --profile $DSH_PROFILE --pin`：复制源码并**把 profile 依赖钉到这一版** | 只复制文件的话，App 下次启动的 `pnpm install` 会按 profile 的旧版本范围把它换回去（0.9.5 就这么丢过左侧栏入口） |
+
+**终端中途断开怎么办。** 发布要真 pty，所以通常跑在 `script -q /dev/null` 里；那个包装一关，内核会对前台进程组发 `SIGHUP`，而 node 默认直接退出 —— 0.9.7 / 0.9.8 / 0.9.10 三次都是「包发了、tag 打了、profile 没钉」的中断现场。脚本现在会**吞掉 SIGHUP 继续跑完**（所有输出走一个会丢掉 `EPIPE` 的写函数），并且在正式动手前就提示一次兜底命令：
+
+```bash
+node bin/release.mjs --finish 0.9.11   # 补齐 tag / Release / 核验 / 装本机 profile
+```
+
+`--finish` 只做发布之后的收尾，每一步都是幂等的：tag 已存在就跳过，GitHub Release 已存在就跳过，本机已经是这版就只重钉一次依赖。它也能用来确认「这次到底做完没有」。
 
 三点注意：
 

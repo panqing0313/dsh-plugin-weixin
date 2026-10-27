@@ -926,8 +926,8 @@ The CI path needs the repository secret `NPM_TOKEN` (an npm Automation token) an
 One command runs the whole release chain (verify → test → bump version → pack and verify → publish → tag → GitHub Release):
 
 ```bash
-npm run release 0.4.0 -- --dry-run   # rehearsal: no commit, no publish, working tree restored at the end
-npm run release 0.4.0                # real release
+npm run release 0.9.11 -- --dry-run   # rehearsal: no commit, no publish, working tree restored at the end
+npm run release 0.9.11                # real release
 ```
 
 The script follows "the order that actually works", and every step corresponds to a pit hit during a manual release:
@@ -936,19 +936,28 @@ The script follows "the order that actually works", and every step corresponds t
 | --- | --- | --- |
 | Preflight | working tree clean, on main, in sync with origin, version not published before, npm logged in, **every published version has a matching tag** | `git describe` locates the previous version by tag; a missing tag makes this Release Notes repeat the previous release's content (0.3.0 missed one) |
 | Test | `npm test` must be all green | never release with red |
-| Version | edit `package.json`, sync the README's "currently published version" line and the version list | the README once said 0.1.0 for a long time while npm was already at 0.2.0 |
+| Version | edit `package.json`, sync the README's "currently published version" line and the version list in `CHANGELOG.md` | the README once said 0.1.0 for a long time while npm was already at 0.2.0 |
 | Pack & verify | `npm pack` then check the file list (no missing `bin/asr-bridge.py`, no `__pycache__`/test files), and **really run `bin/asr-bridge.py` once in a temporary unpacked directory** | proves the very package about to be uploaded works, not just that the tests pass |
 | Commit | one `chore(release): x.y.z` commit | |
-| Publish | `npm publish`, then **poll the registry until the version is actually visible** | npm returns success first and processes the upload asynchronously; querying immediately reads the old version and looks like a failure |
-| Verify | compare the registry's `dist.shasum` with the local tarball | confirm the published package is the one built locally |
-| Tag | create `v x.y.z`, push main and the tag, generate the GitHub Release from the commit log | |
-| Install | `node bin/install.mjs --profile $DSH_PROFILE` | self-test on this machine |
+| Publish | `npm publish` (the 2FA link only appears on a real terminal, so this runs under `script -q /dev/null`) | |
+| Tag | **immediately after the upload** create `v x.y.z`, push main and the tag, generate the GitHub Release from the commit log | the upload is already accepted; a crash inside the "published but untagged" window makes the next release re-report this one's commits |
+| Wait for the registry | poll until the version is actually visible (3 minutes max) | npm returns success first and processes the upload asynchronously; for the first minutes `npm view` still reads the old version, or a 404 |
+| Verify | compare the registry's `dist.shasum` and `dist-tags.latest` with the local tarball | confirm the published package is the one built locally |
+| Install | `node bin/install.mjs --profile $DSH_PROFILE --pin`: copy the source **and pin the profile's dependency to this version** | a file copy alone is undone by the app's own `pnpm install` at the next launch, which restores the profile's old range (that is how 0.9.5 lost its sidebar entry) |
+
+**When the terminal goes away mid-release.** Publishing needs a real pty, so it usually runs under `script -q /dev/null`; when that wrapper closes, the kernel hangs up on the foreground process group and node exits by default — 0.9.7, 0.9.8 and 0.9.10 all ended as "tarball published, tag pushed, profile never pinned". The script now **swallows the hangup and finishes** (every write goes through a function that drops `EPIPE`), and it prints the recovery command before doing anything irreversible:
+
+```bash
+node bin/release.mjs --finish 0.9.11   # fill in tag / Release / verify / install the local profile
+```
+
+`--finish` only runs the steps that come after the upload, and each of them is idempotent: an existing tag is skipped, an existing GitHub Release is skipped, and a machine already on this version only has its pin re-stated. It doubles as the way to ask "did this release actually finish?" 
 
 Three things to note:
 
 - **It must run from a real terminal.** `npm publish` may ask for a one-time password (OTP) in the browser; when stdout is not a TTY npm masks the auth link (`***`), and that step cannot be automated.
 - A rehearsal (`--dry-run`) really performs the packaging and the bridge smoke test, but restores `package.json`/`README.md` and deletes the tarball before finishing, leaving the working tree as it was.
-- A new version gets an entry with `TODO` copy inserted at the top of the README version list; **change it to what this release actually contains before committing** (the script prompts you clearly).
+- A new version gets an entry with `TODO` copy inserted at the top of the version list in `CHANGELOG.md`; **change it to what this release actually contains before committing** (the script prompts you clearly).
 
 ## Documentation
 

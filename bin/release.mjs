@@ -45,12 +45,28 @@ import { pathToFileURL } from 'node:url'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PKG_NAME = 'dsh-plugin-weixin'
 
-const argv = process.argv.slice(2)
-const flags = new Set(argv.filter((a) => a.startsWith('--')))
-const dryRun = flags.has('--dry-run')
-const assumeYes = flags.has('--yes')
-const allowStaleLockfile = flags.has('--allow-stale-lockfile')
-const version = argv.find((a) => !a.startsWith('--'))
+/**
+ * Split the command line. Exported so a test can pin the shapes that matter —
+ * `--finish` in particular, because that one is the way out of a release whose
+ * terminal died halfway and nobody should have to re-derive it at 1 a.m.
+ */
+export function parseReleaseArgs(args) {
+	const flags = new Set(args.filter((a) => a.startsWith('--')))
+	return {
+		version: args.find((a) => !a.startsWith('--')),
+		dryRun: flags.has('--dry-run'),
+		assumeYes: flags.has('--yes'),
+		allowStaleLockfile: flags.has('--allow-stale-lockfile'),
+		finish: flags.has('--finish'),
+	}
+}
+
+const invocation = parseReleaseArgs(process.argv.slice(2))
+const dryRun = invocation.dryRun
+const assumeYes = invocation.assumeYes
+const allowStaleLockfile = invocation.allowStaleLockfile
+const finishOnly = invocation.finish
+const version = invocation.version
 
 // ---------------------------------------------------------------------------
 // Plumbing
@@ -79,6 +95,26 @@ export function writeOut(text) {
 		// the terminal is gone; the release itself does not depend on it
 	}
 }
+
+/**
+ * A release usually runs under `script(1)` — npm prints its OTP link only on a
+ * real pty. When that wrapper closes (the tab is closed, the editor task ends,
+ * the shell exits) the kernel hangs up on the foreground process group, and
+ * node's default SIGHUP handler exits on the spot. That is exactly how 0.9.7,
+ * 0.9.8 and 0.9.10 each ended with a published tarball, a pushed tag and no
+ * profile pin: the process died between step 7 and step 9, and `writeOut`
+ * surviving a dead stdout was never the whole problem.
+ *
+ * So: swallow the hangup and finish. The remaining steps take seconds, and
+ * every write already goes through `writeOut`, which drops the EPIPE.
+ */
+let hungUp = false
+process.on('SIGHUP', () => {
+	hungUp = true
+})
+process.on('SIGPIPE', () => {
+	hungUp = true
+})
 
 function step(title) {
 	stepNumber += 1
@@ -583,26 +619,28 @@ function publish(tarball) {
  * Wait until the registry serves the version. Purely informational: the
  * upload already succeeded, so a slow registry is a note, never a failure.
  */
-function awaitRegistry() {
+function awaitRegistry({ timeoutMs = 180_000 } = {}) {
 	step('Wait for the registry')
 
 	say('    waiting for the registry to serve the new version')
-	const deadline = Date.now() + 180_000
+	const deadline = Date.now() + timeoutMs
 	for (;;) {
 		const seen = capture('npm', ['view', `${PKG_NAME}@${version}`, 'version'])
 		if (seen === version) break
 		if (Date.now() > deadline) {
 			say('\n')
-			warn(`the registry still does not show ${version} after 3 minutes`)
-			warn('the upload was accepted and the tag is already pushed — re-check with:')
+			warn(`the registry still does not show ${version} after ${Math.round(timeoutMs / 60_000)} minute(s)`)
+			warn('a fresh upload can take a while to appear — re-check with:')
 			note(`npm view ${PKG_NAME} version`)
-			return
+			note(`once it shows up: node bin/release.mjs --finish ${version}`)
+			return false
 		}
 		say('.')
 		spawnSync('sleep', ['4'])
 	}
 	say('\n')
 	ok(`the registry now serves ${version}`)
+	return true
 }
 
 function verifyPublished(tarball) {
@@ -621,9 +659,11 @@ function verifyPublished(tarball) {
 		return
 	}
 
-	const localSha1 = capture('shasum', [tarball]).split(' ')[0]
+	const localSha1 = tarball !== undefined && fs.existsSync(tarball) ? capture('shasum', [tarball]).split(' ')[0] : ''
 	const remoteSha1 = parsed?.dist?.shasum ?? ''
-	if (localSha1 !== '' && remoteSha1 !== '' && localSha1 === remoteSha1) {
+	if (localSha1 === '') {
+		note(`no local tarball to compare against — registry sha1 is ${remoteSha1}`)
+	} else if (remoteSha1 !== '' && localSha1 === remoteSha1) {
 		ok(`published tarball is byte-identical to the one built here (sha1 ${localSha1})`)
 	} else if (remoteSha1 !== '') {
 		warn(`sha1 differs — local ${localSha1}, registry ${remoteSha1}`)
@@ -645,8 +685,12 @@ function tagAndPush(notes) {
 		return
 	}
 
-	run('git', ['tag', '-a', `v${version}`, '-m', `Release ${version}`])
-	ok(`tagged v${version}`)
+	if (git(['tag', '--list', `v${version}`]) !== '') {
+		note(`tag v${version} already exists`)
+	} else {
+		run('git', ['tag', '-a', `v${version}`, '-m', `Release ${version}`])
+		ok(`tagged v${version}`)
+	}
 
 	run('git', ['push', '--quiet', 'origin', 'main'])
 	ok('pushed main')
@@ -655,6 +699,10 @@ function tagAndPush(notes) {
 
 	if (!has('gh') || capture('gh', ['auth', 'status']) === '') {
 		warn('gh not authenticated — create the GitHub release by hand if you want one')
+		return
+	}
+	if (capture('gh', ['release', 'view', `v${version}`, '--json', 'tagName']) !== '') {
+		note(`GitHub release v${version} already exists`)
 		return
 	}
 	const notesFile = path.join(os.tmpdir(), `dsh-weixin-release-${version}.md`)
@@ -731,9 +779,44 @@ function confirm(previousVersion) {
 	ok('confirmed')
 }
 
+/**
+ * Every step a hung terminal can swallow after the upload was accepted: the
+ * tag, the push, the GitHub release, the verification, the profile pin. All of
+ * them are idempotent, so this is safe to run over a release that actually
+ * completed — it just re-states what is already true.
+ *
+ *   node bin/release.mjs --finish 0.9.11
+ */
+function finishRelease() {
+	writeOut(`${C.bold}finishing ${PKG_NAME}@${version ?? '<no version>'}${C.off}\n`)
+	if (version === undefined) {
+		die('--finish needs the version to finish', 'for example: node bin/release.mjs --finish 0.9.11')
+	}
+
+	const published = awaitRegistry({ timeoutMs: 60_000 })
+	if (!published) {
+		die(
+			`${version} is not on the registry, so there is nothing to finish`,
+			'if the upload never happened, run the full release instead of --finish',
+		)
+	}
+
+	const previousTag = git(['describe', '--tags', '--abbrev=0', `v${version}^`]) || git(['describe', '--tags', '--abbrev=0'])
+	tagAndPush(releaseNotes(previousTag))
+	verifyPublished(undefined)
+	installLocally()
+
+	writeOut(`\n${C.green}${C.bold}Finished ${PKG_NAME}@${version}${C.off}\n`)
+}
+
 function main() {
 	writeOut(`${C.bold}dsh-plugin-weixin release ${version ?? '<no version>'}${C.off}\n`)
 	if (dryRun) writeOut(`${C.yellow}dry run: nothing will be committed, tagged or published${C.off}\n`)
+
+	if (finishOnly) {
+		finishRelease()
+		return
+	}
 
 	preflight()
 
@@ -744,6 +827,12 @@ function main() {
 	const notes = releaseNotes(previousTag)
 
 	confirm(previousVersion)
+
+	// The upload is the only step that needs a human (npm's OTP link). Everything
+	// after it is mechanical, so say up front how to recover if the terminal
+	// disappears — a release that dies between publish and the profile pin used to
+	// be a mystery to reconstruct by hand.
+	note(`if this terminal dies mid-release: node bin/release.mjs --finish ${version}`)
 
 	runTests()
 
@@ -786,6 +875,9 @@ function main() {
 	}
 	installLocally()
 
+	if (hungUp) {
+		warn('the terminal hung up during the release — every step still ran to the end')
+	}
 	writeOut(`\n${C.green}${C.bold}Released ${PKG_NAME}@${version}${C.off}\n`)
 	// C31: a publish from this machine carries no provenance attestation —
 	// npm only signs one inside a supported CI, where the OIDC identity can be

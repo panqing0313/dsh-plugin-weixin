@@ -2725,3 +2725,14 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **第 8 步之后脚本又静默退出了**（`[8] Wait for the registry / waiting for the registry to serve the new version.` 之后无输出、exit code 0），`verifyPublished` 与第 9 步钉 profile 都没跑 —— 与 0.9.7/0.9.8 同现象（`writeOut` 只吞掉了 EIO，写完之后轮到等待逻辑时进程仍然提前结束）。手工收尾：`node bin/install.mjs --profile desktop --pin` 一次搞定（复制源码 + `profile dependency ^0.9.9 → ^0.9.10` + `profile lockfile refreshed — the app will not roll back on restart`）。
 - **装好的副本**：`0.9.10`、`PLUGIN_VERSION = "0.9.10"`、`README.en.md` 与 `CHANGELOG.md` 随包落地；`node bin/doctor.mjs` → `up to date (0.9.10)`、11 checks 0 problems。
 - 内容：README 重排（语言切换 / 徽章 / 目录 / 四个入口）+ 版本日志迁到 `CHANGELOG.md` + 新增 `README.en.md`（968 行）+ 发版脚本 bullet 目标改到 CHANGELOG + 修 `--dry-run` 不恢复 CHANGELOG 的 bug。
+
+## 发版脚本：终端断开不再吞掉后半程（2026-10-28）
+
+- **症状**：0.9.7、0.9.8、0.9.10 三次都是「包发了、tag 打了、GitHub Release 建了，然后没有任何输出、exit code 0」——`verifyPublished` 与「钉 profile」没跑，得手工补 `node bin/install.mjs --profile desktop --pin`。0.9.9 那次能跑完，是运气。
+- **根因**：发布必须真 pty（npm 的 2FA 链接只在 TTY 上打印），所以跑在 `script -q /dev/null` 里。包装一关，内核往前台进程组发 `SIGHUP`，**node 默认直接退出** —— 之前只修了 `writeOut` 吞 `EPIPE`，那只挡住了「写输出」，挡不住「进程被杀」。所以它总是死在 `[8] Wait for the registry` 那段 `await sleep(4s)` 上。
+- **修法两层**：
+  - `bin/release.mjs` 顶部 `process.on('SIGHUP' | 'SIGPIPE', …)` 记一个 `hungUp` 标记并继续跑，结尾若真被打断过，多打一行「终端挂断过，但每一步都跑完了」。实测：`node -e "import(...).then(() => { setTimeout(writeFile, 1200); process.kill(process.pid,'SIGHUP') })"` → 子进程 exit 0 且文件写出，证明进程确实活着。
+  - 兜底命令 `node bin/release.mjs --finish <version>`：只做发布之后的收尾（等 registry → tag/push/release → 核验 → 装本机 profile 并钉依赖），配套把每个收尾步骤都做成**幂等**（tag 已存在就跳过、`gh release view` 有就跳过、没有本地 tarball 就只核对 registry sha1 与 dist-tag）。`--finish` 没有版本号时立刻 `die` 并给出示例，不会半跑。
+- **实测**：`node bin/release.mjs --finish 0.9.10`（0.9.10 已发完）→ 四步全绿、无副作用：`the registry now serves 0.9.10` / `tag v0.9.10 already exists` / `GitHub release v0.9.10 already exists` / `profile dependency already points at this version`。
+- **文档**：README（中英）的「发布」节重写步骤表 —— 把顺序改成实际顺序（发布 → **立刻** 打 tag/push → 等待 registry → 核验 → `install.mjs --pin`），补上「终端中途断开怎么办」段与 `--finish` 说明；顺手把示例版本号从 0.4.0 改成 0.9.11、把版本 bullet 指向 `CHANGELOG.md`。
+- **测试**：新增 `test/release-resume.test.js` 3 条（导入即安装 SIGHUP 处理器；`parseReleaseArgs(['0.9.11','--finish'])` 的完整形状；`--finish` 无版本号 → 非零退出且提示示例）。全量 **692/692**、`node bin/check.mjs` → `checked 146 files`。
