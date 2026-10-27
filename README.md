@@ -664,6 +664,14 @@ e2e 的 `proactive` 用例在没有 inbound 消息的情况下验证它真的会
 
 关掉 `richContent` 就回到旧行为：全部压平成一条文本。
 
+### 危险工具提醒（toolNotices）
+
+插件**拦不住**工具执行：DSH 没有把审批/权限钩子暴露给插件（`@deepseek-ai/dsh-user-approval` 是应用层包，`dsh-agent` 的 README 与 `lib/` 里没有任何 permission/approval 接口），所以「工具跑之前先在微信里点同意」这件事本插件做不到。
+
+能做到的那一半是**及时告知**：一个回合里 Agent 要写文件、删文件、移动文件或跑命令时，立刻往微信发一条消息（工具名 + 参数摘要，命令里出现 `rm -rf`、`sudo`、`curl | bash`、`git push --force`、`chmod 777`、`dd if=` 等会标成 ⚠️ 风险），并明说：`/cancel` 能停掉**后面的步骤**——正在跑的这一步可能已经执行了。
+
+同一会话同一工具十分钟内只提醒一次，免得一个连续跑命令的回合刷屏。`toolNotices: false` 关掉。
+
 ### 群聊（groupChatEnabled · groupReplyWhen · groupShareMemory）
 
 群消息的 `conversationId` 就是 `group_id`，回复地址一直是对的；缺的是判断——以前机器人对群里每一条消息都会答。

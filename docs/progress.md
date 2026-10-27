@@ -2679,4 +2679,6 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 
 **18 记忆改口**：`addGlobalFact` 新增 `supersedes`（宽松子串匹配、替换而非追加、旧文本进 `superseded` 历史、存满时替换照样成功）；摘要 prompt 要求 `facts: [{text, supersedes}]`，模型看到【已经记下的】就能点名被推翻的那条；`/remember 旧 → 新`（`→`/`->`/`=>`）走同一条路；`/memory` 显示「改过的说法」；回忆块加了「冲突以时间较晚为准」。测试：memory +3（替换/宽松匹配/存满仍可替换）、summarizer +1（supersedes 替换 + 提示词要求）、会话命令 +1（箭头改口后 /memory 显示历史）。
 
+**15 危险工具提醒**：先确认宿主侧没有可用接口（插件能 import 的 `@deepseek-ai` 只有 cordis/cosmokit/dsh-agent/dsh-llm/dsh-typert-protocol/schemastery；`dsh-agent` 的 README 与 lib 里 grep 不到 permission/approval），所以只做可执行的那一半：`src/message/tool-guard.js`（`DANGEROUS_TOOLS` 名单、`classifyToolCall` 归一化工具名/抽参数摘要/危险词标 high、`noticeText` 生成微信文案）；`src/agent-bridge.js` 新增 `onToolCall` 回调（从 `#auditEvents` 的 tool/call 事件发出，抛错只 `errLog`，与 `onToolAudit` 独立 —— 审计关掉时提醒照样有）；`src/index.js` 接线，同会话同工具 10 分钟内只提醒一次，配置 `toolNotices` + 设置卡字段。测试：`test/tool-guard.test.js` 6 条（危险名单/归一化/参数抽取/截断/危险词分级/文案不假装审批），e2e 1 条（真插件 + fake agent 发 bash 调用 → 微信收到 `/cancel` 提示并且与回复是两条消息；`toolNotices:false` 时完全没有）。
+
 未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。

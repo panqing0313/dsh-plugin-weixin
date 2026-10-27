@@ -636,6 +636,63 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
   }
 })
 
+test('a dangerous tool is announced in WeChat while the turn is still running', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  // C15. The plugin cannot veto a call, so the deliverable is the warning: it
+  // must arrive by itself (nobody asked again), name the tool and the command,
+  // and tell the owner how to stop the rest of the turn.
+  for (const [toolNotices, expected] of [[true, true], [false, false]]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-guard-${toolNotices}-`))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      const { server, baseUrl, sent } = await startFakeILink([
+        [
+          { message_id: 5301, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ctg', create_time_ms: 14, item_list: [{ type: 1, text_item: { text: '清一下临时目录' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolNotices })
+      const fakeAgents = createFakeAgents({
+        reply: '好的，已经清理。',
+        tools: [{ callId: 'call-guard', name: 'bash', arguments: { command: 'rm -rf /tmp/dsh-test-scratch' } }],
+      })
+
+      const disposers = []
+      const ctx = {
+        logger: { info: () => {}, warn: () => {} },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? fakeAgents : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 10_000
+      while (sent.length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      const texts = sent.map((entry) => entry.msg.item_list?.[0]?.text_item?.text ?? '')
+      const notice = texts.find((text) => text.includes('/cancel'))
+      if (expected) {
+        assert.ok(notice, `expected a /cancel hint among: ${JSON.stringify(texts)}`)
+        assert.match(notice, /\u26a0\ufe0f 这一步看着有风险/)
+        assert.match(notice, /`bash`：rm -rf \/tmp\/dsh-test-scratch/)
+        assert.ok(texts.length >= 2, 'the warning and the real reply are separate messages')
+      } else {
+        assert.equal(notice, undefined, `toolNotices off must stay quiet: ${JSON.stringify(texts)}`)
+      }
+    } finally {
+      delete process.env.DSH_WEIXIN_STATE_DIR
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+    }
+  }
+})
+
 test('toolAudit on: tool runs land in <state>/audit; off: nothing is recorded', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 

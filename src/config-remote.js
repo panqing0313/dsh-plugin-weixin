@@ -446,6 +446,15 @@ export const FIELDS = [
           hintEn: "Infer the character's mood and energy from the clock and today's chat history, and fold it into the prompt. The stock assistant never gets it.",
         },
         {
+          path: "toolNotices",
+          type: T.boolean,
+          default: true,
+          label: "危险工具提醒",
+          labelEn: "Dangerous tool notices",
+          hint: "Agent 要写文件、删文件或跑命令时，先在微信里告诉你一声，并说明 /cancel 能停掉后面的步骤。插件无法在工具执行前拦截，正在跑的这一步可能已经执行了。",
+          hintEn: "Warn in WeChat when the agent reaches for write, delete or command tools, and say that /cancel stops the rest. The plugin cannot veto the call in flight; it may already have run.",
+        },
+        {
           path: "stickerEnabled",
           type: T.boolean,
           default: true,

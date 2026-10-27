@@ -140,6 +140,11 @@ export class AgentBridge {
     // that polls the session log), so it is the only place that can say which
     // tool ran; where the lines go is the caller's decision.
     this.onToolAudit = options.onToolAudit
+    // C15: fired for every tool/call the audit scan sees, with the conversation
+    // attached, so the caller can warn the owner in WeChat without parsing the
+    // audit log. Separate from onToolAudit because it must run even when the
+    // audit log is turned off.
+    this.onToolCall = options.onToolCall
     // Conversation id -> the session id its next message must reach. Needed
     // because `deliver` is handed a session id but must still be able to route
     // a late reply and, for a brand-new line, share one in-flight creation.
@@ -856,6 +861,23 @@ export class AgentBridge {
             ...(typeof callId === 'string' ? { callId } : {}),
             args: event.data?.arguments,
           })
+          // C15: the same event feeds the "dangerous tool" notice. It rides the
+          // audit scan because that is the only place the plugin ever sees a
+          // tool call at all; a throwing listener must not break the turn.
+          if (this.onToolCall !== undefined) {
+            try {
+              this.onToolCall({
+                ...meta,
+                conversationId: meta.conversationId ?? record.conversationId ?? '',
+                accountId: meta.accountId ?? record.accountId,
+                tool,
+                ...(typeof callId === 'string' ? { callId } : {}),
+                args: event.data?.arguments,
+              })
+            } catch (failure) {
+              this.errLog(`tool call listener failed: ${String(failure)}`)
+            }
+          }
         } else if (event.type === 'tool/result') {
           const callId = event.data?.message?.source?.callId
           const known = typeof callId === 'string' ? record.auditCalls.get(callId) : undefined

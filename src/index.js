@@ -95,6 +95,7 @@ import {
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
 import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
+import { classifyToolCall, noticeText } from './message/tool-guard.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { statePaths } from './state-layout.js'
@@ -200,6 +201,11 @@ export const Config = z.object({
   videoFrames: z.boolean().default(true).description('收到视频时用本机 ffmpeg 抽几帧静图交给模型（模型读不了视频，但能看图）。需要的机器上装了 ffmpeg；抽帧失败只影响那一条视频的内容理解，文件照常保存。'),
   richContent: z.boolean().default(true).description('富内容：长代码块作为文件附件发出、Markdown 表格转成对齐文本。微信只有纯文本气泡，这两处是 Markdown 里最容易在纯文本里变形的东西。'),
   codeFileThreshold: z.number().min(200).max(20000).default(1200).description('代码块超过多少字就改成发文件；更短的留在气泡里（两行代码读起来比附件顺）。'),
+  // C15: the plugin cannot veto a tool call (DSH exposes no approval hook to
+  // plugins), so it does the honest half: tell the owner when a turn reaches
+  // for something that writes, deletes or runs a command, while /cancel can
+  // still stop whatever comes next.
+  toolNotices: z.boolean().default(true).description('危险工具提醒：Agent 要执行写文件、删文件、跑命令之类的工具时，先在微信里告诉你一声（/cancel 可中止后续步骤）。插件无法在工具执行前拦截，这一步可能已经跑了。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
@@ -396,6 +402,12 @@ export function apply(ctx, config) {
      * @type {Map<string, ILinkTransport>}
      */
     const transports = new Map()
+    // C15: one notice per tool per conversation per window. A turn that runs
+    // ten bash commands is still one turn, and a stuck loop must not become a
+    // stream of warnings.
+    const noticedTools = new Map()
+    /** Same tool, same conversation: stay quiet for ten minutes. */
+    const TOOL_NOTICE_WINDOW_MS = 10 * 60_000
     /** @type {AgentBridge | undefined} */
     let bridge
     /** @type {ReturnType<typeof createMemorySummarizer> | undefined} */
@@ -443,6 +455,29 @@ export function apply(ctx, config) {
         ...(config.toolAudit === false
           ? {}
           : { onToolAudit: (entry) => appendToolAudit(stateRoot, entry, { warn }) }),
+        // C15: the honest half of "approve tools in WeChat". The plugin cannot
+        // veto a call, but it can say so while the turn is still running, and
+        // /cancel stops everything after the call in flight. One notice per
+        // tool per turn: a turn that runs ten bash commands is still one turn.
+        onToolCall: (entry) => {
+          if (withSavedConfig(config).toolNotices === false) return
+          const verdict = classifyToolCall({ tool: entry.tool, args: entry.args })
+          if (verdict.dangerous === false) return
+          const key = `${entry.conversationId}|${entry.sessionId}|${verdict.tool}`
+          const seen = noticedTools.get(key)
+          const bucket = seen === undefined || Date.now() - seen > TOOL_NOTICE_WINDOW_MS ? 0 : seen
+          if (bucket !== 0) return
+          noticedTools.set(key, Date.now())
+          const liveTransport = transports.get(entry.accountId)
+          if (liveTransport === undefined) return
+          // Fire and forget: this runs inside the turn's event scan, so a slow
+          // send must never hold the turn. The transport falls back to the
+          // typing ticket when no context token is at hand.
+          void sendChunked(liveTransport, withSavedConfig(config), {
+            conversationId: entry.conversationId,
+            text: noticeText(verdict),
+          }).catch((failure) => warn(`tool notice failed: ${String(failure)}`))
+        },
       })
 
       // The P2 memory summarizer: folds recent turns into conv memory every
