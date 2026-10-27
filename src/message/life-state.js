@@ -12,9 +12,11 @@
  * hidden state beyond the JSON file.
  */
 
-import fs from 'node:fs';
+import fs from 'node:fs'
 import path from 'node:path'
-import { atomicWriteJson } from '../atomic.js';
+
+import { atomicWriteJson } from '../atomic.js'
+import { keyedStatePath } from '../state-layout.js'
 
 const noopWarn = () => {};
 
@@ -35,7 +37,7 @@ function safeName(value) {
  * @returns {string}
  */
 export function lifeFilePath(stateRoot, accountId) {
-  return path.join(stateRoot, 'memory', `life-${safeName(accountId)}.json`);
+  return keyedStatePath(stateRoot, 'memoryDir', `life-${safeName(accountId)}.json`);
 }
 
 /**

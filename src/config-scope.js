@@ -13,6 +13,7 @@
 // an allowlist is a security footgun dressed as a convenience, and nothing on
 // this list can widen who may talk to the bot.
 
+import { statePath } from './state-layout.js'
 import path from 'node:path';
 
 import { atomicWriteJson, readJsonFile } from './atomic.js';
@@ -39,7 +40,7 @@ export const SCOPABLE_KEYS = Object.freeze([
 const SCOPE_VERSION = 1;
 
 export function scopeFilePath(stateRoot) {
-  return path.join(stateRoot, 'config-scope.json');
+  return statePath(stateRoot, 'configScope');
 }
 
 function keyFor(accountId, conversationId) {

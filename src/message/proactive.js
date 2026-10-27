@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { keyedStatePath } from '../state-layout.js'
 import { atomicWriteJson } from '../atomic.js'
 import { parseClockHHmm } from './quiet-hours.js'
 import { formatStamp } from './subscriptions.js'
@@ -55,7 +56,7 @@ function dayString(now) {
 
 /** Where one account's proactive bookkeeping lives. */
 export function proactiveFilePath(stateRoot, accountId) {
-  return path.join(stateRoot, 'memory', `proactive-${safeName(accountId)}.json`)
+  return keyedStatePath(stateRoot, 'memoryDir', `proactive-${safeName(accountId)}.json`)
 }
 
 /**

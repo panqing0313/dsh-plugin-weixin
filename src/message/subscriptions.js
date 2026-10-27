@@ -7,6 +7,7 @@
  * the same tolerant-read rules as the reminder store: a corrupted store must
  * never take the message loop down.
  */
+import { statePath } from '../state-layout.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { atomicWriteJson } from '../atomic.js'
@@ -86,7 +87,7 @@ export function formatStamp(ms) {
 }
 
 function storePath(stateRoot) {
-    return path.join(stateRoot, 'subscriptions.json')
+    return statePath(stateRoot, 'subscriptions')
 }
 
 export function readSubscriptions(stateRoot, warn = () => {}) {

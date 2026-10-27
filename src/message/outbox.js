@@ -20,6 +20,7 @@
  * @module dsh-weixin/message/outbox
  */
 
+import { statePath } from '../state-layout.js'
 import path from 'node:path'
 import { atomicWriteJson, readJsonFile } from '../atomic.js'
 import fs from 'node:fs'
@@ -36,7 +37,7 @@ export const FLUSH_INTERVAL_MS = 30_000
 
 /** @param {string} stateRoot */
 export function outboxFile(stateRoot) {
-  return path.join(stateRoot, 'outbox.json')
+  return statePath(stateRoot, 'outbox')
 }
 
 /**

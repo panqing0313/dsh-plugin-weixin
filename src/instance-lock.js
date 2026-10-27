@@ -15,6 +15,7 @@
  * @module dsh-weixin/instance-lock
  */
 
+import { statePath } from './state-layout.js'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -25,7 +26,7 @@ export const STALE_MS = 3 * HEARTBEAT_MS
 
 /** @param {string} stateRoot */
 export function lockFile(stateRoot) {
-  return path.join(stateRoot, 'instance.lock')
+  return statePath(stateRoot, 'instanceLock')
 }
 
 /** @param {number} pid */
