@@ -811,7 +811,7 @@ function main() {
  * forgot `src/client.js`, so a dry run reported "tree unchanged" while leaving
  * the card's PLUGIN_VERSION bumped.
  */
-export const VERSION_FILES = ['package.json', 'package-lock.json', 'src/client.js', 'README.md']
+export const VERSION_FILES = ['package.json', 'package-lock.json', 'src/client.js', 'README.md', 'CHANGELOG.md']
 
 /** Read the files the version bump rewrites, so a dry run can put them back. */
 export function snapshotTextFiles(root = ROOT) {

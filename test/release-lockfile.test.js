@@ -94,6 +94,11 @@ test('the dry-run snapshot covers every file the version bump rewrites', () => {
   // The client constant is rewritten by the bump, so it must be snapshotted.
   assert.ok(VERSION_FILES.includes('src/client.js'), 'src/client.js carries PLUGIN_VERSION')
   assert.match(snapshot.find((f) => f.path === 'src/client.js').text, /const PLUGIN_VERSION = "\d+\.\d+\.\d+";/)
+  // The release notes gain a TODO bullet during the bump — same rule as above,
+  // and the first dry run after they moved out of the README left a stray
+  // bullet behind precisely because this list had not grown with them.
+  assert.ok(VERSION_FILES.includes('CHANGELOG.md'), 'CHANGELOG.md gains the release bullet')
+  assert.match(snapshot.find((f) => f.path === 'CHANGELOG.md').text, /\n- \*\*\d+\.\d+\.\d+\*\* —— /)
 })
 
 /**
