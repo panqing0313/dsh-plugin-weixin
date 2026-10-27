@@ -32,6 +32,7 @@
  * @module dsh-weixin/src/sessions
  */
 import fs from 'node:fs'
+import { createTranslator, translate } from './i18n.js'
 import path from 'node:path'
 
 import { stateDir } from './state.js'
@@ -549,16 +550,16 @@ const identity = () => ({})
 
 /** @type {CommandRule[]} */
 const COMMANDS = [
-  { id: 'new', pattern: /^\/new$/i, build: identity, helpRank: 1, help: '/new 开一条新会话（当前这条会保留，之后可以切回来）' },
-  { id: 'list', pattern: /^\/(?:list|sessions)$/i, build: identity, helpRank: 2, help: '/list 查看这个微信会话下的所有会话' },
+  { id: 'new', pattern: /^\/new$/i, build: identity, helpRank: 1, helpKey: 'help.new' },
+  { id: 'list', pattern: /^\/(?:list|sessions)$/i, build: identity, helpRank: 2, helpKey: 'help.list' },
   {
     id: 'use',
     pattern: /^\/use(?:\s+(\d+))?$/i,
     build: (match) => ({ index: match[1] === undefined ? undefined : Number(match[1]) }),
     helpRank: 3,
-    help: '/use <序号> 切换到第几条',
+    helpKey: 'help.use',
   },
-  { id: 'clear', pattern: /^\/clear$/i, build: identity, helpRank: 4, help: '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）' },
+  { id: 'clear', pattern: /^\/clear$/i, build: identity, helpRank: 4, helpKey: 'help.clear' },
   // `/cancel`（或 `/取消`）interrupts the turn that is running right now. It is
   // a command rather than a busy-mode action on purpose: it has to be answerable
   // WHILE the conversation is busy, which is exactly when a plain message would
@@ -568,16 +569,16 @@ const COMMANDS = [
   // await the whole turn inside its poll loop, so a cancel sent mid-turn was
   // only read after that turn ended. `isInterruptCommand` (above) is what lets
   // the transport recognise this one command and handle it out of order.
-  { id: 'cancel', pattern: CANCEL_COMMAND, build: identity, helpRank: 5, help: '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）' },
+  { id: 'cancel', pattern: CANCEL_COMMAND, build: identity, helpRank: 5, helpKey: 'help.cancel' },
   {
     id: 'status',
     pattern: /^\/status$/i,
     build: identity,
     helpRank: 15,
-    help: '/status 查看当前账号和会话的状态（白名单、会话线等）',
+    helpKey: 'help.status',
     run: (state) => runStatus(state),
   },
-  { id: 'help', pattern: /^\/(?:help|帮助|指令)$/i, build: identity, run: () => SESSION_COMMANDS_HELP },
+  { id: 'help', pattern: /^\/(?:help|帮助|指令)$/i, build: identity, run: ({ context }) => buildCommandsHelp(context?.t) },
   // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
   // 单独报「缺内容」而非「看不懂命令」。
   {
@@ -585,15 +586,15 @@ const COMMANDS = [
     pattern: /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i,
     build: (match) => ({ when: match[1], text: match[2] ?? '' }),
     helpRank: 16,
-    help: '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
+    helpKey: 'help.remind',
   },
-  { id: 'remindlist', pattern: /^\/remindlist$/i, build: identity, helpRank: 17, help: '/remindlist 查看这个账号还没发出的提醒' },
+  { id: 'remindlist', pattern: /^\/remindlist$/i, build: identity, helpRank: 17, helpKey: 'help.remindlist' },
   {
     id: 'remindcancel',
     pattern: /^\/remindcancel\s+(\S+)$/i,
     build: (match) => ({ id: match[1] }),
     helpRank: 18,
-    help: '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）',
+    helpKey: 'help.remindcancel',
   },
   // Bare `/subscribe` (and `/订阅`) answers with usage instead of reaching
   // the agent: a bare time command read as a chat message would silently
@@ -603,52 +604,62 @@ const COMMANDS = [
     pattern: /^\/(?:subscribe|订阅)\s+((?:每天|每日|daily)\s+\d{1,2}:\d{2}|每周[一二三四五六日天]\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}|\S+)(?:\s+([\s\S]+))?$/i,
     build: (match) => ({ when: match[1], text: match[2] ?? '' }),
     helpRank: 19,
-    help: '/subscribe <时间> <主题> 定时主动消息：每天/每周X HH:mm，或一次性时间；到点我会主动给你发一条',
+    helpKey: 'help.subscribe',
   },
   {
     id: 'subscribe',
     pattern: /^\/(?:subscribe|订阅)$/i,
     build: () => ({ when: '', text: '' }),
   },
-  { id: 'summary', pattern: /^\/(?:summary|总结)$/i, build: identity, helpRank: 11, help: '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办' },
+  { id: 'summary', pattern: /^\/(?:summary|总结)$/i, build: identity, helpRank: 11, helpKey: 'help.summary' },
   {
     id: 'export',
     pattern: /^\/(?:export|导出)(?:\s+(\d{1,3}))?$/i,
     build: (match) => ({ days: match[1] === undefined ? undefined : Number(match[1]) }),
     helpRank: 12,
-    help: '/export [天数] 导出最近 N 天（默认 30）的聊天记录',
+    helpKey: 'help.export',
   },
-  { id: 'subscribelist', pattern: /^\/(?:subscribelist|订阅列表)$/i, build: identity, helpRank: 20, help: '/subscribelist 查看这个账号的定时主动消息' },
+  { id: 'subscribelist', pattern: /^\/(?:subscribelist|订阅列表)$/i, build: identity, helpRank: 20, helpKey: 'help.subscribelist' },
   {
     id: 'subscribecancel',
     pattern: /^\/(?:subscribecancel|订阅取消)\s+(\S+)$/i,
     build: (match) => ({ id: match[1] }),
     helpRank: 21,
-    help: '/subscribecancel <编号> 取消一条定时主动消息（编号来自 /subscribelist）',
+    helpKey: 'help.subscribecancel',
   },
   // Persona + memory commands (personalization round). Parsing stays pure:
   // each one is ANSWERED by a handler the inbound handler provides under
   // context.persona, because the store and the mode table live with the
   // plugin's state root, not in this module.
-  { id: 'mode', pattern: /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 6, help: '/mode [名称] 查看或切换对话模式（如 女友/男友/朋友；切换会开一条新会话线）' },
-  { id: 'remember', pattern: /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 7, help: '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）' },
-  { id: 'forget', pattern: /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 8, help: '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）' },
-  { id: 'memory', pattern: /^\/(?:memory|记忆)$/i, build: identity, helpRank: 9, help: '/memory 查看记住的内容和这段会话的记忆' },
-  { id: 'recall', pattern: /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 10, help: '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token' },
+  { id: 'mode', pattern: /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 6, helpKey: 'help.mode' },
+  { id: 'remember', pattern: /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 7, helpKey: 'help.remember' },
+  { id: 'forget', pattern: /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 8, helpKey: 'help.forget' },
+  { id: 'memory', pattern: /^\/(?:memory|记忆)$/i, build: identity, helpRank: 9, helpKey: 'help.memory' },
+  { id: 'recall', pattern: /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 10, helpKey: 'help.recall' },
 ]
 
 /** Commands answered by the inbound handler's persona bundle (state root lives there). */
 const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall'])
 
-const HELP_HEADER = '会话指令（发 /help 或 /帮助 可再看一遍）：'
+/**
+ * The help text in one locale (C33). Command rules carry a `helpKey` into the
+ * catalogue rather than a sentence, so the same list can be spoken in any
+ * language we ship; Chinese is the default and what `/help` produced before.
+ *
+ * @param {(key: string) => string} [t]
+ */
+export function buildCommandsHelp(t = (key) => translate(key, undefined)) {
+  return [
+    t('help.header'),
+    ...COMMANDS
+      .filter((rule) => rule.helpKey !== undefined)
+      .sort((left, right) => (left.helpRank ?? 99) - (right.helpRank ?? 99))
+      .map((rule) => t(rule.helpKey)),
+  ].join('\n')
+}
 
-export const SESSION_COMMANDS_HELP = [
-  HELP_HEADER,
-  ...COMMANDS
-    .filter((rule) => rule.help !== undefined)
-    .sort((left, right) => (left.helpRank ?? 99) - (right.helpRank ?? 99))
-    .map((rule) => rule.help),
-].join('\n')
+/** Chinese help, for callers that never configure a locale (tests, tooling). */
+export const SESSION_COMMANDS_HELP = buildCommandsHelp()
 
 /**
  * Recognise a control command, or return undefined so the caller can treat the

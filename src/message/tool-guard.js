@@ -13,6 +13,8 @@
  * already have run, but nothing after it will.
  */
 
+import { translate } from '../i18n.js'
+
 /** Tools that can touch the machine. Matched case-insensitively, namespace stripped. */
 export const DANGEROUS_TOOLS = new Set([
     'bash', 'shell', 'exec', 'sh', 'run', 'run_command', 'command',
@@ -77,8 +79,9 @@ export function classifyToolCall({ tool, args } = {}) {
  *
  * @param {{tool: string, detail: string, level: 'high' | 'normal'}} call
  */
-export function noticeText({ tool, detail, level }) {
-    const head = level === 'high' ? '⚠️ 这一步看着有风险' : '🔧 要用工具了'
-    const lines = [head, `\`${tool}\`${detail === '' ? '' : `：${detail}`}`, '要停就发 /cancel —— 正在跑的这一步可能已经执行，但后面的步骤不会再继续。']
-    return lines.join('\n')
+export function noticeText({ tool, detail, level }, locale = 'zh') {
+    const head = translate(level === 'high' ? 'notice.dangerHigh' : 'notice.dangerNormal', undefined, locale)
+    const body = translate('notice.dangerBody', { tool: `\`${tool}\``, detail: detail === '' ? '' : `：${detail}` }, locale)
+    const footer = translate('notice.dangerFooter', undefined, locale)
+    return [head, body, footer].join('\n')
 }

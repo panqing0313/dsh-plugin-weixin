@@ -772,3 +772,14 @@ test('the conversation itself runs on the chat route', async () => {
     }
   }, { chatProvider: 'good', chatModel: 'good-1' })
 })
+
+test('locale: en makes the bot speak English where it has a translation', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/help', 'm1')
+    await waitFor(() => fake.outbound.length >= 1, '/help answered')
+    const help = fake.outbound[0].text
+    assert.match(help, /Session commands/)
+    assert.match(help, /\/recall <keyword>/)
+    assert.ok(!help.includes('会话指令'))
+  }, { locale: 'en' })
+})

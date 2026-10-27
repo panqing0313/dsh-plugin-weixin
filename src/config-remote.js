@@ -482,6 +482,15 @@ export const FIELDS = [
           hintEn: "Infer the character's mood and energy from the clock and today's chat history, and fold it into the prompt. The stock assistant never gets it.",
         },
         {
+          path: "locale",
+          type: T.string,
+          default: "zh",
+          label: "语言",
+          labelEn: "Language",
+          hint: "zh 或 en；日志始终英文。",
+          hintEn: "zh or en. Logs stay English either way.",
+        },
+        {
           path: "toolNotices",
           type: T.boolean,
           default: true,

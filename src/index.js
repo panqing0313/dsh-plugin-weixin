@@ -96,6 +96,7 @@ import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from '.
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
 import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
 import { classifyToolCall, noticeText } from './message/tool-guard.js'
+import { createTranslator, resolveLocale } from './i18n.js'
 import { routeFor, sideRouteFor } from './model-route.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
@@ -213,6 +214,9 @@ export const Config = z.object({
   // plugins), so it does the honest half: tell the owner when a turn reaches
   // for something that writes, deletes or runs a command, while /cancel can
   // still stop whatever comes next.
+  // C33: the catalogue covers user-visible chatter (command help, notices);
+  // logs stay English because they are read in files by one operator.
+  locale: z.string().default('zh').description('界面与微信里回复的语言：zh（中文，默认）或 en（English）。日志始终英文。'),
   toolNotices: z.boolean().default(true).description('危险工具提醒：Agent 要执行写文件、删文件、跑命令之类的工具时，先在微信里告诉你一声（/cancel 可中止后续步骤）。插件无法在工具执行前拦截，这一步可能已经跑了。'),
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
@@ -489,7 +493,7 @@ export function apply(ctx, config) {
           // typing ticket when no context token is at hand.
           void sendChunked(liveTransport, withSavedConfig(config), {
             conversationId: entry.conversationId,
-            text: noticeText(verdict),
+            text: noticeText(verdict, resolveLocale(withSavedConfig(config).locale)),
           }).catch((failure) => warn(`tool notice failed: ${String(failure)}`))
         },
       })
@@ -1457,7 +1461,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     if (message.unsupported !== undefined) {
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
-        text: `（暂不支持这条消息：${message.unsupported}）`,
+        text: createTranslator(effectiveConfig.current.locale).t('notice.unsupported', { kind: message.unsupported }),
         contextToken: message.contextToken,
       })
       return
@@ -1500,7 +1504,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       if (gate.shouldWarn === true) {
         await sendChunked(transport, config, {
           conversationId: message.conversationId,
-          text: `（你发得有点快，我先缓一下～${Math.max(1, Math.ceil(gate.retryAfterMs / 1000))} 秒后再来）`,
+          text: createTranslator(effectiveConfig.current.locale).t('notice.rateLimited', {
+            seconds: Math.max(1, Math.ceil(gate.retryAfterMs / 1000)),
+          }),
           contextToken: message.contextToken,
         }).catch(() => {})
         appendToolAudit(stateRoot, {
@@ -1606,6 +1612,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         ? bondLine(readConvMemory(stateRoot, accountId, message.conversationId, { warn }).bond)
         : '',
       persona: personaCommands(message.conversationId),
+      t: createTranslator(effectiveConfig.current.locale).t,
     })
     if (commandReply !== undefined) {
       await sendChunked(transport, config, {

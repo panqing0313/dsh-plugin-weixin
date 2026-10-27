@@ -32,7 +32,8 @@
     "test:watch": "node --import ./test/isolate-host-state.mjs --test --watch \"test/**/*.test.js\"",
     "doctor": "node bin/doctor.mjs",
     "check": "node bin/check.mjs",
-    "vendor": "node bin/vendor-manifest.mjs"
+    "vendor": "node bin/vendor-manifest.mjs",
+    "i18n": "node bin/i18n-report.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
