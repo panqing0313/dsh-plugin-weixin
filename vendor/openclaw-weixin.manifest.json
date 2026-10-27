@@ -1,0 +1,32 @@
+{
+  "name": "openclaw-weixin-vendored",
+  "version": "2.4.10",
+  "files": {
+    "LICENSE": "7f1e8cf099cf03de7c775e33e97e3c950c3a56a9616bb4de6b14d3c911bc5573",
+    "api/api.js": "0f83baf659da14277896cacfa0194dec9be2c7ed31b2a039a0a62f2a8ff58eaf",
+    "api/types.js": "bb1beff52adda8e48c6b4bc04d583a2823e2ebc23d682bb81dcadf905cdecc6e",
+    "auth/accounts.js": "0b7cfa122acae7cb3d673faf8d6b66c6bee22e8cf5478792666506fc5047f8df",
+    "auth/login-qr.js": "bca3ca5610fb8926809e9649f6a66a6ca41bb2f71fac9c973112dfd280af06c8",
+    "auth/pairing.js": "e01d8a1d8f6ebb34883b8f2c2816b697d61038a5cc69f9fe9a645061de5edd3a",
+    "cdn/aes-ecb.js": "14fb8bf53b6b48b2847880c1113429cc9bf104914de948b0d37e3ec781343648",
+    "cdn/cdn-upload.js": "53725891a2f4b98349e822802552b3f12e30c5afc80653870c4fa97fc5c7d180",
+    "cdn/cdn-url.js": "e4f78e945df05f1f55eb088885b4dfc806a2e403504a8428b3bbe7e6d92d4e1a",
+    "cdn/pic-decrypt.js": "cdce0f1eac2790abaae19e3705f6bc85870c3da0227a7cecdcd4183fe436fd1d",
+    "cdn/upload.js": "8f0a162cc1b34304189594d48c82a0fce08840a90358d9b8289f0ee4ddbcebe3",
+    "media/media-download.js": "3857222e5a8db51b3794f056594dc7e35e036f7fef4b0a07179b743e2985bd08",
+    "media/mime.js": "8d188dd5e8d07efb82da96917a9eea393ec74ed7999b11ad39863729c9206460",
+    "media/silk-transcode.js": "43c806021022b3ffd11a3c60f8598af0c020da986886595beea716799dd234e0",
+    "messaging/markdown-filter.js": "f5c66de6759a3e656773b310d56c6d75ed23769fb2d7db2d15f577bb1e6b1cd5",
+    "messaging/partial-quote.js": "7200dad1609c6f0529a96f858b8960304866e0d966163e2daf510ed89461126e",
+    "messaging/quote-store.js": "44b418eb43ad358c3e7347567d556ae29bbb0c2d637ec3fb57d65e38b04d17e6",
+    "messaging/send-media.js": "4db389517123d4e701f86384c68b0c8dccfbe362fa7c9207f9cfd1962394636c",
+    "messaging/send.js": "b721bf147b3ed5d8da1469c31bb4c87b40ea19af72587082dcb005a5f40510df",
+    "openclaw-shim.js": "60507a9dbddb3a3cfe28bedc86bdaed84dc156344e3074582019b0be1b33a164",
+    "package.json": "7e50f77818680a280cba15d09aa9cf4b6830b7db2e950a231e7eddf815eb708b",
+    "storage/state-dir.js": "1a7d7b2bc761ffa87282958beaeb00b6bae26ad130efd9ec9d8ec022800ad1ca",
+    "storage/sync-buf.js": "d3f26c1a0089c45cf282ae5aafa3ca00a4cad1afe435bf1e527887c4ad959e33",
+    "util/logger.js": "e2b902b3655ed109744ff8af8a3e85ea9a2932d379cca226c075d5a2080109ba",
+    "util/random.js": "e7f9c8bf900779a1f4aaa3e28849c083bf783cc67e682f2cb7f9088a6fc6f15d",
+    "util/redact.js": "0155497be81500b29023bcc00b33415a189163ab5ffd694fd1af5cc3ee3cd63a"
+  }
+}
