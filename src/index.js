@@ -25,6 +25,7 @@ import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { createOutbox } from './message/outbox.js'
+import { channelFor } from './channel.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -684,7 +685,7 @@ export function apply(ctx, config) {
           try {
             await sendChunked(transport, config, { conversationId: candidate.conversationId, text: plan.text })
             for (const stickerId of plan.stickers.slice(0, MAX_STICKERS_PER_REPLY)) {
-              await transport.sendMedia({
+              await channelFor(transport).sendMedia({
                 filePath: stickerPath(stickerId),
                 conversationId: candidate.conversationId,
                 cdnBaseUrl: transport.cdnBaseUrl,
@@ -1734,7 +1735,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       // log line: the reply has already been delivered.
       for (const stickerId of stickerPlan.stickers) {
         try {
-          await transport.sendMedia({
+          await channelFor(transport).sendMedia({
             filePath: stickerPath(stickerId),
             text: '',
             conversationId: message.conversationId,
@@ -1889,7 +1890,7 @@ async function sendProducedFiles(params) {
   const pending = produced.filter((filePath) => !params.alreadySent.includes(filePath))
   for (const filePath of pending) {
     try {
-      await params.transport.sendMedia({
+      await channelFor(params.transport).sendMedia({
         filePath,
         conversationId: params.conversationId,
         contextToken: params.contextToken,
@@ -1937,9 +1938,13 @@ async function sendChunked(transport, config, message) {
   const gapMs = Number(message.gapMs)
   for (let index = 0; index < chunks.length; index += 1) {
     if (index > 0 && Number.isFinite(gapMs) && gapMs > 0) await sleep(gapMs)
-    const chunk = { conversationId: message.conversationId, type: 'text', text: chunks[index], contextToken: message.contextToken }
+    // Everything downstream of here talks to a Channel, not a transport: the
+    // shape of a text send lives in one place (src/channel.js) instead of being
+    // re-derived by every caller.
+    const channel = channelFor(transport)
+    const chunk = { conversationId: message.conversationId, text: chunks[index], contextToken: message.contextToken }
     try {
-      await transport.send(chunk)
+      await channel.sendText(chunk)
     } catch (error) {
       // A send that fails here used to lose the text forever: the model had
       // already written it and nothing held a copy. Queue it instead — the
