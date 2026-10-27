@@ -23,6 +23,7 @@ import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
+import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -371,6 +372,7 @@ export function apply(ctx, config) {
     let subscriptionScheduler
     let proactiveScheduler
     let retentionTimer
+    let lockHeartbeat
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -436,6 +438,20 @@ export function apply(ctx, config) {
       // 免打扰时段: the gate reads the LIVE config at fire time (the card can
       // flip the window mid-flight), reusing withSavedConfig so the saved
       // settings outrank the composition exactly like everywhere else.
+      // One writer per state directory. A second DSH window used to overwrite
+      // this one's files silently; now it says so once and carries on (the
+      // writes are atomic, so the damage is bounded to last-writer-wins).
+      const lock = acquireInstanceLock(stateRoot, { warn })
+      if (lock.acquired === false) {
+        warn(
+          `another DSH instance already writes this Weixin state (pid ${lock.holder.pid}). ` +
+            'Both windows will poll the same account and overwrite each other\'s state; close one of them.',
+        )
+      } else {
+        lockHeartbeat = setInterval(() => heartbeatInstanceLock(stateRoot), HEARTBEAT_MS)
+        lockHeartbeat.unref?.()
+      }
+
       const quietGate = (now) => quietDelay(now, withSavedConfig(config))
 
       // Retention: state grows all day; a nightly sweep keeps it bounded. It
@@ -895,6 +911,8 @@ export function apply(ctx, config) {
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
+      if (lockHeartbeat !== undefined) clearInterval(lockHeartbeat)
+      releaseInstanceLock(stateRoot)
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
         // The controller outlives this effect when the card is left mounted, so
         // the hook is cleared rather than left pointing at a dead loop.
