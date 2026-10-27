@@ -617,3 +617,27 @@ test('storage reports the state directory and the retention windows', async () =
     })
   })
 })
+
+test('a persona pack round-trips between installs, and an import never overwrites', async () => {
+  await withStateRoot(async () => {
+    const c = controller()
+    const saved = await c.personaModeSave({ name: '老同事', prompt: '说话直接，先给结论，语气干巴巴。' })
+    assert.deepEqual(saved, { ok: true })
+
+    const exported = await c.personaExport()
+    assert.equal(exported.pack.format, 'dsh-weixin-persona-pack')
+    assert.equal(exported.count, 1)
+    assert.equal(exported.pack.modes[0].name, '老同事')
+
+    const again = await c.personaImport({ pack: exported.pack })
+    assert.deepEqual(again, { added: 0, skipped: [{ name: '老同事', reason: 'duplicate-name' }] }, 'the same pack must not duplicate itself')
+
+    const fresh = await c.personaImport({ pack: { format: 'dsh-weixin-persona-pack', version: 1, modes: [{ name: '图书管理员', prompt: '安静，喜欢引用出处。' }] } })
+    assert.deepEqual(fresh, { added: 1, skipped: [] })
+    const overview = await c.personaOverview({})
+    assert.ok(overview.modes.some((mode) => mode.name === '图书管理员'))
+
+    await assert.rejects(() => c.personaImport({ pack: 'not json' }), (error) => error.code === 'that is not JSON')
+    await assert.rejects(() => c.personaImport({ pack: { format: 'other', modes: [] } }), (error) => error.code === 'not a persona pack')
+  })
+})

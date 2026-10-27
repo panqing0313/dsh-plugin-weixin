@@ -259,6 +259,24 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaModeSave:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/personaExport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaExport",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaExport:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/personaImport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "personaImport",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/personaImport:p0`, create: _strMap } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/personaImport:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/personaModeRemove`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -1942,6 +1960,18 @@ window.__ModuleLoader__.load({
 				m.builtin === true ? null : createElement("button", { onClick: () => { setEditing(m); setDraftName(m.name); setDraftPrompt(m.prompt); }, disabled: busy, style: buttonStyleFor(busy) }, t("Edit", "编辑")),
 				m.builtin === true ? null : createElement("button", { onClick: () => run(() => callRemote(() => ctx.remote.weixin.personaModeRemove(m.id))), disabled: busy, style: buttonStyleFor(busy) }, t("Delete", "删除"))));
 
+			// A pack is the only way a hand-written mode leaves this app (F34): the
+			// export is plain JSON, and the import only ever adds.
+			const [packText, setPackText] = react.useState("");
+			const exportPack = () => run(async () => {
+				const result = await callRemote(() => ctx.remote.weixin.personaExport());
+				setPackText(JSON.stringify(result.pack, null, 2));
+			}, t("Pack ready — copy the text below.", "人设包已生成，复制下面的文本即可。"));
+			const importPack = () => run(async () => {
+				const result = await callRemote(() => ctx.remote.weixin.personaImport({ pack: packText }));
+				setPackText("");
+				setNotice(t(`Imported ${result.added} mode(s), skipped ${result.skipped.length}.`, `已导入 ${result.added} 个模式，跳过 ${result.skipped.length} 个。`));
+			});
 			const modesPanel = createElement("div", { key: "modes", style: panelStyle },
 				head,
 				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
@@ -1964,6 +1994,12 @@ window.__ModuleLoader__.load({
 				createElement("p", { style: captionStyle }, t(
 					"Precedence: per-conversation /mode > this account's default > global default > Options. Switch per conversation from WeChat with /mode 女友; switching opens a fresh session line.",
 					"优先级：会话 /mode 覆盖 > 此账号默认 > 全局默认 > 配置项。在微信里用 /mode 女友 按会话切换；切换会开一条新会话线。")),
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
+					createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+						createElement("button", { onClick: exportPack, disabled: busy, style: buttonStyleFor(busy) }, t("Export pack", "导出人设包")),
+						createElement("button", { onClick: importPack, disabled: busy || packText.trim() === "", style: buttonStyleFor(busy || packText.trim() === "") }, t("Import pack", "导入人设包"))),
+					createElement("textarea", { value: packText, onChange: (e) => setPackText(e.target.value), placeholder: t("Export above, or paste a pack here and press Import.", "先点导出，或把要导入的人设包粘贴到这里再点导入。"), style: { ...textareaStyle, minHeight: 64 } }),
+					createElement("p", { style: captionStyle }, t("A pack carries your custom modes only. Importing adds modes; it never overwrites one you already have.", "人设包只包含自定义模式。导入只新增，不会覆盖已有的模式。"))),
 				editing !== null || draftName !== "" ? null : createElement("button", { onClick: () => { setEditing({ id: "" }); setDraftName(""); setDraftPrompt(""); }, disabled: busy, style: buttonStyleFor(busy) }, t("Add a mode", "新增模式")),
 				editing === null ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
 					createElement("input", { value: draftName, onChange: (e) => setDraftName(e.target.value), placeholder: t("Mode name, e.g. 导师", "模式名称，如 导师"), style: inputStyle }),

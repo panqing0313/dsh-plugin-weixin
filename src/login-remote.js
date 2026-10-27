@@ -468,6 +468,67 @@ export class WeixinLoginController extends TypertRemoteService {
      * ships with — the card may not edit them (and cannot delete them), so a
      * persona can always be switched back to something known-good.
      */
+    /**
+     * A persona pack: the custom modes this install has, in a shape another
+     * install can import. F34 exists because a good custom mode took effort to
+     * write and the only way out of the app was a screenshot.
+     */
+    async personaExport() {
+        const root = stateDir();
+        const modes = readPersonaStore(root, { warn: (m) => logger.warn(m) });
+        const customs = modes.filter((mode) => mode.builtin !== true).map((mode) => ({ name: mode.name, prompt: mode.prompt }));
+        return { pack: { format: "dsh-weixin-persona-pack", version: 1, modes: customs }, count: customs.length };
+    }
+
+    /**
+     * Import a pack. Modes are added, never merged or overwritten: an import that
+     * silently replaced an existing mode would be the worst kind of edit. The cap
+     * is the same one the card enforces, and every refused entry is reported.
+     */
+    async personaImport(options) {
+        const opts = options ?? {};
+        const root = stateDir();
+        const warn = (m) => logger.warn(m);
+        let parsed = opts.pack;
+        if (typeof parsed === "string") {
+            try {
+                parsed = JSON.parse(parsed);
+            } catch (error) {
+                throw new RemoteError("that is not JSON");
+            }
+        }
+        if (parsed === null || typeof parsed !== "object" || parsed.format !== "dsh-weixin-persona-pack") {
+            throw new RemoteError("not a persona pack");
+        }
+        const incoming = Array.isArray(parsed.modes) ? parsed.modes : [];
+        if (incoming.length === 0) throw new RemoteError("the pack has no modes");
+        const modes = readPersonaStore(root, { warn });
+        let added = 0;
+        const skipped = [];
+        for (const entry of incoming) {
+            const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+            const prompt = typeof entry?.prompt === "string" ? entry.prompt : "";
+            if (name === "" || prompt.trim() === "") {
+                skipped.push({ name, reason: "empty-name-or-prompt" });
+                continue;
+            }
+            const customs = modes.filter((mode) => mode.builtin !== true).length;
+            if (customs >= MAX_CUSTOM_MODES) {
+                skipped.push({ name, reason: "cap" });
+                continue;
+            }
+            if (modes.some((mode) => mode.name === name)) {
+                skipped.push({ name, reason: "duplicate-name" });
+                continue;
+            }
+            const id = `custom-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "mode"}-${Date.now().toString(36)}-${added}`;
+            modes.push({ id, name, prompt, builtin: false });
+            added += 1;
+        }
+        if (added > 0) writePersonaStore(root, modes, { warn });
+        return { added, skipped };
+    }
+
     async personaModeSave(options) {
         const opts = options ?? {};
         const root = stateDir();
@@ -914,4 +975,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
