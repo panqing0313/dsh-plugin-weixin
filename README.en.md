@@ -807,6 +807,21 @@ The half it can do is **timely notice**: when the Agent is about to write a file
 
 The same tool in the same conversation is only announced once every ten minutes, so a turn that runs commands back to back does not spam. `toolNotices: false` turns it off.
 
+### Relationship curves and the people in a group (affinity · contacts)
+
+**Relationship curve**: every settled turn appends today's row to `memory/affinity-<account>-<conversation>.json` — message count, the energy at that moment, the mood. Last ninety days only, and a day keeps only its final row (an average of a body that sleeps describes nothing). `/memory` gains one sparkline line:
+
+```
+最近的关系曲线：
+近 7 天 · 精力 ▂▃▅▄▆▇█ · 消息 ▁▂▃▄▅▆▇（2026-10-21 → 2026-10-27）
+```
+
+Scaling is min→max across the window, so a new relationship's 60 and an old one's 90 draw the same picture; a flat series draws flat instead of pretending to be full.
+
+**Contact profiles**: memory per conversation is right for a 1:1 chat and wrong for a group — five people share one conversation, so one person's allergy becomes everybody's shared fact. A contact profile is that small patch: the same profile shape (call name, schedule, likes, dislikes, dates), stored per sender, **injected only in group chats and only for the person actually talking**. It is not a second memory system: no facts list, no digest, no background summariser — those exist for the owner. The model is told whose name card it is reading and asked not to read it aloud.
+
+The card reads and writes these through `weixin.contacts` / `weixin/contactSave`; `/memory` does not list contacts (they are other people, not you).
+
 ### Group chat (groupChatEnabled · groupReplyWhen · groupShareMemory)
 
 The `conversationId` of a group message is the `group_id`, so the reply address was always right; what was missing was the judgment — the bot used to answer every single message in a group.
