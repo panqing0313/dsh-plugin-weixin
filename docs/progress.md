@@ -6,7 +6,7 @@
 
 - **版本**：`0.9.9`，2026-10-27 已发布（npm `latest`、tag `v0.9.9`、GitHub release 三者齐全；注册表 `dist.shasum` `2bd3d597…` / `dist.integrity` `sha512-caG529vI…`、`gitHead` `2c07a90` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
 - **仓库**：`main` 干净。相对 `v0.9.2` 的 14 个 commit 全部在 0.9.3 里（`19b1a73` 回合内工具流式推送、`5602fb3` 进度文档、`99624e8` 出站限速接线、`96cb617` `/cancel` + 工具审计、`5aa1845` 状态卡自刷新、`2077934` 发版清单守卫、`9170642`/`dc4e0b3`/`be2c030` 文档、`39cd6c6` 轮内派发改造、`26e1a42` 被取消的调用补 `aborted`、`a035e46` 版本号、`27b689e` e2e 断言改为按发送者、`4faad53` README 发布行）；0.9.3 之后新增**出站语音**（整条管线 + 真机复测，见下，待随下次发版）、**个性化与记忆**（对话模式 /mode、长期记忆 /remember /forget /memory、后台会话摘要，`f78f5ca` + `8f7dba2`）、**可玩性三件套**（游戏模式 /mode 海龟汤|成语接龙|文字冒险 `ea59e86`、亲密度+心情 `081759d`、定时主动消息 /subscribe `79307dc`，见下，待随下次发版）；**第二轮六项**（即时总结 `/summary` `d868362`、聊天记录导出 `/export` `75f7bcb`、免打扰时段 `7260839`、账号级默认人设 `5b11fe1`、统计页签 `668dc7d`，见文末；第六项发版 0.9.4 见发布记录）。其后又有**贾维斯模式** `5e8c3a8`、**冷启动记忆窗口** `d68bd21`（每条消息的常驻提示词开销 945→322 字）、**本地回忆检索** `e0834d1`（消息流水倒排索引 + `/recall`），见文末；**左侧栏面板** `14636d6`（`sidebar.panellist` 行 + `main` 页，同一张卡片不再是设置卡专属）；0.9.5 之后 **配置项中文化 + 默认折叠** `36b0af6`（`t(en, zh)` 参数顺序反了 5 处、首组不再自动展开，见文末；0.9.6 已发）；证据见下一条：**发版脚本第 9 步装的东西会被 App 回滚**，现已让脚本顺手钉住 profile 依赖（`pinProfileSpec`，0.9.6 之后已在 main，随 0.9.7 发）。0.9.6 之后新增**陪聊节奏与生活状态**（首条延迟 + 气泡分条 `humanPace`、按时间推断的心情/精力 `lifeState`、卡片按会话显示模式与状态，见文末；**「默认助手」一律不做**）。
-- **测试**：`npm test` → `tests 689 / pass 689 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；**0.9.8 已发布**（发布记录见文末）。本轮再涨 1 条：发版脚本输出写入的回归（`writeOut` 吞掉 pty 消失的 EIO）。
+- **测试**：`npm test` → `tests 736 / pass 736 / fail 0`（约 47s；相对 0.9.2 新增 103 条，其中个性化与记忆占 38、可玩性三件套占 15：出站限速接线 9、`/cancel` 5、工具审计 8、发版清单一致性 5、状态卡自刷新 1、e2e 审计接线 1、轮内派发 6、install 来源信息提示 2、**出站语音 13**；个性化与记忆：persona 9、memory 8、会话命令 6、后台摘要 7、e2e 注入与摘要 2、设置卡/远程方法/表单接线 6；可玩性：游戏模式 1、亲密度 6（memory 3 + login-remote 1 + 会话命令 1 + e2e 1）、订阅 9（subscriptions 单测 8 + 会话命令 1）。本轮再涨 19 条：即时总结与导出（chat-export 3 + 会话命令 2）、免打扰 6、账号级默认人设 1、统计 5、/summary 1、/export 1。耗时从 ~103s 降到 ~41s 是因为 `notifyStart/notifyStop` 的兜底定时器改成 `unref`，不再让进程空等 80s）。本轮再涨 15 条：陪聊节奏 6（human-pace）+ 生活状态 6（life-state）+ e2e 分条/状态 1 + 卡片按会话显示模式与状态 2（login-remote 1、设置卡 1）；角色池扩容再加 1 条（老目录按名册顺序补齐新角色，见候选后续 13）。本轮再涨 13 条：贴纸 5（16 张里的新增断言，含角色包过滤）、记忆模型 v2 7（结构化档案/事件/预算 3 + 抽取与整理 4）、远程方法 1；并更新 e2e 摘要断言 1。0.9.7 之后新增**记忆模型 v2**（结构化档案 / 事件与待办 / 人物小传整理 / 记忆专用模型）与**表情包扩容**（36 张、按角色分套），见文末；**0.9.8 已发布**（发布记录见文末）。本轮再涨 1 条：发版脚本输出写入的回归（`writeOut` 吞掉 pty 消失的 EIO）。
 - **完成度**：按「可运行的生产插件」计约 **98%**；剩下的都是长尾验证与体验增强，没有阻断性缺口。
 
 ### 已落地能力
@@ -2736,3 +2736,34 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **实测**：`node bin/release.mjs --finish 0.9.10`（0.9.10 已发完）→ 四步全绿、无副作用：`the registry now serves 0.9.10` / `tag v0.9.10 already exists` / `GitHub release v0.9.10 already exists` / `profile dependency already points at this version`。
 - **文档**：README（中英）的「发布」节重写步骤表 —— 把顺序改成实际顺序（发布 → **立刻** 打 tag/push → 等待 registry → 核验 → `install.mjs --pin`），补上「终端中途断开怎么办」段与 `--finish` 说明；顺手把示例版本号从 0.4.0 改成 0.9.11、把版本 bullet 指向 `CHANGELOG.md`。
 - **测试**：新增 `test/release-resume.test.js` 3 条（导入即安装 SIGHUP 处理器；`parseReleaseArgs(['0.9.11','--finish'])` 的完整形状；`--finish` 无版本号 → 非零退出且提示示例）。全量 **692/692**、`node bin/check.mjs` → `checked 146 files`。
+
+## 可拓展点十三项（2026-10-27，待随 0.9.11 发版）
+
+用户 m08866「都要做」。逐项提交、逐项全量绿，最后统一发版。
+
+| # | 是什么 | 落在哪 | 提交 |
+| --- | --- | --- | --- |
+| ① | 日报：每天一条当日简报，数字全来自流水 | `src/message/reports.js` + `digestEnabled/digestWhen` | `fce796e` |
+| ② | 预演模式：先说计划，回「执行」再动手 | `src/message/dry-run.js` + `dryRun` | `06e9dec` |
+| ③ | 出站视频真机验证 | 代码就位，测法与结论写进 `docs/manual-checks.md` | 文档 |
+| ④ | 探测 `appmsg`/`refermsg` | `src/message/unknown-items.js`（被动监听 + 审计） | `06e9dec` |
+| ⑤ | 记忆核对：每周问一句「还准吗」 | `buildReviewPrompt` + `memoryReviewEnabled/memoryReviewWhen` | `fce796e` |
+| ⑥ | 关系曲线：每回合一行，90 天火花线 | `src/message/affinity-history.js` | `5d92394` |
+| ⑦ | 群里的人：按发送者的联系人档案 | `src/message/contacts.js` | `5d92394` |
+| ⑧ | 备份与恢复 | `src/backup.js` + `bin/backup.mjs` + `backupEnabled/backupKeep` | `b146256` |
+| ⑨ | 指标导出（Prometheus 文本 + JSON） | `writeMetricsSnapshot` + `bin/metrics.mjs` | `e7c4fd6` |
+| ⑩ | 长稳：`npm run soak` | `bin/soak.mjs` + `test/soak.test.js` | `e7c4fd6` |
+| ⑪ | 宿主版本兼容表 | `src/host-compat.js` + `docs/compatibility.md` + doctor 一项 | `41896fe` |
+| ⑫ | `npx dsh-plugin-weixin` | `package.json` 的 `bin` | `e7c4fd6` |
+| ⑬ | 模板包（人设+开关+订阅） | `src/packs.js` + `bin/pack.mjs` + 远程方法 | `41896fe` |
+
+### 坑与教训
+
+- **定时任务的「到点」判定不能在触发时重算**。`ReportScheduler` 第一版在 `#run` 里重新算 `pending()`，于是目标时刻过后一秒算出的「下一次」永远是明天 —— 日报一次都不会发。臂上装的是什么就按什么触发，容差给两秒（给一分钟会让 21:00 的日报在 20:59 发出）。
+- **`parseSubscriptionWhen` 也接受 `10m` 与绝对日期**，这些对「报告」是误配置：只发一次或十分钟后发。`nextReportAt` 因此只认 `daily`/`weekly`。
+- **恢复不能拿空备份演练**。soak 第一版恢复的是运行开始时那份（目录还空），结果把 journal 抹掉了 —— 恰好是 soak 该抓的那种失败；改成恢复结束时那份，并断言文件数 ≥1 且 journal 回来了。
+- **Prometheus 同一指标名下混用有标签/无标签样本会让整族被拒**。注册表的 `name[label]` 键渲染时必须二选一。
+- **`bin` 少了 `package.json` 的 `bin` 字段，`npx` 就没法用**；`files` 里也得包含 `bin`。
+- **只在写它那天通过的测试**：`quiet-hours` 那条把 23:30 钉死，导入日期一变（或当天 22:30 之后跑）就失败。改成从真实时钟推 5 小时后取整点，断言「缓发不吞当天的正常时段」。
+- **模板包不能带安全决策**。`allowedSenders` 与 `maxMediaBytes` 永远不进模板；白名单有测试断言。
+- **预演模式不是审批**。插件没有工具拦截入口（`dsh-agent` 里 grep 不到 permission/approval），所以它只能靠提示词自觉，危险工具提醒必须并存。
