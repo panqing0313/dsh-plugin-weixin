@@ -96,6 +96,7 @@ import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from '.
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
 import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
 import { classifyToolCall, noticeText } from './message/tool-guard.js'
+import { routeFor, sideRouteFor } from './model-route.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { statePaths } from './state-layout.js'
@@ -166,6 +167,13 @@ export const Config = z.object({
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
   memoryGlobalMaxTokens: z.number().min(0).default(0).description('Optional cap on the long-term memory block measured in estimated tokens (0 = count characters only). One Chinese character is about one token, four latin characters about one; set this when routing to a model with a tight window.'),
+  // C20: the conversation gets the good model; background work (summaries,
+  // proactive lines, subscription fires) can be pointed at a cheaper route
+  // without touching the chat. Empty means "whatever the session uses".
+  chatProvider: z.string().default('').description('主对话模型 provider：留空沿用 DSH 当前会话模型。只填 provider 或只填 model 都不生效。'),
+  chatModel: z.string().default('').description('主对话模型 model：和 chatProvider 一起填才生效。'),
+  sideProvider: z.string().default('').description('后台任务模型 provider：/summary、/subscribe 到点、主动开口这类侧会话用它；留空则回落到记忆模型，再回落到会话模型。'),
+  sideModel: z.string().default('').description('后台任务模型 model：和 sideProvider 一起填才生效。'),
   memoryProvider: z.string().default('').description('Provider for the memory model (summaries, fact extraction and consolidation). Empty follows the conversation model — the summaries then cost exactly what a normal turn costs.'),
   memoryModel: z.string().default('').description('Model id for the memory model. Only used together with memoryProvider; a cheaper model here keeps background memory work off the expensive route.'),
   memoryRecentTurns: z.number().min(0).default(5).description(
@@ -424,6 +432,9 @@ export function apply(ctx, config) {
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
     // closure and is a sibling of setup(), not a child of it.
     let senderLimiter
+    // C20: declared here (not inside setup) because bringUpAccount, which is a
+    // sibling of setup(), hands it to createInboundHandler.
+    let sideRoute = () => undefined
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -459,6 +470,9 @@ export function apply(ctx, config) {
         // veto a call, but it can say so while the turn is still running, and
         // /cancel stops everything after the call in flight. One notice per
         // tool per turn: a turn that runs ten bash commands is still one turn.
+        // C20: the conversation's route, re-read per turn so a card edit lands
+        // without restarting the plugin.
+        chatRoute: () => routeFor('chat', withSavedConfig(config)),
         onToolCall: (entry) => {
           if (withSavedConfig(config).toolNotices === false) return
           const verdict = classifyToolCall({ tool: entry.tool, args: entry.args })
@@ -486,11 +500,11 @@ export function apply(ctx, config) {
       // The memory model (optional): background summaries, fact extraction and
       // consolidation run on a cheaper route when one is configured, so a
       // chatty day of persona upkeep cannot spend the conversation's model.
-      const memoryRoute = () => {
-        const provider = String(config.memoryProvider ?? '').trim()
-        const model = String(config.memoryModel ?? '').trim()
-        return provider !== '' && model !== '' ? { provider, model } : undefined
-      }
+      const memoryRoute = () => routeFor('memory', config)
+      // C20: background side sessions (summary, subscriptions, proactive) get
+      // their own route; without one they fall back to the memory route, so a
+      // single cheap model covers everything that is not the conversation.
+      sideRoute = () => sideRouteFor(config)
       memorySummarizer = createMemorySummarizer({
         bridge,
         stateRoot,
@@ -664,7 +678,7 @@ export function apply(ctx, config) {
               `直接输出这条消息的正文，就像你在微信里自己发起的一条消息。不要复述或解释这个约定本身。`,
               `</weixin_subscription>`,
             ].filter((part) => part !== '').join('\n\n')
-            const result = await bridge.summarize({ conversationId: item.conversationId, accountId: item.accountId, prompt, sessionPrefix: 'wx-sub-' })
+            const result = await bridge.summarize({ conversationId: item.conversationId, accountId: item.accountId, prompt, sessionPrefix: 'wx-sub-', route: sideRoute() })
             const text = typeof result?.text === 'string' ? result.text.trim() : ''
             if (text === '' || text === '（已取消）') {
               log(`subscription ${item.id} produced nothing to send`)
@@ -764,6 +778,7 @@ export function apply(ctx, config) {
             accountId: candidate.accountId,
             prompt,
             sessionPrefix: 'wx-pro-',
+            route: sideRoute(),
           })
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') return ''
@@ -954,6 +969,9 @@ export function apply(ctx, config) {
         proactiveScheduler,
         journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
         senderGate: (senderId) => senderLimiter.check(`${account.accountId}|${senderId}`),
+        // C20: side sessions (/\summary, subscriptions, proactive) use the
+        // background route; the conversation keeps the chat route.
+        sideRoute,
       })
 
       const previous = transports.get(account.accountId)
@@ -1216,7 +1234,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, sideRoute }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -1309,7 +1327,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           '请总结我们聊到哪了：正在讨论的话题、已经决定的事、还没做完的待办、彼此的约定。',
           '不超过 300 字，直接输出总结本身，不要任何解释或前缀。',
         ].join('\n')
-        const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: 'wx-sum-' })
+        // C20: the background route is threaded in from setup() — this handler
+        // is module-level and cannot see the setup closure.
+        const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: 'wx-sum-', route: sideRoute?.() })
         if (result === undefined) return '当前有对话在跑，等这轮结束再试 /summary。'
         const text = String(result.text ?? '').trim()
         if (text === '' || text === '（已取消）') return '这次没总结出来（侧会话没有返回内容），稍后再试。'

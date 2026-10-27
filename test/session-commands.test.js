@@ -182,15 +182,20 @@ async function withPlugin(body, overrides = {}) {
       },
     }
   }
+  // C20: provider/model live in agentOptions, so recording it is how a test
+  // sees which route a turn would actually run on.
+  const agentOptionsSeen = []
   const agents = {
     get: () => undefined,
-    async resume({ resumeSessionId }) {
+    async resume({ resumeSessionId, agentOptions }) {
       sessionsOpened.push(resumeSessionId)
+      agentOptionsSeen.push({ sessionId: resumeSessionId, agentOptions })
       if (resumeSessionId.startsWith('wx-')) return { agent: sideAgent(resumeSessionId), dispose: trackedDispose(resumeSessionId) }
       return { agent: { session: { id: resumeSessionId }, inbox: { clear() {} } }, dispose: trackedDispose(resumeSessionId) }
     },
-    async create({ sessionId }) {
+    async create({ sessionId, agentOptions }) {
       sessionsOpened.push(sessionId)
+      agentOptionsSeen.push({ sessionId, agentOptions })
       if (sessionId.startsWith('wx-')) return { agent: sideAgent(sessionId), dispose: trackedDispose(sessionId) }
       return { agent: { session: { id: sessionId }, inbox: { clear() {} } }, dispose: trackedDispose(sessionId) }
     },
@@ -217,7 +222,7 @@ async function withPlugin(body, overrides = {}) {
     plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false, ...overrides }))
     seedAccount(root, { baseUrl: fake.baseUrl })
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
-    await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, get deliverCalls() { return deliverCalls } })
+    await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, agentOptionsSeen, get deliverCalls() { return deliverCalls } })
   } finally {
     // Debugging aid: DSH_DEBUG_LINES=1 dumps everything the plugin logged.
     if (process.env.DSH_DEBUG_LINES) console.error('LINES:\n' + lines.join('\n'))
@@ -739,4 +744,31 @@ test('a correction replaces the fact it names, and /memory shows what changed', 
     assert.match(last, /改过的说法/)
     assert.match(last, /我住在北京 → 我搬到杭州了/)
   })
+})
+
+test('a side session runs on the background route; the conversation keeps its own', async () => {
+  // C20. Provider/model reach the host as agentOptions, so this is the real
+  // assertion that the routing knob does what the settings card promises.
+  await withPlugin(async ({ fake, agentOptionsSeen }) => {
+    fake.deliver('/summary', 'm1')
+    await waitFor(() => fake.outbound.length >= 1, '/summary answered')
+    const side = agentOptionsSeen.find((entry) => entry.sessionId.startsWith('wx-sum-'))
+    assert.ok(side, `expected a /summary side session among ${JSON.stringify(agentOptionsSeen.map((e) => e.sessionId))}`)
+    assert.deepEqual(side.agentOptions, { provider: 'cheap', model: 'cheap-1' })
+  }, { sideProvider: 'cheap', sideModel: 'cheap-1', chatProvider: 'good', chatModel: 'good-1' })
+})
+
+test('the conversation itself runs on the chat route', async () => {
+  await withPlugin(async ({ fake, agentOptionsSeen }) => {
+    fake.deliver('普通的一句话', 'm1')
+    await waitFor(
+      () => agentOptionsSeen.some((entry) => entry.sessionId.startsWith('wx-') === false),
+      'the main session to be created',
+    )
+    const chat = agentOptionsSeen.find((entry) => entry.sessionId.startsWith('wx-') === false)
+    assert.deepEqual(chat.agentOptions, { provider: 'good', model: 'good-1' })
+    for (const entry of agentOptionsSeen.filter((one) => one.sessionId.startsWith('wx-'))) {
+      assert.notDeepEqual(entry.agentOptions, chat.agentOptions, 'server-side sessions must not inherit the chat route')
+    }
+  }, { chatProvider: 'good', chatModel: 'good-1' })
 })

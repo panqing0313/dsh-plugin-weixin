@@ -145,6 +145,8 @@ export class AgentBridge {
     // audit log. Separate from onToolAudit because it must run even when the
     // audit log is turned off.
     this.onToolCall = options.onToolCall
+    // C20: the conversation's own route, when the operator pinned one.
+    this.chatRoute = options.chatRoute
     // Conversation id -> the session id its next message must reach. Needed
     // because `deliver` is handed a session id but must still be able to route
     // a late reply and, for a brand-new line, share one in-flight creation.
@@ -344,7 +346,11 @@ export class AgentBridge {
    *   uses, so background summarising cannot spend the conversation's model.
    */
   async #setup(routeOverride) {
-    const route = routeOverride ?? (await this.#route())
+    // C20: the caller's route (a side session's own model) wins; otherwise the
+    // conversation route this plugin was configured with; otherwise the host's
+    // default. `chatRoute()` returns undefined when nothing is configured, so a
+    // deployment that never touched the setting behaves exactly as before.
+    const route = routeOverride ?? this.chatRoute?.() ?? (await this.#route())
     const agentOptions =
       route === undefined
         ? undefined
