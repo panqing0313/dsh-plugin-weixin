@@ -678,3 +678,25 @@ test('/summary summarizes the conversation on demand and never writes the conv f
     assert.match(fake.outbound[2].text, /\/summary 总结这段会话/, fake.outbound[2].text)
   })
 })
+
+test('the command table is the single source for /help, parsing and dispatch', async () => {
+  const { commandIds, parseSessionCommand, SESSION_COMMANDS_HELP } = await import('../src/sessions.js')
+  // Every id in the table appears exactly once in the help text (subscribe is
+  // the one command with two parse rules and one help line).
+  const ids = commandIds()
+  assert.equal(new Set(ids).size, ids.length)
+  for (const id of ['new', 'list', 'use', 'clear', 'cancel', 'status', 'help', 'remind', 'remindlist', 'remindcancel', 'subscribe', 'subscribelist', 'subscribecancel', 'mode', 'remember', 'forget', 'memory', 'recall', 'summary', 'export']) {
+    assert.ok(ids.includes(id), `the table is missing ${id}`)
+    if (id === 'help') continue
+    assert.match(SESSION_COMMANDS_HELP, new RegExp(`/${id} `), `the help text does not mention /${id}`)
+  }
+  // Ordering: the help lists lines in the order a person would look for them,
+  // not in parse order.
+  const modeAt = SESSION_COMMANDS_HELP.indexOf('/mode [名称]')
+  const remindAt = SESSION_COMMANDS_HELP.indexOf('/remind <时间>')
+  assert.ok(modeAt > 0 && remindAt > modeAt, 'mode comes before remind in the help')
+  // Parsing agrees with the table for both the english and the chinese alias.
+  assert.deepEqual(parseSessionCommand('/new'), { command: 'new' })
+  assert.deepEqual(parseSessionCommand('/订阅列表'), { command: 'subscribelist' })
+  assert.equal(parseSessionCommand('/nonsense'), undefined)
+})

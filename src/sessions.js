@@ -502,6 +502,8 @@ const CANCEL_COMMAND = /^\/(?:cancel|取消)$/i
  *
  * @param {unknown} text
  */
+export const USE_USAGE = '用法：/use <序号>，序号来自 /list'
+
 export function isInterruptCommand(text) {
   return typeof text === 'string' && CANCEL_COMMAND.test(text.trim())
 }
@@ -517,19 +519,46 @@ export function isInterruptCommand(text) {
  *
  * @param {string} text
  * @returns {{command: 'new'|'list'|'use'|'clear', index?: number} | undefined}
+// ---------------------------------------------------------------------------
+// The command table
+//
+// Every command the bot answers is one entry below: how it is recognised, what
+// it says in /help, and what it does. Adding a command used to mean editing
+// three places (a regex chain, a dispatch if-chain, the help array) and it was
+// easy to ship one and forget the other two — /subscribe shipped once with no
+// bare-command rule and fell through to the model.
+//
+// `parse` is a pattern plus a small builder; the order of the array is the
+// order the patterns are tried, which is why the more specific forms come
+// first (/subscribe <time> <text> before the bare form is irrelevant, but
+// /subscribe before /subscribelist is not).
+// ---------------------------------------------------------------------------
+
+/** @typedef {{ id: string, pattern: RegExp, build: (match: RegExpExecArray) => object, help?: string, helpRank?: number, run?: (state: CommandState) => string | Promise<string> | undefined }} CommandRule */
+
+/**
+ * @typedef {object} CommandState
+ * @property {SessionLines} lines
+ * @property {string} conversationId
+ * @property {string | undefined} accountId
+ * @property {{ command: string } & Record<string, unknown>} command
+ * @property {object | undefined} context
  */
-export function parseSessionCommand(text) {
-  const trimmed = String(text ?? '').trim()
-  const newMatch = /^\/new$/i.exec(trimmed)
-  if (newMatch !== null) return { command: 'new' }
-  const listMatch = /^\/(?:list|sessions)$/i.exec(trimmed)
-  if (listMatch !== null) return { command: 'list' }
-  const useMatch = /^\/use(?:\s+(\d+))?$/i.exec(trimmed)
-  if (useMatch !== null) {
-    return { command: 'use', index: useMatch[1] === undefined ? undefined : Number(useMatch[1]) }
-  }
-  const clearMatch = /^\/clear$/i.exec(trimmed)
-  if (clearMatch !== null) return { command: 'clear' }
+
+const identity = () => ({})
+
+/** @type {CommandRule[]} */
+const COMMANDS = [
+  { id: 'new', pattern: /^\/new$/i, build: identity, helpRank: 1, help: '/new 开一条新会话（当前这条会保留，之后可以切回来）' },
+  { id: 'list', pattern: /^\/(?:list|sessions)$/i, build: identity, helpRank: 2, help: '/list 查看这个微信会话下的所有会话' },
+  {
+    id: 'use',
+    pattern: /^\/use(?:\s+(\d+))?$/i,
+    build: (match) => ({ index: match[1] === undefined ? undefined : Number(match[1]) }),
+    helpRank: 3,
+    help: '/use <序号> 切换到第几条',
+  },
+  { id: 'clear', pattern: /^\/clear$/i, build: identity, helpRank: 4, help: '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）' },
   // `/cancel`（或 `/取消`）interrupts the turn that is running right now. It is
   // a command rather than a busy-mode action on purpose: it has to be answerable
   // WHILE the conversation is busy, which is exactly when a plain message would
@@ -537,80 +566,130 @@ export function parseSessionCommand(text) {
   //
   // Being a command is necessary but NOT sufficient: the transport used to
   // await the whole turn inside its poll loop, so a cancel sent mid-turn was
-  // only read after that turn ended. `isInterruptCommand` (below) is what lets
+  // only read after that turn ended. `isInterruptCommand` (above) is what lets
   // the transport recognise this one command and handle it out of order.
-  const cancelMatch = CANCEL_COMMAND.exec(trimmed)
-  if (cancelMatch !== null) return { command: 'cancel' }
-  const statusMatch = /^\/status$/i.exec(trimmed)
-  if (statusMatch !== null) return { command: 'status' }
-  const helpMatch = /^\/(?:help|帮助|指令)$/i.exec(trimmed)
-  if (helpMatch !== null) return { command: 'help' }
+  { id: 'cancel', pattern: CANCEL_COMMAND, build: identity, helpRank: 5, help: '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）' },
+  {
+    id: 'status',
+    pattern: /^\/status$/i,
+    build: identity,
+    helpRank: 15,
+    help: '/status 查看当前账号和会话的状态（白名单、会话线等）',
+    run: (state) => runStatus(state),
+  },
+  { id: 'help', pattern: /^\/(?:help|帮助|指令)$/i, build: identity, run: () => SESSION_COMMANDS_HELP },
   // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
   // 单独报「缺内容」而非「看不懂命令」。
-  const remindMatch = /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
-  if (remindMatch !== null) return { command: 'remind', when: remindMatch[1], text: remindMatch[2] ?? '' }
-  const remindListMatch = /^\/remindlist$/i.exec(trimmed)
-  if (remindListMatch !== null) return { command: 'remindlist' }
-  const remindCancelMatch = /^\/remindcancel\s+(\S+)$/i.exec(trimmed)
-  if (remindCancelMatch !== null) return { command: 'remindcancel', id: remindCancelMatch[1] }
+  {
+    id: 'remind',
+    pattern: /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i,
+    build: (match) => ({ when: match[1], text: match[2] ?? '' }),
+    helpRank: 16,
+    help: '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
+  },
+  { id: 'remindlist', pattern: /^\/remindlist$/i, build: identity, helpRank: 17, help: '/remindlist 查看这个账号还没发出的提醒' },
+  {
+    id: 'remindcancel',
+    pattern: /^\/remindcancel\s+(\S+)$/i,
+    build: (match) => ({ id: match[1] }),
+    helpRank: 18,
+    help: '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）',
+  },
   // Bare `/subscribe` (and `/订阅`) answers with usage instead of reaching
   // the agent: a bare time command read as a chat message would silently
   // schedule nothing and confuse the sender.
-  if (/^\/(?:subscribe|订阅)$/i.test(trimmed) === true) return { command: 'subscribe', when: '', text: '' }
-  if (/^\/(?:summary|总结)$/i.test(trimmed) === true) return { command: 'summary' }
-  const exportMatch = /^\/(?:export|导出)(?:\s+(\d{1,3}))?$/i.exec(trimmed)
-  if (exportMatch !== null) return { command: 'export', days: exportMatch[1] === undefined ? undefined : Number(exportMatch[1]) }
-  // The time part may be two tokens (`每天 08:00`) — try the compound forms
-  // before falling back to a single token, then everything else is the prompt.
-  const subscribeMatch = /^\/(?:subscribe|订阅)\s+((?:每天|每日|daily)\s+\d{1,2}:\d{2}|每周[一二三四五六日天]\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}|\S+)(?:\s+([\s\S]+))?$/i.exec(trimmed)
-  if (subscribeMatch !== null) return { command: 'subscribe', when: subscribeMatch[1], text: subscribeMatch[2] ?? '' }
-  const subscribeListMatch = /^\/(?:subscribelist|订阅列表)$/i.exec(trimmed)
-  if (subscribeListMatch !== null) return { command: 'subscribelist' }
-  const subscribeCancelMatch = /^\/(?:subscribecancel|订阅取消)\s+(\S+)$/i.exec(trimmed)
-  if (subscribeCancelMatch !== null) return { command: 'subscribecancel', id: subscribeCancelMatch[1] }
+  {
+    id: 'subscribe',
+    pattern: /^\/(?:subscribe|订阅)\s+((?:每天|每日|daily)\s+\d{1,2}:\d{2}|每周[一二三四五六日天]\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}|\S+)(?:\s+([\s\S]+))?$/i,
+    build: (match) => ({ when: match[1], text: match[2] ?? '' }),
+    helpRank: 19,
+    help: '/subscribe <时间> <主题> 定时主动消息：每天/每周X HH:mm，或一次性时间；到点我会主动给你发一条',
+  },
+  {
+    id: 'subscribe',
+    pattern: /^\/(?:subscribe|订阅)$/i,
+    build: () => ({ when: '', text: '' }),
+  },
+  { id: 'summary', pattern: /^\/(?:summary|总结)$/i, build: identity, helpRank: 11, help: '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办' },
+  {
+    id: 'export',
+    pattern: /^\/(?:export|导出)(?:\s+(\d{1,3}))?$/i,
+    build: (match) => ({ days: match[1] === undefined ? undefined : Number(match[1]) }),
+    helpRank: 12,
+    help: '/export [天数] 导出最近 N 天（默认 30）的聊天记录',
+  },
+  { id: 'subscribelist', pattern: /^\/(?:subscribelist|订阅列表)$/i, build: identity, helpRank: 20, help: '/subscribelist 查看这个账号的定时主动消息' },
+  {
+    id: 'subscribecancel',
+    pattern: /^\/(?:subscribecancel|订阅取消)\s+(\S+)$/i,
+    build: (match) => ({ id: match[1] }),
+    helpRank: 21,
+    help: '/subscribecancel <编号> 取消一条定时主动消息（编号来自 /subscribelist）',
+  },
   // Persona + memory commands (personalization round). Parsing stays pure:
   // each one is ANSWERED by a handler the inbound handler provides under
   // context.persona, because the store and the mode table live with the
   // plugin's state root, not in this module.
-  const modeMatch = /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i.exec(trimmed)
-  if (modeMatch !== null) return { command: 'mode', arg: modeMatch[1]?.trim() }
-  const rememberMatch = /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i.exec(trimmed)
-  if (rememberMatch !== null) return { command: 'remember', arg: rememberMatch[1]?.trim() ?? '' }
-  const forgetMatch = /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i.exec(trimmed)
-  if (forgetMatch !== null) return { command: 'forget', arg: forgetMatch[1]?.trim() }
-  const memoryMatch = /^\/(?:memory|记忆)$/i.exec(trimmed)
-  if (memoryMatch !== null) return { command: 'memory' }
-  const recallMatch = /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i.exec(trimmed)
-  if (recallMatch !== null) return { command: 'recall', arg: recallMatch[1]?.trim() ?? '' }
+  { id: 'mode', pattern: /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 6, help: '/mode [名称] 查看或切换对话模式（如 女友/男友/朋友；切换会开一条新会话线）' },
+  { id: 'remember', pattern: /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 7, help: '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）' },
+  { id: 'forget', pattern: /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 8, help: '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）' },
+  { id: 'memory', pattern: /^\/(?:memory|记忆)$/i, build: identity, helpRank: 9, help: '/memory 查看记住的内容和这段会话的记忆' },
+  { id: 'recall', pattern: /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 10, help: '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token' },
+]
+
+/** Commands answered by the inbound handler's persona bundle (state root lives there). */
+const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall'])
+
+const HELP_HEADER = '会话指令（发 /help 或 /帮助 可再看一遍）：'
+
+export const SESSION_COMMANDS_HELP = [
+  HELP_HEADER,
+  ...COMMANDS
+    .filter((rule) => rule.help !== undefined)
+    .sort((left, right) => (left.helpRank ?? 99) - (right.helpRank ?? 99))
+    .map((rule) => rule.help),
+].join('\n')
+
+/**
+ * Recognise a control command, or return undefined so the caller can treat the
+ * text as an ordinary message. Pure: it touches no store and no transport.
+ */
+export function parseSessionCommand(text) {
+  const trimmed = String(text ?? '').trim()
+  for (const rule of COMMANDS) {
+    const match = rule.pattern.exec(trimmed)
+    if (match !== null) return { command: rule.id, ...rule.build(match) }
+  }
   return undefined
 }
 
-/** Help text for a malformed `/use`. */
-export const USE_USAGE = '用法：/use <序号>，序号来自 /list'
+/** Every command id the table knows, for tests and for the card. */
+export function commandIds() {
+  return [...new Set(COMMANDS.map((rule) => rule.id))]
+}
 
-/** Help text shown for a bare `/use` with no argument. */
-export const SESSION_COMMANDS_HELP = [
-  '会话指令（发 /help 或 /帮助 可再看一遍）：',
-  '/new 开一条新会话（当前这条会保留，之后可以切回来）',
-  '/list 查看这个微信会话下的所有会话',
-  '/use <序号> 切换到第几条',
-  '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）',
-  '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）',
-  '/mode [名称] 查看或切换对话模式（如 女友/男友/朋友；切换会开一条新会话线）',
-  '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）',
-  '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）',
-  '/memory 查看记住的内容和这段会话的记忆',
-  '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token',
-  '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办',
-  '/export [天数] 导出最近 N 天（默认 30）的聊天记录',
-  '/status 查看当前账号和会话的状态（白名单、会话线等）',
-  '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00',
-  '/remindlist 查看这个账号还没发出的提醒',
-  '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）',
-  '/subscribe <时间> <主题> 定时主动消息：每天/每周X HH:mm，或一次性时间；到点我会主动给你发一条',
-  '/subscribelist 查看这个账号的定时主动消息',
-  '/subscribecancel <编号> 取消一条定时主动消息（编号来自 /subscribelist）',
-].join('\n')
+function runStatus({ lines, conversationId, accountId, context }) {
+  // Session-line facts are always available (the store owns them); the
+  // account-level facts ride in `context` — undefined when a caller without
+  // an inbound handler (some tests, some tools) runs a bare command, in
+  // which case /status still works but says only what the lines know.
+  const statusLines = lines.list(conversationId, accountId)
+  const active = lines.active(conversationId, accountId)
+  const activeLine = statusLines.find((candidate) => candidate.sessionId === active)
+  const parts = []
+  if (context?.accountId !== undefined) {
+    parts.push(`账号：${context.accountLabel ? `${context.accountLabel}（${context.accountId}）` : context.accountId}`)
+    if (typeof context.paused === 'boolean') parts.push(`状态：${context.paused ? '已暂停（不收发消息）' : '正常收发'}`)
+    if (context.lastSeenAt) parts.push(`最近收发：${context.lastSeenAt}`)
+    if (typeof context.bondLine === 'string' && context.bondLine !== '') parts.push(context.bondLine)
+    if (context.allowlist) {
+      const source = context.allowlist.source === 'account' ? '本账号专属名单' : '全局名单'
+      parts.push(`发信人白名单：${context.allowlist.senders.length} 人（${source}）`)
+    }
+  }
+  parts.push(`本微信会话共 ${statusLines.length} 条会话线，当前使用第 ${statusLines.findIndex((candidate) => candidate.sessionId === active) + 1 || '?'} 条：${activeLine?.title ?? '(尚无对话)'}`)
+  return parts.join('\n')
+}
 
 /**
  * Execute a control command against a conversation's lines.
@@ -626,23 +705,27 @@ export const SESSION_COMMANDS_HELP = [
  * @param {{ accountId?: string, accountLabel?: string | null, paused?: boolean,
  *   lastSeenAt?: string, allowlist?: { source: 'account' | 'global', senders: string[] },
  *   reminders?: import('./message/scheduler.js').ReminderScheduler,
+ *   subscription?: import('./message/subscriptions.js').SubscriptionScheduler,
  *   cancelRunningTurn?: () => string,
- *   persona?: { mode?: (arg?: string) => string, remember?: (arg?: string) => string,
- *     forget?: (arg?: string) => string, memory?: () => string }} [context]
+ *   persona?: Record<string, (arg?: string) => string | Promise<string>> }} [context]
  *   account-level facts for `/status`, assembled by the inbound handler;
  *   optional so the command works for bare callers too. `reminders` is the
  *   live scheduler for remind commands; without it /remind reports that
  *   scheduling is unavailable rather than crashing. `cancelRunningTurn` is the
  *   bridge's abort hook for `/cancel`: only the bridge holds the live agent
  *   handles, so this module asks it to do the interrupting and only relays the
- *   sentence it returns. `persona` bundles the four handlers for /mode,
- *   /remember, /forget and /memory — the store lives at the state root, which
- *   only the inbound handler knows.
- * @returns {string | undefined}
+ *   sentence it returns. `persona` bundles the handlers for /mode, /remember,
+ *   /forget, /memory, /summary, /export and /recall — the store lives at the
+ *   state root, which only the inbound handler knows.
+ * @returns {string | Promise<string> | undefined}
  */
 export function runSessionCommand(lines, conversationId, text, accountId, context) {
   const command = parseSessionCommand(text)
   if (command === undefined) return undefined
+
+  const rule = COMMANDS.find((candidate) => candidate.id === command.command)
+  if (rule?.run !== undefined) return rule.run({ lines, conversationId, accountId, command, context })
+
   if (command.command === 'new') {
     const sessionId = lines.create(conversationId, accountId)
     const ordinal = lines.list(conversationId, accountId).length
@@ -669,41 +752,15 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (cancel === undefined) return '当前没有可中断的回合（这个入口拿不到正在运行的会话）。'
     return cancel()
   }
-  if (command.command === 'mode' || command.command === 'remember' || command.command === 'forget' || command.command === 'memory' || command.command === 'summary' || command.command === 'export' || command.command === 'recall') {
+  if (PERSONA_COMMANDS.has(command.command)) {
     // All of them are answered by the inbound handler's persona bundle: it knows the
     // state root, the mode table, the memory files and the session bridge (the
     // /summary side session). A bare caller says so instead of pretending it
     // stored something. The handler may be async (/summary) — return the
     // promise as-is; the inbound handler awaits command replies.
-    const persona = context?.persona
-    const handler = persona === undefined ? undefined : persona[command.command]
+    const handler = context?.persona?.[command.command]
     if (typeof handler !== 'function') return '个性化功能在这个入口不可用（拿不到模式与记忆的存储）。'
     return handler(command.arg)
-  }
-  if (command.command === 'help') {
-    return SESSION_COMMANDS_HELP
-  }
-  if (command.command === 'status') {
-    // Session-line facts are always available (the store owns them); the
-    // account-level facts ride in `context` — undefined when a caller without
-    // an inbound handler (some tests, some tools) runs a bare command, in
-    // which case /status still works but says only what the lines know.
-    const statusLines = lines.list(conversationId, accountId)
-    const active = lines.active(conversationId, accountId)
-    const activeLine = statusLines.find((candidate) => candidate.sessionId === active)
-    const parts = []
-    if (context?.accountId !== undefined) {
-      parts.push(`账号：${context.accountLabel ? `${context.accountLabel}（${context.accountId}）` : context.accountId}`)
-      if (typeof context.paused === 'boolean') parts.push(`状态：${context.paused ? '已暂停（不收发消息）' : '正常收发'}`)
-      if (context.lastSeenAt) parts.push(`最近收发：${context.lastSeenAt}`)
-      if (typeof context.bondLine === 'string' && context.bondLine !== '') parts.push(context.bondLine)
-      if (context.allowlist) {
-        const source = context.allowlist.source === 'account' ? '本账号专属名单' : '全局名单'
-        parts.push(`发信人白名单：${context.allowlist.senders.length} 人（${source}）`)
-      }
-    }
-    parts.push(`本微信会话共 ${statusLines.length} 条会话线，当前使用第 ${statusLines.findIndex((candidate) => candidate.sessionId === active) + 1 || '?'} 条：${activeLine?.title ?? '(尚无对话)'}`)
-    return parts.join('\n')
   }
   if (command.command === 'remind') {
     // Scheduling needs the live scheduler; a caller without one (bare tests,
