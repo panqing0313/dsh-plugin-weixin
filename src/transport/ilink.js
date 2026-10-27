@@ -369,6 +369,9 @@ export class ILinkTransport {
       warn: this.errLog,
     })
     this.voiceOutbound = options.voiceOutbound !== false
+    // The poll call is injectable so the resilience test can make one round
+    // reject without a network double.
+    this.getUpdatesImpl = options.getUpdates ?? getUpdates
     this.#onSessionRejected = options.onSessionRejected
     this.#bypassQueue = options.bypassQueue ?? (() => false)
     this.syncBufPath = getSyncBufFilePath(this.accountId)
@@ -418,7 +421,11 @@ export class ILinkTransport {
       this.log(`notifyStart did not answer within ${this.longPollTimeoutMs * 2 + 10_000}ms (headers arrived, body never did); continuing without it`)
     }
     this.#scheduler = createInboundScheduler({ onMessage, errLog: this.errLog, bypass: this.#bypassQueue })
-    this.loopPromise = this.#loop()
+    // Even with the catch above, an escape from a future edit must degrade to a
+    // log line, never to an unhandled rejection: the host treats one as fatal.
+    this.loopPromise = this.#loop().catch((error) => {
+      this.errLog(`the inbound loop stopped unexpectedly: ${String(error)}`)
+    })
   }
 
   async #loop() {
@@ -440,13 +447,30 @@ export class ILinkTransport {
       const pollWatchdog = setTimeout(() => this.abort.abort(), pollDeadlineMs)
       let polled
       try {
-        polled = await getUpdates({
+        polled = await this.getUpdatesImpl({
           baseUrl: this.baseUrl,
           token: this.token,
           get_updates_buf: buf ?? '',
           timeoutMs: this.longPollTimeoutMs,
           abortSignal: this.abort.signal,
         })
+      } catch (error) {
+        // This is the whole crash class (issue #3): a rejection here used to
+        // escape #loop, so `loopPromise` rejected — stop() then awaited a
+        // rejected promise and the unhandled rejection took the DSH host with
+        // it. One bad poll is a bad poll: count it, log it, back off, poll on.
+        if (!this.running) break
+        consecutiveFailures += 1
+        const classified = classifyFetchError(error)
+        this.errLog(`getUpdates threw (${classified.type}): ${classified.description}`)
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
+          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
+          consecutiveFailures = 0
+        } else {
+          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
+        }
+        continue
       } finally {
         clearTimeout(pollWatchdog)
       }

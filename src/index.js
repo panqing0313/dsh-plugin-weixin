@@ -1348,10 +1348,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     const linkUrls = config.readLinks === true ? extractUrls(message.text) : []
     if (linkUrls.length > 0) {
       log(`fetching ${linkUrls.length} link(s) from inbound message ${message.id}`)
-      const linkResults = []
-      for (const url of linkUrls.slice(0, 3)) {
-        linkResults.push(await fetchLinkText(url))
-      }
+      // Concurrent, not serial: three dead hosts used to cost three deadlines
+      // in a row before the user got an answer. Each fetch has its own 8s
+      // deadline, and the batch has a budget on top so one slow host cannot
+      // hold the turn open past it.
+      const linkResults = await Promise.all(
+        linkUrls.slice(0, 3).map((url) =>
+          fetchLinkText(url).catch((error) => ({ ok: false, url, reason: `抓取失败：${String(error?.message ?? error)}` })),
+        ),
+      )
       const linkBlock = describeLinkResults(linkResults)
       if (linkBlock !== undefined) prompt = `${message.text}\n\n${linkBlock}`
     }
