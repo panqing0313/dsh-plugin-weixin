@@ -29,6 +29,7 @@ import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outb
 import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
 import { createMetrics } from './metrics.js'
+import { ensureSecretModes, redactSecrets } from './credentials.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
@@ -281,8 +282,17 @@ export function apply(ctx, config) {
   // Must precede any credential/sync-buffer path resolution in the vendored
   // transport, which reads OPENCLAW_STATE_DIR on every call.
   const stateRoot = configureWeixinStateDir()
-  const log = (line) => ctx.logger?.info?.(`dsh-weixin: ${line}`)
-  const warn = (line) => ctx.logger?.warn?.(`dsh-weixin: ${line}`)
+  // The account file holds the bot token and is written by the vendored login
+  // flow, so its mode is whatever the umask allowed. Fix it here, once per start.
+  const secretFix = ensureSecretModes(stateRoot, { warn: (line) => ctx.logger?.warn?.(`dsh-weixin: ${line}`) })
+  if (secretFix.tightened.length > 0) {
+    ctx.logger?.info?.(`dsh-weixin: tightened permissions on ${secretFix.tightened.length} credential file(s)`)
+  }
+  // Every log line goes through the redactor: one thrown error that happens to
+  // carry the bot token used to put it on disk, because `warn` is where all the
+  // failure paths end up (src/credentials.js).
+  const log = (line) => ctx.logger?.info?.(`dsh-weixin: ${redactSecrets(String(line))}`)
+  const warn = (line) => ctx.logger?.warn?.(`dsh-weixin: ${redactSecrets(String(line))}`)
   const fileLog = vendorLogger.withAccount('dsh-weixin')
 
   // Settings the operator saved through the UI live beside the credentials, so
