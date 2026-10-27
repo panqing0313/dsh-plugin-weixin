@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: fast checks (syntax + packaging rules)
+        run: npm run check
+      - name: full suite
+        run: npm test
+        env:
+          # The suite spins local fake iLink servers on 127.0.0.1; the link
+          # fetcher refuses private hosts by default (that is the point of the
+          # guard), so the e2e cases that fetch from it opt in explicitly.
+          DSH_WEIXIN_LINKS_ALLOW_PRIVATE: '1'
+      - name: doctor, against an empty state directory
+        run: |
+          state="$(mktemp -d)"
+          if DSH_WEIXIN_STATE_DIR="$state" node bin/doctor.mjs; then
+            echo "::error::doctor passed an empty state directory — it should have found problems"
+            exit 1
+          fi
