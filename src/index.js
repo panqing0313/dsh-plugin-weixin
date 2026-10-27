@@ -162,6 +162,7 @@ export const Config = z.object({
   ),
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
+  memoryGlobalMaxTokens: z.number().min(0).default(0).description('Optional cap on the long-term memory block measured in estimated tokens (0 = count characters only). One Chinese character is about one token, four latin characters about one; set this when routing to a model with a tight window.'),
   memoryProvider: z.string().default('').description('Provider for the memory model (summaries, fact extraction and consolidation). Empty follows the conversation model — the summaries then cost exactly what a normal turn costs.'),
   memoryModel: z.string().default('').description('Model id for the memory model. Only used together with memoryProvider; a cheaper model here keeps background memory work off the expensive route.'),
   memoryRecentTurns: z.number().min(0).default(5).description(
@@ -688,6 +689,7 @@ export function apply(ctx, config) {
           const memoryBlock = live.memoryEnabled === true
             ? buildMemoryBlock({
                 global: globalMemory,
+                maxTokens: Number(live.memoryGlobalMaxTokens ?? 0),
                 conv: convMemory,
                 recent: readRecentWindow(stateRoot, candidate.accountId, candidate.conversationId, { turns: 3 }),
                 now,
@@ -1640,6 +1642,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     const memoryBlock = effectiveConfig.current.memoryEnabled === true
       ? buildMemoryBlock({
           global: readGlobalMemory(stateRoot, accountId, { warn }),
+          maxTokens: Number(effectiveConfig.current.memoryGlobalMaxTokens ?? 0),
           conv: convMemory,
           recent,
           includeBond: companion,

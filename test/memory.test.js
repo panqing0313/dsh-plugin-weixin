@@ -28,6 +28,7 @@ import {
 	DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
   openThreadLines,
 } from '../src/memory.js'
+import { estimateTokens } from '../src/tokens.js'
 import { appendJournal } from '../src/message/journal.js'
 
 let root
@@ -325,4 +326,16 @@ test('openThreadLines offers open threads, and nothing when it knows nothing', (
 
   const fallback = openThreadLines({ events: [], digest: '' }, { summary: '上次在讨论周末去哪儿。' }, 0)
   assert.ok(fallback.some((line) => line.includes('周末去哪儿')), 'with no events, the conversation summary stands in')
+})
+
+test('a token budget stops the memory list before a character budget would', () => {
+  const global = {
+    facts: Array.from({ length: 12 }, (_, index) => ({ text: `关于我的第${index}条偏好说明`, at: index })),
+    profile: { call: '小周', schedule: '', likes: [], dislikes: [], dates: [] },
+  }
+  const byChars = buildMemoryBlock({ global, conv: undefined, recent: [], now: 0, maxChars: 5000 })
+  const byTokens = buildMemoryBlock({ global, conv: undefined, recent: [], now: 0, maxChars: 5000, maxTokens: 30 })
+  assert.ok(estimateTokens(byTokens) <= estimateTokens(byChars), 'the token cap must not grow the block')
+  assert.ok(byTokens.length < byChars.length, 'Chinese text hits the token cap well before the character cap')
+  assert.equal(buildMemoryBlock({ global, conv: undefined, recent: [], now: 0, maxChars: 5000, maxTokens: 0 }).length, byChars.length, 'zero means no token cap')
 })

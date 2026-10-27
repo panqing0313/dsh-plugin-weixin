@@ -15,7 +15,8 @@
  * reply, which is why every reader catches and every writer warns instead of
  * throwing.
  */
-import fs from 'node:fs';
+import fs from 'node:fs'
+import { estimateTokens } from './tokens.js';
 import path from 'node:path';
 import { atomicWriteJson } from './atomic.js';
 import { readJournal } from './message/journal.js';
@@ -592,6 +593,10 @@ export function buildMemoryBlock({
     now = Date.now(),
     includeBond = true,
     maxChars = DEFAULT_MEMORY_GLOBAL_MAX_CHARS,
+    // C19: a character budget says nothing about context cost — 1500 characters
+    // of Chinese is ~1500 tokens, of English ~375. When a token budget is given
+    // it caps the same list, whichever limit is hit first.
+    maxTokens = 0,
 } = {}) {
     const sections = [];
     // The bond line ("认识第 N 天 · 此刻：…") is an emotional frame, so a stock
@@ -609,23 +614,27 @@ export function buildMemoryBlock({
     // whatever is left buys facts by importance. A chattier memory therefore
     // squeezes the fact list — it never inflates the prompt.
     let budget = Math.max(160, Math.floor(maxChars));
+    let tokenBudget = Number.isFinite(maxTokens) && maxTokens > 0 ? Math.floor(maxTokens) : 0;
+    const fits = (line) => tokenBudget === 0 || estimateTokens(line) <= tokenBudget;
     const longLines = [];
     if (digest !== '') {
         longLines.push(digest);
         budget -= digest.length;
     }
     for (const line of formatProfile(profile)) {
-        if (line.length > budget) break;
+        if (line.length > budget || fits(line) === false) break;
         longLines.push(line);
         budget -= line.length;
+        if (tokenBudget > 0) tokenBudget -= estimateTokens(line);
     }
     const ranked = [...facts].sort((a, b) => (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
         || (b.at ?? 0) - (a.at ?? 0));
     for (const fact of ranked) {
         const line = `- ${fact.text}`;
-        if (line.length > budget) break;
+        if (line.length > budget || fits(line) === false) break;
         longLines.push(line);
         budget -= line.length;
+        if (tokenBudget > 0) tokenBudget -= estimateTokens(line);
     }
     if (longLines.length > 0) sections.push(['【长期记忆 · 关于用户】', ...longLines].join('\n'));
 
