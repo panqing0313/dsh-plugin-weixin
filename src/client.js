@@ -207,6 +207,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/outboxDrop:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/metrics`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "metrics",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/metrics:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/storage`,
 					service: "weixinLoginController",
 					namespace: "weixin",
@@ -2201,6 +2210,7 @@ window.__ModuleLoader__.load({
 			const [stats, setStats] = react.useState(null);
 			const [storage, setStorage] = react.useState(null);
 			const [outbox, setOutbox] = react.useState(null);
+			const [metrics, setMetrics] = react.useState(null);
 			const [days, setDays] = react.useState(14);
 			const [error, setError] = react.useState("");
 			const [busy, setBusy] = react.useState(false);
@@ -2222,6 +2232,11 @@ window.__ModuleLoader__.load({
 						setOutbox(await callRemote(() => ctx.remote.weixin.outbox()));
 					} catch {
 						setOutbox(null);
+					}
+					try {
+						setMetrics(await callRemote(() => ctx.remote.weixin.metrics()));
+					} catch {
+						setMetrics(null);
 					}
 				} catch (e) {
 					setError(String(e?.message ?? e));
@@ -2332,6 +2347,23 @@ window.__ModuleLoader__.load({
 					t("Older files are swept once a day; the windows live in the settings tab.",
 						"超过保留期的文件每天自动清理一次，保留天数在「配置项」页签里改。")));
 
+			// Counters reset with the process, so the panel always states how long
+			// the process has been up: a rate without a denominator is a guess.
+			const minutes = metrics === null ? 0 : Math.floor(Number(metrics.uptimeMs ?? 0) / 60_000);
+			const counter = (name) => Number(metrics?.counters?.[name] ?? 0);
+			const metricsPanel = metrics === null ? null : createElement("div", { key: "metrics", style: { display: "flex", flexDirection: "column", gap: 4 } },
+				createElement("p", { style: { ...captionStyle, marginBottom: 2 } },
+					t("Since the plugin started", "本次启动以来"), ` — ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`}`),
+				createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, lineHeight: "18px", color: C.labelSecondary } },
+					createElement("span", null, t("Accepted", "收到"), ": ", String(counter("inbound.accepted"))),
+					createElement("span", null, t("Refused", "拒绝"), ": ", String(counter("inbound.refused"))),
+					createElement("span", null, t("Sent", "发出"), ": ", String(counter("outbound.settled"))),
+					createElement("span", null, t("Turns", "回合"), ": ", String(counter("turn.settled"))),
+					createElement("span", null, t("Waiting", "待发"), ": ", String(Number(metrics.pendingOutbox ?? 0)))),
+				createElement("p", { style: captionStyle },
+					t("These counters live in memory and reset when the plugin restarts.",
+						"这些计数只存在内存里，插件重启就归零。")));
+
 			const convRows = conversations.map((c) => createElement("div", {
 				key: `${c.accountId}|${c.conversationId}`,
 				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
@@ -2358,7 +2390,8 @@ window.__ModuleLoader__.load({
 					t("Computed live from the message journal. \u2191 sent by the bot, \u2193 received.",
 						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")),
 				outboxPanel,
-				storagePanel);
+				storagePanel,
+				metricsPanel);
 			}
 
 		function ConfigSection({ ctx, t }) {

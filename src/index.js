@@ -28,6 +28,7 @@ import { createOutbox } from './message/outbox.js'
 import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outbound.js'
 import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
+import { createMetrics } from './metrics.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
@@ -47,6 +48,8 @@ let journalOutboundRef = null
 
 /** The durable outbox for undelivered text; set once the plugin's setup runs. */
 let hooks
+/** Counters the settings card reads (src/metrics.js); process lifetime only. */
+let metrics
 let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
@@ -477,6 +480,22 @@ export function apply(ctx, config) {
       hooks.on(HOOK_POINTS.inboundRefused, (event) => {
         fileLog.info(`refused ${event.reason} message from ${event.senderId} in ${event.conversationId}`)
       })
+      // Numbers, not log lines: every question about behaviour used to need a
+      // grep. These four counters answer most of them, and the card reads the
+      // snapshot (src/metrics.js keeps it in memory only).
+      metrics = createMetrics()
+      metrics.observe(hooks, {
+        inboundAccepted: 'inbound.accepted',
+        inboundRefused: 'inbound.refused',
+        outboundSettled: 'outbound.settled',
+        turnSettled: 'turn.settled',
+      })
+      if (loginController !== undefined) {
+        loginController.metricsSnapshot = () => ({
+          ...metrics.snapshot(),
+          pendingOutbox: typeof outbox?.pending === 'function' ? outbox.pending().length : 0,
+        })
+      }
       if (loginController !== undefined) {
         loginController.outboxFlush = (options) => outbox.flush(options)
         loginController.outboxDropItem = (id) => outbox.drop(id)
@@ -1643,6 +1662,11 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     if (config.typingIndicator) await transport.setTyping(true, message.conversationId)
     try {
       const startedAt = Date.now()
+      hooks?.emit(HOOK_POINTS.inboundAccepted, {
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+      })
       const reply = await bridge.deliver({
         conversationId: message.conversationId,
         accountId,

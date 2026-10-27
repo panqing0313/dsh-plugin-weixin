@@ -708,6 +708,17 @@ export class WeixinLoginController extends TypertRemoteService {
         };
     }
 
+    /**
+     * Process-lifetime counters plus the live queue depth, for the card's stats
+     * tab. A restart resets them, which the snapshot says out loud (`startedAt`,
+     * `uptimeMs`) so nobody reads a counter as a lifetime total.
+     */
+    async metrics() {
+        const snapshot = typeof this.metricsSnapshot === "function" ? this.metricsSnapshot() : undefined;
+        if (snapshot !== undefined) return snapshot;
+        return { startedAt: 0, uptimeMs: 0, counters: {}, gauges: {}, pendingOutbox: 0 };
+    }
+
     async stats(options) {
         const opts = options ?? {};
         const daysRaw = Number(opts.days);
@@ -903,4 +914,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
