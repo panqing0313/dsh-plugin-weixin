@@ -2717,3 +2717,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **`README.en.md`**：968 行，结构一一对应（16 个 `##` + 35 个 `###` 同序、20 个代码块、127 行表格、13 个图片/徽章），英文锚点全部重算过。有意保留中文的只有三类：**运行时真的会打出来的字符串**（`备注名:`、`[表情:困了]`、`【语音转写】`、`（提醒：内容）`）、**被 `src/sessions.js` 正则解析的命令参数**（`/subscribe 每天 08:00`、`/mode 女友`、`/mode 海龟汤` —— 翻译了就等于教人用一个跑不通的命令，英文释义放在括号里）、以及**设置卡里由 `t(en, zh)` 双语输出的标签**（这层翻译由 `locale` 决定，文档只描述）。
 - **原文档的自相矛盾没顺手改掉**（避免两边不一致）：亮点点说 11 项体检、开发节注释里写「十项体检」；写「十二个内置角色」而表格列了 11 行 —— 这些留在原文里，中英两版都照原样翻。
 - 校验：`npm test` → **689/689**；`node bin/check.mjs` → `checked 145 files`；`test/release-lockfile.test.js` + `test/release-workflow.test.js` 13/13（发版列表改到 CHANGELOG 后仍然绿）。
+
+## 发布 0.9.10（2026-10-27）
+
+- **核验**：`npm view dsh-plugin-weixin version` → `0.9.10`、`dist-tags.latest = 0.9.10`、`dist.shasum 8ce5c79bd8fd716c57fe950f1b79ace72e6076ad`（= 本地 `dsh-plugin-weixin-0.9.10.tgz` 的 `shasum -a 1`）、`dist.integrity sha512-xPkZMq7BdLS0jzN/iQC6sonYO9OiDHmRC8C20DoM5MS10A1IP++qJVVWpcJ7zjTCf9L7ernqG3koNXo+/MSSCw==`、`gitHead 1e74363735af063e3aea439e59e3bfd9f94722e6`；tag `v0.9.10`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.10 。
+- **注册表有延迟**：`npm publish` 打印 `Your package is being processed and may take a few minutes to become available`，之后约 1 分 20 秒里 `npm view version` 仍返回 `0.9.9`、`npm view dsh-plugin-weixin@0.9.10` 直接 404 —— 第 4 次轮询才变成 `0.9.10`。**发布后不要用「立刻查不到」判断失败**。
+- **第 8 步之后脚本又静默退出了**（`[8] Wait for the registry / waiting for the registry to serve the new version.` 之后无输出、exit code 0），`verifyPublished` 与第 9 步钉 profile 都没跑 —— 与 0.9.7/0.9.8 同现象（`writeOut` 只吞掉了 EIO，写完之后轮到等待逻辑时进程仍然提前结束）。手工收尾：`node bin/install.mjs --profile desktop --pin` 一次搞定（复制源码 + `profile dependency ^0.9.9 → ^0.9.10` + `profile lockfile refreshed — the app will not roll back on restart`）。
+- **装好的副本**：`0.9.10`、`PLUGIN_VERSION = "0.9.10"`、`README.en.md` 与 `CHANGELOG.md` 随包落地；`node bin/doctor.mjs` → `up to date (0.9.10)`、11 checks 0 problems。
+- 内容：README 重排（语言切换 / 徽章 / 目录 / 四个入口）+ 版本日志迁到 `CHANGELOG.md` + 新增 `README.en.md`（968 行）+ 发版脚本 bullet 目标改到 CHANGELOG + 修 `--dry-run` 不恢复 CHANGELOG 的 bug。
