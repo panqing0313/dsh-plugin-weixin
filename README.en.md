@@ -538,6 +538,34 @@ The "Stats" tab of the settings card reports send/receive volume for the last 7/
 and the most active conversations. Every number is **computed on the spot** from the local message journal (no caching, no upload), so it is always consistent with the "Message journal" tab.
 `test/stats.test.js` and the stats cases in `test/login-remote.test.js` guard this behavior.
 
+### Backups and restore (backupEnabled)
+
+Retention **deletes** old files (journal 180 days, audit 90, media 30, …) and until now nothing kept a
+copy of them. So the plugin backs the state directory up once a day into `<state>/backups/` (first copy
+five minutes after load, then every 24 hours), keeping the newest `backupKeep` copies (default 3) and
+deleting older ones. What is inside:
+
+- `config.json`, `accounts-registry.json`, `openclaw-weixin/accounts/` (**account tokens**), `asr-config.json`
+- `memory/` (long-term memory, profile, events, digest, bond), `persona-*.json` (modes and what is selected)
+- `journal/`, `audit/`, `sessions.json` + `sessions/` (conversation lines and agent records), `reminders.json`, `subscriptions.json`, `outbox.json`, `config-scope.json`
+- not backed up: `asr-models/` (~900 MB model cache, downloadable again), `logs/` (diagnostics), `media/` (opt-in with `--with-media`)
+
+**A backup contains tokens that can log in as the bot**, so the directory is created 0700 and its files 0600.
+Do not put it in a cloud folder or paste it into a chat.
+
+```bash
+npm run backup -- create                          # take one now
+npm run backup -- create --label before-upgrade    # with a label you will recognise
+npm run backup -- list                            # what exists, how big, how old
+npm run backup -- verify <id>                     # is it complete (compare against the manifest)
+npm run backup -- restore <id>                    # restore (current state moves to pre-restore-<stamp>)
+```
+
+A restore verifies the backup first and refuses while DSH is running (a live instance writes its in-memory
+state back over the files within seconds). The current state is moved aside rather than deleted, so a restore
+is itself revertible; `pre-restore-*` copies are never pruned. `npm run doctor` flags a newest backup older
+than seven days.
+
 ### Persona and memory (/mode · /remember · /forget · /memory)
 
 Each WeChat conversation can pick a conversation mode (up to 8 more can be customized in the settings card; a mode is just a tone prompt —

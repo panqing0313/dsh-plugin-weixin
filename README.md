@@ -529,6 +529,31 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 最活跃的几个会话。数字全部由本机消息流水**现算**（不缓存、不回传），所以和「消息流水」页签永远一致。
 `test/stats.test.js` 与 `test/login-remote.test.js` 的 stats 用例守着这些行为。
 
+### 备份与恢复（backupEnabled）
+
+保留策略会**删**旧文件（流水 180 天、审计 90 天、媒体 30 天……），而在此之前没有任何东西替这些文件
+留过副本。所以插件每天自动把状态目录备份一次到 `<状态目录>/backups/`（启动 5 分钟后第一份，之后每 24 小时），
+保留最近 `backupKeep` 份（默认 3），更旧的自动删除。备份里包含什么？
+
+- `config.json`、`accounts-registry.json`、`openclaw-weixin/accounts/`（**账号 token**）、`asr-config.json`
+- `memory/`（长期记忆、档案、事件、人物小传、亲密度）、`persona-*.json`（模式与当前选择）
+- `journal/`、`audit/`、`sessions.json` + `sessions/`（会话线与 agent 记录）、`reminders.json`、`subscriptions.json`、`outbox.json`、`config-scope.json`
+- 不备份 `asr-models/`（约 900 MB 的模型缓存，能重新下载）、`logs/`（诊断用）、`media/`（默认不备份，`--with-media` 才带上）
+
+**备份里有能直接登号的 token**，所以目录建成 0700、文件 0600，别把它传到云盘或聊天窗口。
+
+```bash
+npm run backup -- create                        # 立刻备份一份
+npm run backup -- create --label before-upgrade # 带个标签，好认
+npm run backup -- list                          # 有哪些、多大、什么时候
+npm run backup -- verify <id>                   # 这份完整吗（比对 manifest 里的文件数）
+npm run backup -- restore <id>                  # 恢复（会先把当前状态挪到 pre-restore-<时间>）
+```
+
+恢复前会检查备份完整性、并确认 DSH 没在跑（运行中的实例会在几秒内把内存里的状态写回覆盖掉恢复的内容）；
+当前状态不会被就地删除，而是移到 `backups/pre-restore-<时间>/`，所以「恢复」本身也是可回退的。
+`pre-restore-*` 目录永远不会被自动清理。`npm run doctor` 会检查最新备份的年龄，超过 7 天判为异常。
+
 ### 个性化与记忆（/mode · /remember · /forget · /memory）
 
 每个微信会话可以选一种对话模式（设置卡里最多再自定义 8 个，每个模式就是一段语气提示词——

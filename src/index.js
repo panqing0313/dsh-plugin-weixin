@@ -23,6 +23,7 @@ import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
+import { DEFAULT_KEEP, createBackup } from './backup.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { createOutbox } from './message/outbox.js'
 import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outbound.js'
@@ -228,6 +229,8 @@ export const Config = z.object({
   retentionMediaDays: z.number().min(0).default(30).description('收到的图片/文件/语音保留天数；0 表示不清理。'),
   retentionExportsDays: z.number().min(0).default(60).description('/export 导出的 Markdown 保留天数；0 表示不清理。'),
   retentionLogsDays: z.number().min(0).default(30).description('vendor 每日日志保留天数；0 表示不清理。'),
+  backupEnabled: z.boolean().default(true).description('每天自动备份一次状态目录（记忆、人设、订阅、流水、账号）；备份在 <状态目录>/backups，含账号 token，别外传。'),
+  backupKeep: z.number().min(1).max(60).default(DEFAULT_KEEP).description('保留最近几份自动备份；更旧的会被删掉。'),
   toolAudit: z.boolean().default(true).description(
     'Append one JSONL line per tool the agent runs (tool name, truncated arguments, which Weixin account/conversation/sender caused it, and whether the result carried an error) under <state>/audit/. Off by default nothing would ever answer "who ran that destructive tool yesterday"; a missing directory or a full disk only warns, it never fails a turn.',
   ),
@@ -433,6 +436,7 @@ export function apply(ctx, config) {
     let subscriptionScheduler
     let proactiveScheduler
     let retentionTimer
+    const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
     // closure and is a sibling of setup(), not a child of it.
@@ -611,6 +615,25 @@ export function apply(ctx, config) {
           warn(`retention sweep failed: ${String(error?.message ?? error)}`)
         }
       }
+      // Backups: retention deletes old files on purpose, and nothing else keeps
+      // a copy. One a day, a few minutes after the sweep so the two never fight
+      // over the same files, and never blocking startup.
+      const takeBackup = () => {
+        try {
+          const live = withSavedConfig(config)
+          if (live.backupEnabled === false) return
+          const result = createBackup(stateRoot, { keep: Number(live.backupKeep ?? DEFAULT_KEEP), warn })
+          log(`backup ${result.id}: ${result.files} file(s)`)
+        } catch (error) {
+          warn(`backup failed: ${String(error?.message ?? error)}`)
+        }
+      }
+      const firstBackup = setTimeout(takeBackup, 5 * 60_000)
+      firstBackup.unref?.()
+      backupTimers.push(firstBackup)
+      backupTimers.push(setInterval(takeBackup, 24 * 60 * 60_000))
+      for (const timer of backupTimers) timer.unref?.()
+
       const firstSweep = setTimeout(sweep, 60_000)
       firstSweep.unref?.()
       retentionTimer = setInterval(sweep, SWEEP_INTERVAL_MS)
@@ -1061,6 +1084,7 @@ export function apply(ctx, config) {
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
+      for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()
       if (lockHeartbeat !== undefined) clearInterval(lockHeartbeat)
       releaseInstanceLock(stateRoot)

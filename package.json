@@ -26,6 +26,7 @@
     "url": "https://github.com/panqing0313/dsh-plugin-weixin/issues"
   },
   "scripts": {
+    "backup": "node bin/backup.mjs",
     "login": "node bin/login.js",
     "release": "node bin/release.mjs",
     "test": "node --import ./test/isolate-host-state.mjs --test \"test/**/*.test.js\"",

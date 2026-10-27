@@ -17,6 +17,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { verifyAuditChain } from '../src/message/audit.js'
+import { listBackups } from '../src/backup.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const results = []
@@ -164,6 +165,26 @@ function checkAuditChain(root) {
   ok('audit chain', `${result.chained} line(s) chained${result.unchained > 0 ? `, ${result.unchained} legacy` : ''}`)
 }
 
+/**
+ * Is there a recent backup? Retention deletes old files on purpose and nothing
+ * else keeps a copy, so "no backups" is the state you discover you were in when
+ * you needed one.
+ */
+function checkBackups(root) {
+  const backups = listBackups(root).filter((entry) => entry.complete && !entry.id.startsWith('pre-restore-'))
+  if (backups.length === 0) {
+    return note('backups', `none yet — run \`npm run backup create\` (daily backups start 5 minutes after the plugin loads)`)
+  }
+  const newest = backups[0]
+  const ageMs = Date.now() - Date.parse(newest.createdAt)
+  const ageDays = ageMs / (24 * 60 * 60 * 1000)
+  if (!Number.isFinite(ageDays)) return ok('backups', `${backups.length} copy(ies), newest ${newest.id}`)
+  if (ageDays > 7) {
+    return bad('backups', `newest is ${Math.floor(ageDays)} days old (${newest.id}) — daily backups are not running; check backupEnabled`)
+  }
+  ok('backups', `${backups.length} copy(ies), newest ${ageDays < 1 ? 'today' : `${Math.floor(ageDays)} day(s) ago`} (${newest.files} files)`)
+}
+
 function checkRegistryVersion() {
   const pkg = pkgJson()
   if (pkg.__error !== undefined) return
@@ -186,6 +207,7 @@ function main() {
   checkLock(root)
   checkOutbox(root)
   checkAuditChain(root)
+  checkBackups(root)
   checkRecentErrors(root)
   checkRegistryVersion()
   if (config !== undefined && config.voiceOutbound === true) {

@@ -637,6 +637,35 @@ export const FIELDS = [
       ],
     },
     {
+      group: "备份",
+      groupEn: "Backups",
+      fields: [
+        {
+          path: "backupEnabled",
+          type: T.boolean,
+          default: true,
+          label: "每天自动备份",
+          labelEn: "Daily backup",
+          hint: "备份记忆、人设、订阅、流水与账号；放在状态目录的 backups/ 下（含账号 token，别外传）。也可以手动跑 npm run backup create。",
+          hintEn: "Copies memory, personas, subscriptions, journal and accounts into <state>/backups. Contains account tokens — keep it local. Manual: npm run backup create.",
+        },
+        {
+          path: "backupKeep",
+          type: T.number,
+          default: 3,
+          min: 1,
+          max: 60,
+          step: 1,
+          unit: "份",
+          unitEn: "copies",
+          label: "保留份数",
+          labelEn: "Copies to keep",
+          hint: "更旧的自动备份会被删除（pre-restore 手动恢复副本永远不会被删）。",
+          hintEn: "Older automatic backups are removed; pre-restore copies are never pruned.",
+        },
+      ],
+    },
+    {
       group: "保留策略",
       groupEn: "Retention",
       fields: [
