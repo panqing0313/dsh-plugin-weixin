@@ -26,6 +26,7 @@ import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sw
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { createOutbox } from './message/outbox.js'
 import { channelFor } from './channel.js'
+import { HOOK_POINTS, createHooks } from './hooks.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -43,6 +44,7 @@ import { DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from './message/rate-li
 let journalOutboundRef = null
 
 /** The durable outbox for undelivered text; set once the plugin's setup runs. */
+let hooks
 let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
@@ -466,6 +468,13 @@ export function apply(ctx, config) {
         return createSenderLimiter({ perMinute: Number(live.senderRatePerMinute ?? DEFAULT_PER_MINUTE) || 1_000_000 })
       }
       senderLimiter = liveLimiter()
+      // The bus is built once per plugin start. Its first subscriber exists to
+      // fix a real gap: refusals used to reach only the host logger, never the
+      // log file the operator actually reads.
+      hooks = createHooks({ warn })
+      hooks.on(HOOK_POINTS.inboundRefused, (event) => {
+        fileLog.info(`refused ${event.reason} message from ${event.senderId} in ${event.conversationId}`)
+      })
       if (loginController !== undefined) {
         loginController.outboxFlush = (options) => outbox.flush(options)
         loginController.outboxDropItem = (id) => outbox.drop(id)
@@ -1328,6 +1337,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     //     message is answered once per window — silence would read as a bug.
     const gate = typeof senderGate === 'function' ? senderGate(message.senderId) : undefined;
     if (gate !== undefined && gate.allowed === false) {
+      // Observers (file log today, counters later) hear about refusals through
+      // the bus instead of every call site growing its own logging.
+      hooks?.emit(HOOK_POINTS.inboundRefused, {
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        reason: 'rate-limit',
+      })
       if (gate.shouldWarn === true) {
         await sendChunked(transport, config, {
           conversationId: message.conversationId,
@@ -1672,6 +1689,12 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         },
       })
       log(`turn settled in ${Date.now() - startedAt}ms for ${message.conversationId}`)
+      hooks?.emit(HOOK_POINTS.turnSettled, {
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        ms: Date.now() - startedAt,
+      })
       fileLog.info(`accepted message ${message.id} from ${message.senderId} (conversation ${message.conversationId}); agent turn settled in ${Date.now() - startedAt}ms`)
       // One settled agent turn = one memory turn. The summarizer counts it,
       // and every memorySummaryTurns of them fires a background summary into
@@ -1943,8 +1966,10 @@ async function sendChunked(transport, config, message) {
     // re-derived by every caller.
     const channel = channelFor(transport)
     const chunk = { conversationId: message.conversationId, text: chunks[index], contextToken: message.contextToken }
+    hooks?.emit(HOOK_POINTS.outboundReady, { accountId: transport.accountId, conversationId: message.conversationId, text: chunk.text })
     try {
       await channel.sendText(chunk)
+      hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: true })
     } catch (error) {
       // A send that fails here used to lose the text forever: the model had
       // already written it and nothing held a copy. Queue it instead — the
@@ -1954,6 +1979,7 @@ async function sendChunked(transport, config, message) {
       const pending = chunks.slice(index).join('')
       if (outbox !== undefined) {
         outbox.enqueue({ accountId: transport.accountId, conversationId: message.conversationId, text: pending, contextToken: message.contextToken })
+        hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: false, queued: pending.length })
         warn(`send failed (${String(error?.message ?? error)}); queued ${pending.length} chars for retry`)
         return
       }
