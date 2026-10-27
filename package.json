@@ -36,7 +36,8 @@
 		"vendor": "node bin/vendor-manifest.mjs",
 		"i18n": "node bin/i18n-report.mjs",
 		"metrics": "node bin/metrics.mjs",
-		"soak": "node bin/soak.mjs"
+		"soak": "node bin/soak.mjs",
+		"pack": "node bin/pack.mjs"
 	},
 	"dependencies": {
 		"@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",

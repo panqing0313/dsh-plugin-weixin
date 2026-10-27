@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { verifyAuditChain } from '../src/message/audit.js'
 import { listBackups } from '../src/backup.js'
+import { describeHost, detectHostVersion, hostStatus } from '../src/host-compat.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const results = []
@@ -185,6 +186,22 @@ function checkBackups(root) {
   ok('backups', `${backups.length} copy(ies), newest ${ageDays < 1 ? 'today' : `${Math.floor(ageDays)} day(s) ago`} (${newest.files} files)`)
 }
 
+/**
+ * Which host app is this running inside?
+ *
+ * The plugin imports the app's own packages and registers into the app's own slots,
+ * so a host upgrade is the single most likely cause of "it worked yesterday". This
+ * check cannot fix anything — it just makes the version visible before someone
+ * spends an evening on the wrong theory.
+ */
+function checkHost() {
+  const version = detectHostVersion()
+  const status = hostStatus(version)
+  if (status.status === 'unknown') return note('host app', describeHost(version))
+  if (status.status === 'tested') return ok('host app', describeHost(version))
+  note('host app', describeHost(version))
+}
+
 function checkRegistryVersion() {
   const pkg = pkgJson()
   if (pkg.__error !== undefined) return
@@ -208,6 +225,7 @@ function main() {
   checkOutbox(root)
   checkAuditChain(root)
   checkBackups(root)
+  checkHost()
   checkRecentErrors(root)
   checkRegistryVersion()
   if (config !== undefined && config.voiceOutbound === true) {

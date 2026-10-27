@@ -585,6 +585,7 @@ export function apply(ctx, config) {
         })
       }
       if (loginController !== undefined) {
+        loginController.subscriptionScheduler = subscriptionScheduler
         loginController.outboxFlush = (options) => outbox.flush(options)
         loginController.outboxDropItem = (id) => outbox.drop(id)
       }

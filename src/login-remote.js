@@ -149,6 +149,10 @@ export class WeixinLoginController extends TypertRemoteService {
          * is missing instead of pretending the feature is broken.
          */
         this.remindersProvider = undefined;
+        /** SubscriptionScheduler, injected at setup; packs import schedules through it. */
+        this.subscriptionScheduler = undefined;
+        /** Optional hook the plugin sets so the card can say where a pack went. */
+        this.packWriter = undefined;
         /** Set by the plugin's setup: the live outbox. */
         this.outboxFlush = undefined;
         this.outboxDropItem = undefined;
@@ -686,7 +690,20 @@ export class WeixinLoginController extends TypertRemoteService {
         return { removed: removed.removed === true, text: removed.removed === true ? removed.text : undefined };
     }
 
-    /** Message journal for the settings card: newest first, optional account filter. */    /** Message journal for the settings card: newest first, optional account filter. */
+    /**
+     * The account a pack belongs to: the saved one, else the only bound account.
+     * A pack is per-account because subscriptions are; modes are shared and travel
+     * regardless.
+     */
+    activeAccountId() {
+        const saved = readSavedConfig();
+        if (typeof saved.accountId === "string" && saved.accountId !== "") return saved.accountId;
+        const ids = Object.keys(readRegistry());
+        return ids.length === 1 ? ids[0] : "";
+    }
+
+    /** Message journal for the settings card: newest first, optional account filter. */
+    /** Message journal for the settings card: newest first, optional account filter. */
     async journal(options) {
         const opts = options ?? {};
         const limitRaw = Number(opts.limit);
@@ -700,6 +717,43 @@ export class WeixinLoginController extends TypertRemoteService {
      * Markdown document for the settings card's one-click export. The card
      * downloads the text itself — no file has to travel through the plugin.
      */
+    /**
+     * Export a shareable template: persona modes, behaviour knobs, subscriptions.
+     *
+     * Memory, credentials, allowlists and the journal are deliberately absent — a
+     * pack is a starting point somebody can hand to a friend, not a copy of a life.
+     */
+    async packExport(options) {
+        const { exportPack } = await import("./packs.js");
+        const accountId = this.activeAccountId();
+        const saved = readSavedConfig();
+        const pack = exportPack(stateDir(), accountId, {
+            config: saved,
+            name: typeof options?.name === "string" ? options.name : "",
+        });
+        return { pack, json: JSON.stringify(pack, null, 2), accountId };
+    }
+
+    /**
+     * Import one. Additive by construction: modes are added, subscriptions are
+     * scheduled on the importing account, and nothing already present is replaced.
+     */
+    async packImport(options) {
+        const { importPack } = await import("./packs.js");
+        const accountId = this.activeAccountId();
+        if (accountId === "") throw new RemoteError("no-account", "还没有绑定微信账号", {});
+        const scheduler = this.subscriptionScheduler;
+        const result = importPack(stateDir(), accountId, options?.json ?? options?.pack, {
+            scheduleSubscription: (plan) => {
+                if (scheduler === undefined) return { ok: false, reason: "not-wired" };
+                const scheduled = scheduler.schedule({ ...plan, accountId, conversationId: plan.conversationId ?? accountId });
+                return scheduled?.error === undefined ? { ok: true } : { ok: false, reason: scheduled.error };
+            },
+        });
+        if (result.ok !== true) throw new RemoteError("bad_pack", `这份模板读不了：${result.error}`, {});
+        return result;
+    }
+
     async journalExport(options) {
         const opts = options ?? {};
         const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
@@ -975,4 +1029,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "packExport", "packImport", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

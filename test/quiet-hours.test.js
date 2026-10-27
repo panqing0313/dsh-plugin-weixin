@@ -143,7 +143,14 @@ test('SubscriptionScheduler defers without consuming the slot', async () => {
             clearTimeoutRef: () => {},
             quiet: onceQuiet(3_600_000),
         })
-        const planned = parseSubscriptionWhen('每天 23:30', new Date(at(12, 0)))
+        // Derive the slot from the real clock instead of pinning 23:30: a deferred
+        // send lands an hour from now, and if "now" is late enough that hour
+        // crosses midnight the next regular occurrence is tomorrow, which is
+        // correct behaviour but made this test fail after 22:30. Five hours ahead
+        // keeps the arithmetic same-day whenever the test runs.
+        const slotAt = new Date(Date.now() + 5 * 3_600_000)
+        const slot = `${String(slotAt.getHours()).padStart(2, '0')}:${String(slotAt.getMinutes()).padStart(2, '0')}`
+        const planned = parseSubscriptionWhen(`每天 ${slot}`, new Date())
         assert.ok(planned.ok, JSON.stringify(planned))
         const result = scheduler.schedule({ accountId: 'bot1', conversationId: 'c1', prompt: '晚安', when: planned })
         assert.ok(!result.error, JSON.stringify(result))
@@ -165,7 +172,11 @@ test('SubscriptionScheduler defers without consuming the slot', async () => {
         const after = JSON.parse(readFileSync(join(root, 'subscriptions.json'), 'utf8'))
         // The deferred trigger happened at "window end" = now+1h (still before
         // tonight's slot), so the next regular occurrence is today 23:30.
-        assert.equal(after.items[0].fireAt, at(23, 30), 'today 23:30 again')
+        assert.equal(
+            after.items[0].fireAt,
+            new Date(slotAt).setSeconds(0, 0),
+            'the deferred send does not eat the day\'s regular slot',
+        )
     } finally {
         rmSync(root, { recursive: true, force: true })
     }

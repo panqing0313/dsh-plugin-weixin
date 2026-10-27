@@ -682,6 +682,21 @@ reworded old text can be replaced too; when long-term memory is full a correctio
 The snippets from recall search (`/recall`, automatic injection) also carry a line "order is by relevance, not by time; when the same topic conflicts, the later one wins",
 because what it returns is historical original text and the model must not treat an old claim as current fact.
 
+### Template packs (`npm run pack` · `packExport` / `packImport`)
+
+A whole "way of using the bot" fits in one JSON file you can hand to a friend: custom personas, rhythm and toggles, scheduled messages.
+
+```bash
+npm run pack -- export --name "毒舌陪聊" -o pack.json
+npm run pack -- import pack.json --account b1b2d0b10d66@im.bot
+```
+
+**In** a pack: the persona modes you wrote (built-ins stay behind — a pack that pinned them would go stale the day a role is added), the behaviour knobs (pacing, stickers, life state, proactive window, digest times, quiet hours, locale), and subscriptions in the `/subscribe` clock vocabulary.
+
+**Not in** a pack: memory, credentials, allowlists, journal, sessions. A pack is a starting point, not a copy of somebody's life, and importing never overwrites what you already have — a duplicate role is skipped, subscriptions are only added, settings merge only inside the whitelist.
+
+The settings card can call the same pair as remote methods (`weixin.packExport` / `weixin.packImport`) to download or paste the JSON.
+
 ### Language (locale)
 
 The replies sent in WeChat come from a text catalog (`src/i18n.js`); `locale: "zh"` (the default) speaks Chinese, `"en"` speaks English.
@@ -947,6 +962,10 @@ Whitespace (blank lines, trailing newlines, CRLF) is preserved byte for byte. Wi
 
 > Note: `![alt](path)` is also **outbound attachment** syntax. With `mediaEnabled` on, that reference goes to the media layer for upload first and
 > only the alt text remains in the text; whatever `stripMediaReferences` already handled in the media step never reaches the Markdown filter.
+
+## Compatibility
+
+The plugin rides on the host app's own slot names, its client module loader, and two packages that only exist inside the host. None of that is versioned. The combinations actually verified live in [docs/compatibility.md](docs/compatibility.md); `npm run doctor` prints the host version and says whether it is on the list — which is the first line to read when something worked yesterday and does not today.
 
 ## Development
 

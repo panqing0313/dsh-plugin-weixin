@@ -641,3 +641,43 @@ test('a persona pack round-trips between installs, and an import never overwrite
     await assert.rejects(() => c.personaImport({ pack: { format: 'other', modes: [] } }), (error) => error.code === 'not a persona pack')
   })
 })
+
+test('a pack exports what is shareable and imports additively through the controller', async () => {
+  await withStateRoot(async (root) => {
+    const c = controller()
+    const { writePersonaStore, readPersonaStore } = await import('../src/persona.js')
+
+    // Both personas the operator wrote, on disk; the controller should find them.
+    const modes = readPersonaStore(root)
+    modes.push({ id: 'custom-a', name: '毒舌室友', prompt: '损友，嘴上不饶人但会记得你的事。', builtin: false })
+    writePersonaStore(root, modes)
+
+    // No config.json exists yet in a fresh root — write one.
+    const saved = { accountId: 'acc-pack', locale: 'en', allowedSenders: ['wxid_secret'] }
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(saved))
+
+    const exported = await c.packExport({ name: '毒舌陪聊' })
+    assert.equal(exported.pack.format, 'dsh-weixin-pack')
+    assert.deepEqual(exported.pack.persona.modes.map((mode) => mode.name), ['毒舌室友'])
+    assert.equal(exported.pack.config.locale, 'en')
+    assert.equal(exported.pack.config.allowedSenders, undefined, 'an allowlist never travels in a template')
+    assert.ok(typeof exported.json === 'string')
+
+    // Import into a second account: the mode is added, subscriptions go to that account.
+    const scheduled = []
+    c.subscriptionScheduler = { schedule: (plan) => { scheduled.push(plan); return { id: 's1' } } }
+    const packWithSchedule = { ...exported.pack, subscriptions: [{ prompt: '早安', when: '每天 08:00' }] }
+    const imported = await c.packImport({ json: JSON.stringify(packWithSchedule) })
+    assert.equal(imported.ok, true)
+    assert.deepEqual(imported.modes.skipped.map((entry) => entry.reason), ['duplicate-name'])
+    assert.deepEqual(imported.subscriptions.added, ['早安'])
+    assert.equal(scheduled[0].accountId, 'acc-pack')
+    assert.equal(scheduled[0].when.kind, 'daily')
+
+    // A file that is not a pack is refused with a message the card can show.
+    await assert.rejects(c.packImport({ json: '{"format":"nope"}' }), (error) => {
+      assert.equal(error.code, 'bad_pack')
+      return true
+    })
+  })
+})

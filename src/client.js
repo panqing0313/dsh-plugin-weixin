@@ -237,6 +237,29 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/packExport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packExport",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/packExport:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packExport:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/packImport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packImport",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/packImport:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packImport:result`, create: _statusResult },
+				},
+
+				{
 					id: `${PKG}#weixin/personaOverview`,
 					service: "weixinLoginController",
 					namespace: "weixin",
