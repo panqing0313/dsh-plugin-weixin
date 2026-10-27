@@ -2667,4 +2667,6 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 | 34 | 人设包导出/导入（`weixin-persona-pack` v1），只新增不覆盖，卡片有导出/粘贴导入 |
 | 19 | `src/tokens.js` 估算 + `memoryGlobalMaxTokens`（0 = 仅按字符），记忆块按 token 也按字符双限 |
 
-未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、30 混沌/长稳、31 发布 provenance、33 i18n 抽取、35 一键安装。
+随后补上 **30 混沌/长稳**：`test/chaos.test.js`（固定种子的伪随机、三分之一发送失败）断言 outbox 不丢消息/不乱序/磁盘永远可解析、限流不超发、清理只删认得出的文件。
+
+未做（留档，按原顺序）：13 的客户端拆分（`__ModuleLoader__` 单模块打包，Section 共享同一 closure 常量）、14 群聊产品化、15 微信内工具审批、16 流式进度（间隔已可配，未改默认）、17 富内容、18 记忆改口、20 模型路由（仅记忆开关）、22 语音/视频缺口、31 发布 provenance、33 i18n 抽取、35 一键安装。
