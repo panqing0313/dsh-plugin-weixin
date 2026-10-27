@@ -548,6 +548,14 @@ export const FIELDS = [
       ],
     },
     {
+      group: "限流",
+      groupEn: "Pacing",
+      fields: [
+        { path: "senderRatePerMinute", type: T.number, default: 20, min: 0, max: 600, step: 1, unit: "条/分钟", unitEn: "msgs/min", label: "每人每分钟上限", labelEn: "Per-sender limit", hint: "超过时回一句「慢一点」并写审计；0 表示不限", hintEn: "0 disables the limit" },
+        { path: "maxQueuedPerConversation", type: T.number, default: 6, min: 0, max: 100, step: 1, unit: "条", unitEn: "msgs", label: "单会话排队上限", labelEn: "Per-conversation queue", hint: "超过的新消息直接拒收；0 表示不限", hintEn: "0 means unbounded" },
+      ],
+    },
+    {
       group: "保留策略",
       groupEn: "Retention",
       fields: [

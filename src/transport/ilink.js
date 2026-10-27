@@ -256,9 +256,11 @@ export function normalizeInbound(raw) {
  * @param {(line: string) => void} options.errLog
  * @param {(message: any) => boolean} [options.bypass]
  */
-export function createInboundScheduler({ onMessage, errLog, bypass = () => false }) {
+export function createInboundScheduler({ onMessage, errLog, bypass = () => false, maxQueuePerConversation = 0, onQueueFull }) {
   /** @type {Map<string, Promise<void>>} conversation id → tail of its chain */
   const chains = new Map()
+  /** @type {Map<string, number>} conversation id → queued handles (not counting a running one) */
+  const queued = new Map()
   /** @type {Set<Promise<void>>} everything still running, for {@link drain} */
   const running = new Set()
 
@@ -289,6 +291,15 @@ export function createInboundScheduler({ onMessage, errLog, bypass = () => false
      */
     dispatch(message) {
       if (bypass(message) === true) return track(run(message))
+      // A full queue is refused, not grown: accepting the message would mean
+      // paying for a reply the user has moved on from, and the chain would keep
+      // the bot unresponsive for minutes.
+      const waiting = queued.get(message.conversationId) ?? 0
+      if (maxQueuePerConversation > 0 && waiting >= maxQueuePerConversation) {
+        onQueueFull?.(message, waiting)
+        return undefined
+      }
+      queued.set(message.conversationId, waiting + 1)
       const previous = chains.get(message.conversationId)
       // No queue for this conversation: start now, so a batch of messages keeps
       // the server's order (deferring to a resolved promise would let a later
@@ -300,6 +311,9 @@ export function createInboundScheduler({ onMessage, errLog, bypass = () => false
         : previous.then(() => run(message), () => run(message))
       chains.set(message.conversationId, next)
       return track(next.finally(() => {
+        const left = (queued.get(message.conversationId) ?? 1) - 1
+        if (left <= 0) queued.delete(message.conversationId)
+        else queued.set(message.conversationId, left)
         if (chains.get(message.conversationId) === next) chains.delete(message.conversationId)
       }))
     },
@@ -307,6 +321,11 @@ export function createInboundScheduler({ onMessage, errLog, bypass = () => false
     /** How many handler runs are still in flight. */
     get pending() {
       return running.size
+    },
+
+    /** How many messages are waiting behind a running turn for one conversation. */
+    queuedFor(conversationId) {
+      return queued.get(conversationId) ?? 0
     },
 
     /** Wait for everything dispatched so far; used by stop(), never by the loop. */
@@ -372,6 +391,8 @@ export class ILinkTransport {
     // The poll call is injectable so the resilience test can make one round
     // reject without a network double.
     this.getUpdatesImpl = options.getUpdates ?? getUpdates
+    /** Per-conversation queue cap (0 = unbounded), passed to the scheduler. */
+    this.maxQueuePerConversation = Number(options.maxQueuePerConversation ?? 0)
     this.#onSessionRejected = options.onSessionRejected
     this.#bypassQueue = options.bypassQueue ?? (() => false)
     this.syncBufPath = getSyncBufFilePath(this.accountId)
@@ -420,7 +441,13 @@ export class ILinkTransport {
     if (outcome === 'deadline') {
       this.log(`notifyStart did not answer within ${this.longPollTimeoutMs * 2 + 10_000}ms (headers arrived, body never did); continuing without it`)
     }
-    this.#scheduler = createInboundScheduler({ onMessage, errLog: this.errLog, bypass: this.#bypassQueue })
+    this.#scheduler = createInboundScheduler({
+      onMessage,
+      errLog: this.errLog,
+      bypass: this.#bypassQueue,
+      maxQueuePerConversation: this.maxQueuePerConversation,
+      onQueueFull: (message, waiting) => this.errLog(`message ${message.id || '(no id)'} refused: ${waiting} already waiting for ${message.conversationId}`),
+    })
     // Even with the catch above, an escape from a future edit must degrade to a
     // log line, never to an unhandled rejection: the host treats one as fatal.
     this.loopPromise = this.#loop().catch((error) => {

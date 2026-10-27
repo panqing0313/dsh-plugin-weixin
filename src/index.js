@@ -25,6 +25,7 @@ import { quietDelay } from './message/quiet-hours.js'
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
 import { createOutbox } from './message/outbox.js'
+import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -182,6 +183,8 @@ export const Config = z.object({
   quietHoursEnabled: z.boolean().default(false).description('免打扰时段：到点的定时发送（/remind 提醒和 /subscribe 订阅）若落在时段内，推迟到时段结束时发出。回复消息不受影响。'),
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
+  senderRatePerMinute: z.number().min(0).default(DEFAULT_PER_MINUTE).description('每个发送者每分钟最多几条消息；0 表示不限。超过时回一句「慢一点」，并写审计。'),
+  maxQueuedPerConversation: z.number().min(0).default(DEFAULT_MAX_QUEUE).description('单个会话允许排队等回复的消息条数；0 表示不限制。超过的直接拒收，避免越堆越多。'),
   retentionJournalDays: z.number().min(0).default(180).description('消息流水保留天数；0 表示不清理。设置卡「统计」页签显示磁盘占用。'),
   retentionAuditDays: z.number().min(0).default(90).description('工具审计保留天数；0 表示不清理。'),
   retentionMediaDays: z.number().min(0).default(30).description('收到的图片/文件/语音保留天数；0 表示不清理。'),
@@ -377,6 +380,9 @@ export function apply(ctx, config) {
     let proactiveScheduler
     let retentionTimer
     let lockHeartbeat
+    // Declared in apply() scope on purpose: bringUpLoop() builds the gate
+    // closure and is a sibling of setup(), not a child of it.
+    let senderLimiter
     // Serializes loop hand-offs across ALL accounts. A login can complete while
     // a previous hand-off is still tearing a transport down, and two live loops
     // on one credential deliver every inbound message twice — the server hands
@@ -454,6 +460,11 @@ export function apply(ctx, config) {
         log,
       })
       outbox.start()
+      const liveLimiter = () => {
+        const live = withSavedConfig(config)
+        return createSenderLimiter({ perMinute: Number(live.senderRatePerMinute ?? DEFAULT_PER_MINUTE) || 1_000_000 })
+      }
+      senderLimiter = liveLimiter()
       if (loginController !== undefined) {
         loginController.outboxFlush = (options) => outbox.flush(options)
         loginController.outboxDropItem = (id) => outbox.drop(id)
@@ -750,6 +761,9 @@ export function apply(ctx, config) {
 
       const next = new ILinkTransport({
         accountId: account.accountId,
+        // A conversation whose queue is full refuses new messages instead of
+        // growing a backlog the user has already forgotten about.
+        maxQueuePerConversation: Number(config.maxQueuedPerConversation ?? DEFAULT_MAX_QUEUE),
         baseUrl: account.baseUrl,
         token: account.token,
         // getConfig answers {ret:-2,"ilink_user_id required"} when the id is
@@ -846,6 +860,7 @@ export function apply(ctx, config) {
         subscriptionScheduler,
         proactiveScheduler,
         journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
+        senderGate: (senderId) => senderLimiter.check(`${account.accountId}|${senderId}`),
       })
 
       const previous = transports.get(account.accountId)
@@ -1108,7 +1123,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list. Resolved once per handler
   // — the same "deployment property, not message property" rule as mediaDirs.
@@ -1303,6 +1318,28 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         text: `（暂不支持这条消息：${message.unsupported}）`,
         contextToken: message.contextToken,
       })
+      return
+    }
+
+    // 1b. Per-sender pacing. The account-wide limiter protects the Weixin
+    //     account from a ban; this protects the bot (and the token bill) from
+    //     one person sending thirty messages into a running turn. A refused
+    //     message is answered once per window — silence would read as a bug.
+    const gate = typeof senderGate === 'function' ? senderGate(message.senderId) : undefined;
+    if (gate !== undefined && gate.allowed === false) {
+      if (gate.shouldWarn === true) {
+        await sendChunked(transport, config, {
+          conversationId: message.conversationId,
+          text: `（你发得有点快，我先缓一下～${Math.max(1, Math.ceil(gate.retryAfterMs / 1000))} 秒后再来）`,
+          contextToken: message.contextToken,
+        }).catch(() => {})
+        appendToolAudit(stateRoot, {
+          at: new Date().toISOString(),
+          tool: 'weixin/rate-limit',
+          ok: false,
+          summary: `sender ${message.senderId} is over the per-minute message limit (${gate.recent} in the last minute)`,
+        }, { warn })
+      }
       return
     }
 
