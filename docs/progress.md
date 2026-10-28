@@ -2886,3 +2886,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **半对不生效**：只填 provider 或只填 model 不算路由，测试钉住；避免把会话丢进一个模型名缺失的路由。
 - **测试**：`test/model-route.test.js` 新增 2 条，覆盖独立性与回落；`config-remote` 表单同步加四个字段（表单/ schema 双向一致测试仍绿）。
 - **文档**：README 模型路由表、`docs/extras.md`「省钱路由」。
+
+### ② 文档理解：发进来的文件直接问（`src/media/document.js`）
+
+- **原来的断点**：入站文件只是下载落盘，提示里只有路径；没有文件工具的回合只能回「我收到了一个文件」。
+- **做成什么**：`.docx` 零依赖解析（zip 中央目录 + `word/document.xml` + 去标签/实体），`.txt/.md/.csv/.json/.log/.xml/.yaml` 直接读；抽出的正文用 `<weixin_document>` 包起来（`neutralizeTags` 转义）拼进该回合提示，`documentTextChars` 截断并注明。
+- **边界**：`.pdf` 明确 `unsupported`，不假装能读；`.docx` 只取正文，不取批注/脚注；解析失败只 warn，不影响消息本身的处理。
+- **测试**：`test/document.test.js` 9 条（段落/制表符/实体、deflate、截断、纯文本、pdf、空文档、缺 document.xml、坏 zip、默认上限）。
+- **文档**：`docs/extras.md`「文档理解」；设置卡新增「文档理解」组。

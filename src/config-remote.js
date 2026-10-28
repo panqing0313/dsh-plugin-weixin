@@ -795,6 +795,14 @@ export const FIELDS = [
       ],
     },
     {
+      group: "文档理解",
+      groupEn: "Documents",
+      fields: [
+        { path: "documentExtract", type: T.boolean, default: true, label: "读取文档正文", labelEn: "Read document text", hint: "docx / txt / md / csv / json 发进来时把正文拼进这一回合的提示，而不是只告诉模型文件存在哪；pdf 暂不支持", hintEn: "Put the text of docx/txt/md/csv/json into the turn instead of only its path; PDF is not supported" },
+        { path: "documentTextChars", type: T.number, default: 4000, label: "最多读多少字", labelEn: "Characters per document", hint: "超出的部分截断并注明；一份长合同不必整份塞进上下文", hintEn: "Longer documents are cut with a note; a long contract need not fill the context" },
+      ],
+    },
+    {
       group: "富内容",
       groupEn: "Rich replies",
       fields: [

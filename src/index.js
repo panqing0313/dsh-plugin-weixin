@@ -69,6 +69,7 @@ import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
+import { DEFAULT_DOCUMENT_CHARS, extractDocumentText } from './media/document.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
@@ -189,6 +190,8 @@ export const Config = z.object({
   chatModel: z.string().default('').description('主对话模型 model：和 chatProvider 一起填才生效。'),
   sideProvider: z.string().default('').description('后台任务模型 provider：/summary、/subscribe 到点、主动开口这类侧会话用它；留空则回落到记忆模型，再回落到会话模型。'),
   sideModel: z.string().default('').description('后台任务模型 model：和 sideProvider 一起填才生效。'),
+  documentExtract: z.boolean().default(true).description('Extract the text of an inbound document (docx/txt/md/csv/json) into the turn, instead of only telling the model where it was saved. PDF is not supported.'),
+  documentTextChars: z.number().min(200).max(20000).default(4000).description('How many characters of an inbound document to put into the prompt; the rest is cut with a note.'),
   proactiveProvider: z.string().default('').description('主动开口 provider：只给「主动开口」用，留空回落到后台任务路由。'),
   proactiveModel: z.string().default('').description('主动开口 model：和 proactiveProvider 一起填才生效。'),
   reportProvider: z.string().default('').description('日报/记忆核对 provider：只给定时报告用，留空回落到后台任务路由。'),
@@ -1913,6 +1916,27 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       }
       const parts = []
       if (saved.length > 0) parts.push(describeInboundMedia(saved, message.text))
+      // ② A document's text, not only its path: the model can answer "这份合同
+      //    第三条写了什么" in the same turn. Anything unrecognised (pdf, images)
+      //    falls back to the path-only description above.
+      if (effectiveConfig.current.documentExtract !== false) {
+        const docs = []
+        for (const file of saved) {
+          if (file.kind !== 'file' && file.kind !== 'voice') continue
+          const extracted = extractDocumentText(file.path, {
+            maxChars: effectiveConfig.current.documentTextChars ?? DEFAULT_DOCUMENT_CHARS,
+          })
+          if (extracted.ok) {
+            docs.push(`<weixin_document path="${file.path}">
+${neutralizeTags(extracted.text)}
+</weixin_document>`)
+            log(`extracted ${extracted.kind} text from ${file.path} (${extracted.text.length} chars, truncated=${extracted.truncated})`)
+          } else if (extracted.reason !== 'unsupported') {
+            warn(`document extraction skipped for ${file.path}: ${extracted.reason}`)
+          }
+        }
+        if (docs.length > 0) parts.push(docs.join('\n\n'))
+      }
       // A failure with no caption and nothing saved is answered here rather
       // than by the agent: there is no content to reason about, only an error
       // to relay, and waking a full turn (with its model call) to repeat one
