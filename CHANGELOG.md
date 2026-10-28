@@ -5,6 +5,8 @@
 
 ## 版本
 
+- **0.9.12** —— **别人第一次发消息，不再只回一次**：修掉首联系人登记只对触发消息生效的 bug —— 此后每条消息都重新读白名单，登记过的发送者下一条就能正常收到回复，不用重连（PR #6，由 qianhaoq 提交）。CI 也从「1 秒红 / 6 小时挂」变成两条腿都绿：矩阵改 Node 22/24（`engines` 本来就要求 >=22.13），job 加 15 分钟超时；没有宿主包的裸 checkout 上，21 条驱动 `AgentBridge` 的用例改成显式 skip（缺 `@deepseek-ai/dsh-llm` 的失败会留下 unhandled rejection，让测试进程不退出）；两条只在东八区成立的时区断言改成时区无关；CI 不再全局设 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE=1`，links 的 SSRF 守卫用例重新生效。
+
 - **0.9.11**
   - 日报与记忆核对：每天 21:00 一条当日简报（数字全来自流水，禁止编造），每周日 20:00 一条「我还记得的对吗」，改正仍靠 `/remember 旧 → 新` 与 `/forget 编号`
   - 备份与恢复：`npm run backup create|list|verify|restore`，启动 5 分钟后自动备份、每 24 小时一份、保留 3 份；`restore` 前先把当前状态挪到 `pre-restore-*`，`doctor` 会报最新备份的年龄
