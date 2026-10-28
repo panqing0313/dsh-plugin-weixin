@@ -2809,3 +2809,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **影响面**（都是「卡片改了但运行时没变」）：default false 被打开无效 —— `proactiveEnabled`、`quietHoursEnabled`、`groupChatEnabled`、`dryRun`；default true 被关闭无效 —— `memoryEnabled`、`digestEnabled`、`memoryReviewEnabled`。只有 `asr` 与 `allowedSenders` 因 2026-10 的两次修复逃过。
 - **修法**：把 `asr` 的规则推广到顶层 —— 存档值一律优先，除非是空形态（`undefined` / `''` / `[]` / `{}`）；`false` 与 `0` 是真值。`asr` 仍做一层深合并，非空组合 `allowedSenders` 仍优先。
 - **测试**：`test/core.test.js` 新增 2 条（saved `true` 胜 schema `false`；saved `false`/数字胜 schema `true`/默认）。全量 **739/739**、`node bin/check.mjs` → `checked 170 files`。
+
+## 发布 0.9.13（2026-10-28）
+
+- **内容**：`withSavedConfig` 优先级修复（`0613be1`）—— 设置卡里的开关从此真的生效；全量 `npm test` **739/739**、`node bin/check.mjs` → `checked 170 files`。
+- **核验**：`npm view version` = `0.9.13`、`dist-tags.latest = 0.9.13`、`dist.shasum 443722858e730d3e7dc73a2676a2757a4dad9f0b`（= 本地 tarball）、`dist.integrity sha512-+e2CrjXkAykTN2onLCacvhww5x1W/Xx06XamUIHezy76Wk0tPAgeCYowSs5hZs9lPg8GsCNjE3IqZv6SVB8e7A==`、`gitHead 5f8b0c240ee6f19088709222be2d5f9c4c42ff0b`；tag `v0.9.13`（指向 `5f8b0c2`）、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.13 。
+- **发布脚本这次一步没停**：preflight → 739 绿 → bump → tarball 158 文件 1658 kB → 提交 → publish（web OTP）→ tag/push/release → 等注册表 → 核验（远端 tarball 与本地 sha1 一致）→ 装 profile + 刷锁，exit 0。
+- **profile**：依赖 `^0.9.13`、`node_modules` = 0.9.13、`pnpm-lock.yaml` 的 integrity 与 registry 一致；`doctor` → `installed version 0.9.13`、`host 0.2.1-rc.3 (tested)`、`published version up to date (0.9.13)`。
+- **CHANGELOG 占位**：脚本在 bump 时插入的是 `TODO: describe what changed`；发布完成后本提交把它替换成实际内容（脚本的提示语就是这个意思，占位文案会随 tarball 一起发出去）。
+- **tag 触发的 release workflow**（run `40680818150`）如预期失败（版本已存在，重复 publish），未重试；main 的 CI（`40680808435`）绿。
+- **重启后生效**：重启 DSH 加载 0.9.13；之后主动开口在 09:00–23:00 窗口内每 5 分钟按 35% 概率触发，离上次入站已 >21h，所有闸门都是开的。
