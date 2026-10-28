@@ -64,6 +64,7 @@ import { extractUrls, fetchLinkText, describeLinkResults } from './message/links
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { createListCommands } from './message/lists.js'
+import { createReadingCommands } from './message/reading.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
@@ -1600,6 +1601,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       },
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
+      ...createReadingCommands({ stateRoot, accountId, warn }),
     }
   }
   return async (message) => {

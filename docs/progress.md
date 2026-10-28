@@ -2847,3 +2847,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **为什么不做多清单**：`/todo 购物 add …` 的语法会让「直接写内容」这条捷径失效，而多数人只有一个清单；需要分类时用文本前缀（`[购物] 牛奶`）就够了。
 - **测试**：`test/lists.test.js` 9 条（命令识别、顺序与持久化、跨会话共享、账号隔离、done/rm 越界、空内容、上限、命令全流程、help 可发现）。
 - **文档**：`docs/extras.md`「共享清单」。
+
+### ⑧ 稍后读（`src/message/reading.js`）
+
+- **为什么**：链接在聊天里被转发两次就找不到了；「等会儿看」需要一个比聊天记录更耐久的地方。
+- **做成什么**：`/later <url>` 存链接并取标题（失败退回域名），`/later 一段文字` 原样存；`/later` 看清单，`/later done 2`、`/later rm 2`。按账号存，`reading.json` 原子写，上限 50 条；同一未读链接去重，读完后可再存。
+- **边界**：不替人读全文、不调模型；非链接文本不发网络请求；标题只用于显示，不改 URL。
+- **测试**：`test/reading.test.js` 11 条（命令识别、空清单、标题、域名回退、纯文本、去重、done/rm、上限、格式化、help 可发现）。
+- **文档**：`docs/extras.md`「稍后读」。
