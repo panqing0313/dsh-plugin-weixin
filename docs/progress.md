@@ -2870,3 +2870,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **改法**：命令回复分支里，`/export` 的回复再走一遍 `resolveOutboundReply`（与模型回复附件同一条管线、同一个 `mediaDirs` 白名单、同一个 `maxMediaBytes`），文本与附件一起发；其它命令不受影响。
 - **验证**：路径判定与上传管线沿用既有单测；真实上传需要真机，测法写进 `docs/manual-checks.md` 第 4 节（短回复直接正文、长回复文件 + 文字；失败看 `outbound media:` 日志）。
 - **注意**：`resolveOutboundReply` 从 `src/index.js` 导出（`export async function`），命令分支与后续真机脚本可复用；插件默认导出不变。
+
+### ⑤ 加密备份：一个文件、一句口令（`src/backup-crypto.js` + `bin/backup.mjs`）
+
+- **为什么**：原有的备份是明文目录，能回滚但带不走——`config.json` 里有 token，journal 里有聊天原文。
+- **做成什么**：`seal <file.enc>` 把整个状态封成一个文件（`DSHWX1` 头 + scrypt 派生的 AES-256-GCM），`open <file.enc>` 解密后逐字节还原；口令只从 `DSH_WEIXIN_BACKUP_PASSPHRASE` 读，落盘前先全量解密校验，错误口令/篡改文件不会写半个字节。
+- **边界**：拒绝归档里 `..` 或绝对路径；恢复前检查 DSH 是否在跑（`--yes` 可强来）；跳过 `backups/`、`instance.lock`、`node_modules`。
+- **测试**：`test/backup-crypto.test.js` 8 条（密文不含明文、往返、错口令、篡改拒绝、还原、路径逃逸、口令必填、随机 salt）。
+- **文档**：`docs/extras.md`「加密备份」；`bin/backup.mjs` 用法表。

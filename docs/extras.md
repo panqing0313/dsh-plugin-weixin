@@ -75,3 +75,19 @@ curl -s -X POST http://127.0.0.1:47832/notify \
 - 只发真实存在的普通文件，且必须落在**工作目录、状态目录、`mediaDirs`** 之内（与自动附件同一套 `resolveAllowedPath` 守卫，`..` 与符号链接逃逸都拒绝）。
 - 受 `maxMediaBytes` 限制（默认 100 MB），超了直接说明，不会偷偷截断。
 - 发送失败时文件保留，回复里说明失败，不会假装已发。
+
+## 加密备份：把状态带走（0.9.14）
+
+`npm run backup create` 是目录对目录的快速回滚，**不设防**——里面就是明文 token 和聊天原文。要跨机器或放网盘，用密封备份：
+
+```bash
+export DSH_WEIXIN_BACKUP_PASSPHRASE='一句只有你知道的话'
+node bin/backup.mjs seal ~/Desktop/weixin-state.enc
+# 另一台机器 / 恢复时
+node bin/backup.mjs open ~/Desktop/weixin-state.enc
+```
+
+- AES-256-GCM + scrypt（随机 salt/iv），密文带认证标签：口令错或文件被改会直接拒绝，不会还原出半套状态。
+- 只封 `config.json`、`memory/`、`journal/` 等真实状态；跳过 `backups/`、`instance.lock`、`node_modules`。
+- 恢复前会检查 DSH 是否在跑（在跑就拒绝，`--yes` 可强来），写入走临时文件 + rename。
+- 口令不写进任何文件，也不进命令行历史（走环境变量）。
