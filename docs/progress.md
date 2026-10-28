@@ -2894,3 +2894,16 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **边界**：`.pdf` 明确 `unsupported`，不假装能读；`.docx` 只取正文，不取批注/脚注；解析失败只 warn，不影响消息本身的处理。
 - **测试**：`test/document.test.js` 9 条（段落/制表符/实体、deflate、截断、纯文本、pdf、空文档、缺 document.xml、坏 zip、默认上限）。
 - **文档**：`docs/extras.md`「文档理解」；设置卡新增「文档理解」组。
+
+## 发布 0.9.14（2026-10-29）
+
+- **内容**：九项扩展全部落地（通知桥、文档理解、离开模式、`/send`、加密备份、共享清单、稍后读、按用途路由、`/export` 附件），外加 e2e 时序修复 `466f471`（persona 测试的第二次假 poll 在发布负载下 10 秒不够，放宽到 30 秒并注明原因）。
+- **发布前**：全量 **809/809**、`node bin/check.mjs` 通过；CHANGELOG 条目先手写再发（`dd6a2d7`），避免脚本插入 `TODO` 占位。
+- **打包**：165 文件、1.7 MB，`shasum 5f42067399b7400bf4a0d3e0ec77ba8f30a91962`、`integrity sha512-voyqTMWpyQk+/F8vDcvPfHptlB/MsTs6hf1HFywaavZyy6E6IuVWjfPg2vAv2r+wuwklkd55s+fVYZaLrkt60A==`。
+- **两个卡点**：
+  - `[4] Build and verify` 拒绝发布：7 个新文件权限是 `0600`，tarball 里 “not world-readable”；`chmod -R go+rX` 后重跑。
+  - 第一次 publish 的 web 授权会话失效（`GET /-/v1/done` 返回 404），重新 publish 拿到新链接、用户授权后成功。
+- **注册表延迟**：publish 返回 `+ dsh-plugin-weixin@0.9.14` 后约 **160 秒**才 `npm view @0.9.14` 可见；`--finish 0.9.14` 四步全绿：tag `v0.9.14`（指向 `15c7c23`）、push main + tag、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.14 、profile `^0.9.13 → ^0.9.14` 且锁文件已刷新。
+- **核验**：`dist-tags.latest = 0.9.14`、`gitHead 15c7c23…`；`doctor` → `installed version 0.9.14`、`host 0.2.1-rc.3 (tested)`、`published version up to date (0.9.14)`。
+- **清理**：tag 触发的 `release` workflow `40731262165` 失败（版本已存在，与 0.9.11–0.9.13 同一预期）；main 的 CI `40731253225` 绿。
+- **兼容表**：仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.14 已装进 profile 但未重启复核。
