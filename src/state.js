@@ -141,20 +141,24 @@ export function readSavedConfig() {
 }
 
 /**
- * Merge the operator's saved settings under the composition's own config.
+ * Merge the operator's saved settings over the composition's own config.
  *
- * Precedence: whatever the loader passed wins, and the saved file fills the gaps.
- * A profile that explicitly sets a field is making a live decision, and an
- * overlay that silently overrode it would make the YAML lie about the running
- * configuration. The saved file exists to carry values across reinstalls, not to
- * outrank a hand edit.
+ * Precedence: the saved file written by the settings card is the newer
+ * statement. A saved value wins unless it is the schema's empty form
+ * (`undefined`, `''`, `[]`, `{}`); `false` and `0` are real values. `asr`
+ * merges one level deeper, and an explicit non-empty composition
+ * `allowedSenders` stays authoritative.
  *
- * `asr` is merged one level deeper, because it is the section the settings card
- * writes into and a wholesale replacement would drop every ASR default the
- * moment the user changed only the model directory.
+ * The reason is the one that forced the `asr` rule: the loader validates the
+ * composition through schemastery before `apply` sees it, so every field
+ * arrives with its schema default already filled in. `{ ...saved, ...config }`
+ * therefore let a default outrank the card — `proactiveEnabled: true` in
+ * config.json reached `planProactive` as `false` and no proactive message was
+ * ever planned (2026-10-28); `quietHoursEnabled: true` was read as false, and
+ * `memoryEnabled: false` could not switch memory off.
  *
  * @param {Record<string, unknown>} config config as the loader passed it
- * @returns {Record<string, unknown>} config with saved values filling gaps
+ * @returns {Record<string, unknown>} config with the saved settings applied
  */
 export function withSavedConfig(config) {
   const saved = readSavedConfig()
@@ -207,6 +211,15 @@ export function withSavedConfig(config) {
       if (!isEmptyDefault(savedValue)) asr[key] = savedValue
     }
     merged.asr = asr
+  }
+  // The same rule now applies to the top level: a saved value beats the
+  // schema-instantiated default the loader passed. `asr` and `allowedSenders`
+  // keep the rules above; `null` counts as "not set here", while `false` and
+  // `0` are real values.
+  for (const [key, savedValue] of Object.entries(saved)) {
+    if (key === 'asr' || key === 'allowedSenders') continue
+    if (savedValue === null || isEmptyDefault(savedValue)) continue
+    merged[key] = savedValue
   }
   return merged
 }

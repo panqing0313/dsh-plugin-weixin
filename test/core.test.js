@@ -360,12 +360,37 @@ test('saved settings fill in what the composition did not set', () => {
     assert.deepEqual(withSavedConfig({}).allowedSenders, ['wxid_saved'])
     assert.equal(withSavedConfig({}).maxMessageLength, 900)
 
-    // A field the composition DID set wins. The profile YAML is the live
-    // decision, so an overlay must not make it lie about the running config.
+    // An explicitly composed allowlist keeps its own rule: a non-empty list
+    // wins, because an empty schema default cannot be told apart from deny-all.
     const merged = withSavedConfig({ allowedSenders: ['wxid_composed'], cwd: '/tmp/work' })
     assert.deepEqual(merged.allowedSenders, ['wxid_composed'], 'the saved file overrode an explicit value')
     assert.equal(merged.cwd, '/tmp/work', 'a key only the composition set must survive')
     assert.equal(merged.maxMessageLength, 900, 'untouched saved keys must still fill in')
+  })
+})
+
+test('a saved toggle outranks the schema default the loader instantiates', () => {
+  withStateRoot(() => {
+    // The loader validates the composition through schemastery, so apply()
+    // receives every field with its schema default already filled in.
+    // `proactiveEnabled` defaults to false and the card had saved true — the
+    // spread merge let the default win, so the scheduler read `disabled` on
+    // every tick and never planned a message (2026-10-28).
+    fs.writeFileSync(configFile(), JSON.stringify({ proactiveEnabled: true, quietHoursEnabled: true }))
+    const merged = withSavedConfig({ proactiveEnabled: false, quietHoursEnabled: false })
+    assert.equal(merged.proactiveEnabled, true, 'the saved proactive toggle must win over the schema default')
+    assert.equal(merged.quietHoursEnabled, true)
+  })
+})
+
+test('a saved false beats a schema default true, and saved numbers beat defaults', () => {
+  withStateRoot(() => {
+    // The other direction: `memoryEnabled` defaults to true, so switching it
+    // off in the card has to stick.
+    fs.writeFileSync(configFile(), JSON.stringify({ memoryEnabled: false, maxMessageLength: 900 }))
+    const merged = withSavedConfig({ memoryEnabled: true, maxMessageLength: 1500 })
+    assert.equal(merged.memoryEnabled, false)
+    assert.equal(merged.maxMessageLength, 900)
   })
 })
 

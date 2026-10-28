@@ -2799,3 +2799,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **profile**：依赖 `^0.9.11 → ^0.9.12`、`node_modules/dsh-plugin-weixin` = 0.9.12、`pnpm-lock.yaml` 的 `dsh-plugin-weixin@0.9.12` integrity 与 registry 一致（`--finish` 首次刷锁文件时 tarball 还是 404，失败；tarball 可读后手工 `pnpm install --prefer-offline` → rc 0）。`node bin/doctor.mjs` → `installed version 0.9.12`、`host 0.2.1-rc.3 (tested)`、`published version up to date (0.9.12)`。重启 DSH 后生效。
 - **清理**：tag 触发的 `release` workflow run `40626549110` 已取消（否则会重复 publish）；main 的 CI run `40626543250` 绿。
 - **兼容表**：仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.12 装好但未重启复核，按该页 5 步确认后再改行。
+
+## 主动开口没触发：设置卡被 schema 默认值盖掉（2026-10-28）
+
+用户报「主动开口今天好像没触发」（m00865）。根因不在调度器，在配置合并：
+
+- **证据链**：`Config({}).proactiveEnabled === false`（`src/index.js:209` 的 `z.boolean().default(false)`）；宿主在 `apply` 前用 schemastery 实例化组合配置（`allowedSenders` 2026-10-15、`asr` 2026-10-16 的两次事故都记录过这一点）；`withSavedConfig` 的 `{ ...saved, ...config }` 让这个 `false` 压过 config.json 里的 `true`。实跑 `withSavedConfig(Config({}))` 对真实 config.json 仍得到 `proactiveEnabled: false`。
+- **为什么一点痕迹都没有**：`planProactive` 第一条闸门是 `config.proactiveEnabled !== true → { fire:false, reason:'disabled' }`，调度器不写 `proactive-*.json`、不打日志。7.5 小时 92 个 tick 全哑，与现象完全一致。
+- **影响面**（都是「卡片改了但运行时没变」）：default false 被打开无效 —— `proactiveEnabled`、`quietHoursEnabled`、`groupChatEnabled`、`dryRun`；default true 被关闭无效 —— `memoryEnabled`、`digestEnabled`、`memoryReviewEnabled`。只有 `asr` 与 `allowedSenders` 因 2026-10 的两次修复逃过。
+- **修法**：把 `asr` 的规则推广到顶层 —— 存档值一律优先，除非是空形态（`undefined` / `''` / `[]` / `{}`）；`false` 与 `0` 是真值。`asr` 仍做一层深合并，非空组合 `allowedSenders` 仍优先。
+- **测试**：`test/core.test.js` 新增 2 条（saved `true` 胜 schema `false`；saved `false`/数字胜 schema `true`/默认）。全量 **739/739**、`node bin/check.mjs` → `checked 170 files`。
