@@ -579,6 +579,16 @@ const COMMANDS = [
     run: (state) => runStatus(state),
   },
   { id: 'help', pattern: /^\/(?:help|帮助|指令)$/i, build: identity, run: ({ context }) => buildCommandsHelp(context?.t) },
+  // 离开模式：一段有截止时间的缺席。命令只负责开启/结束；窗口内的拦截在
+  // 入站路径上，否则「不回消息」仍然会花掉每条消息的一次模型调用。
+  {
+    id: 'away',
+    pattern: /^\/away(?:\s+([\s\S]+))?$/i,
+    build: (match) => ({ arg: match[1] ?? '' }),
+    helpRank: 20,
+    helpKey: 'help.away',
+  },
+  { id: 'back', pattern: /^\/back$/i, build: identity, helpRank: 21, helpKey: 'help.back' },
   // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
   // 单独报「缺内容」而非「看不懂命令」。
   {
@@ -639,7 +649,7 @@ const COMMANDS = [
 ]
 
 /** Commands answered by the inbound handler's persona bundle (state root lives there). */
-const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall'])
+const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall', 'away', 'back'])
 
 /**
  * The help text in one locale (C33). Command rules carry a `helpKey` into the

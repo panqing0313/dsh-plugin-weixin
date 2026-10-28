@@ -726,6 +726,21 @@ export const FIELDS = [
       ],
     },
     {
+      group: "离开模式",
+      groupEn: "Away mode",
+      fields: [
+        {
+          path: "awayAutoReply",
+          type: T.string,
+          default: "",
+          label: "自动回复",
+          labelEn: "Auto-reply",
+          hint: "离开模式下每个会话每 30 分钟最多回一句；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。窗口内消息不经过模型。",
+          hintEn: "Away mode answers at most once per 30 minutes per chat. Blank uses the built-in line with your return time. Messages never reach the model.",
+        },
+      ],
+    },
+    {
       group: "保留策略",
       groupEn: "Retention",
       fields: [

@@ -61,7 +61,8 @@ let outbox
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
-import { ReminderScheduler } from './message/scheduler.js'
+import { ReminderScheduler, parseWhen } from './message/scheduler.js'
+import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
@@ -245,6 +246,7 @@ export const Config = z.object({
   notifyEnabled: z.boolean().default(false).description('本地通知桥：开启后向 http://127.0.0.1:47832/notify POST 一句话就能推到你的微信（构建、备份、cron 用）。只绑回环地址、必须带 token、不经过模型。'),
   notifyPort: z.number().min(1).max(65535).default(DEFAULT_NOTIFY_PORT).description('通知桥监听端口；脚本里的 URL 要跟着改。'),
   notifyToken: z.string().default('').description('通知桥的 token；留空则首次启动自动生成，存在 <状态目录>/notify.json（0600），不要外传。'),
+  awayAutoReply: z.string().default('').description('离开模式的自动回复；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
   digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
   memoryReviewEnabled: z.boolean().default(true).description('每周到点发一条记忆核对：「我记住的这些还准吗」，你回 /remember 或 /forget 纠正。'),
@@ -456,6 +458,7 @@ export function apply(ctx, config) {
     let retentionTimer
     let reportScheduler
     let notifyBridge
+    let awayTimer
     const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
@@ -944,6 +947,22 @@ export function apply(ctx, config) {
         }
       }
 
+      // 离开模式到点：把最后一个找过你的会话当收件箱，发一条汇总后关窗。
+      // 一分钟的粒度对「离开两小时」足够；到点时不会顺带跑一轮模型。
+      awayTimer = setInterval(() => {
+        for (const [id, t] of transports) {
+          const away = readAway(stateRoot, id, { warn })
+          if (away === undefined || away.active) continue
+          const last = away.missed[away.missed.length - 1]
+          if (last !== undefined) {
+            sendChunked(t, withSavedConfig(config), { conversationId: last.conversationId, text: awaySummary(away) })
+              .catch((error) => warn(`away summary failed: ${String(error)}`))
+          }
+          clearAway(stateRoot, id, { warn })
+        }
+      }, 60_000)
+      awayTimer.unref?.()
+
     })()
 
     // Bring the loop up for one account (or every account on disk), replacing a
@@ -1192,6 +1211,7 @@ export function apply(ctx, config) {
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
       await notifyBridge?.stop()
+      if (awayTimer !== undefined) clearInterval(awayTimer)
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()
@@ -1577,6 +1597,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         parts.push(`最近消息窗口：${recent.length} 条`)
         return parts.join('\n\n')
       },
+      ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
     }
   }
   return async (message) => {
@@ -1773,6 +1794,29 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         contextToken: message.contextToken,
       })
       fileLog.info(`answered session command ${JSON.stringify(message.text.trim())} for ${message.conversationId}`)
+      return
+    }
+
+    // 4.2 离开模式：窗口内的消息在这里就被拦下，不进 agent —— 「不回消息」
+    //     如果还走一遍模型，二十句「在吗」就是二十次调用。同一个会话每 30
+    //     分钟回一句，免得对方以为被无视；其余记下来等 /back 一次交代。
+    const awayNow = readAway(stateRoot, accountId, { warn })
+    if (awayNow !== undefined && awayNow.active) {
+      const missed = noteMissed(stateRoot, accountId, {
+        senderId: message.senderId,
+        conversationId: message.conversationId,
+        text: message.text,
+        at: Date.now(),
+        warn,
+      })
+      if (missed.shouldReply) {
+        await sendChunked(transport, effectiveConfig.current, {
+          conversationId: message.conversationId,
+          text: buildAwayReply(awayNow, { reply: effectiveConfig.current.awayAutoReply }),
+          contextToken: message.contextToken,
+        })
+        fileLog.info(`away auto-reply sent to ${message.conversationId}`)
+      }
       return
     }
 

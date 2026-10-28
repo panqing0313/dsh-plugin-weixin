@@ -14,7 +14,7 @@
 把**个人微信**变成 DeepSeek Harness（DSH）的远程控制面：在微信里发一句话，DSH Agent 在本地开一个会话执行，把结果回给你。
 
 - **你想在微信里干活** → [安装](#安装) → [登录](#登录) → [授权](#授权重要) ，三步之后就能发消息了。
-- **想改行为** → [配置](#配置)（29 项，设置卡里也有同样的表）。
+- **想改行为** → [配置](#配置)（逐项见下表，设置卡里也有同样的表）。
 - **想知道某个版本改了什么** → [CHANGELOG.md](CHANGELOG.md)。
 - **想用通知桥、离开模式、共享清单这些开关** → [docs/extras.md](docs/extras.md)。
 - **出问题了** → `npm run doctor`（11 项体检），再看 [文档](#文档) 里的排障顺序。
@@ -300,6 +300,10 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `maxInboundMediaBytes` | `20971520`（20MB） | 入站附件下载大小上限 |
 | `cdnBaseUrl` | 空（未配置） | 入站下载与出站上传的 CDN 根。留空表示「这里没配」：会先用账号记录里的 `cdnBaseUrl`，再退回上游默认 `https://novac2c.cdn.weixin.qq.com/c2c` |
 | `asr.modelDir` | `''` | 语音模型目录；空 = `~/.dsh/weixin/asr-models`。设置页的输入框会覆盖它（并写进 `<stateDir>/asr-config.json`） |
+| `notifyEnabled` | `false` | 本地通知桥：带 token `POST http://127.0.0.1:47832/notify` 就能推一句话到微信，不经过模型 |
+| `notifyPort` | `47832` | 通知桥端口（只绑 127.0.0.1） |
+| `notifyToken` | `''` | 通知桥 token；空 = 首次启动生成到 `<stateDir>/notify.json`（0600） |
+| `awayAutoReply` | `''` | 离开模式的自动回复；空 = 内置「我现在不在，看到会回你～（大概 HH:mm 回来）」 |
 
 改完配置重载插件即可。
 
