@@ -1800,9 +1800,27 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       t: createTranslator(effectiveConfig.current.locale).t,
     })
     if (commandReply !== undefined) {
+      // ⑨ `/export` 的长记录会写成一个文件；命令回复以前只发正文，文件留在
+      //    磁盘上，用户还得去设置卡里找。让命令回复也走一遍出站附件管线：
+      //    路径必须落在 mediaDirs 内（exports 就在 stateRoot 下），由同一套
+      //    resolveAllowedPath 判定，不是命令自带的特权。
+      let replyText = commandReply
+      if (/^\/export(?:\s|$)/i.test(message.text.trim())) {
+        const withFile = await resolveOutboundReply({
+          config: effectiveConfig.current,
+          transport,
+          mediaDirs,
+          conversationId: message.conversationId,
+          contextToken: message.contextToken,
+          reply: commandReply,
+          warn,
+          fileLog,
+        })
+        replyText = withFile.text
+      }
       await sendChunked(transport, config, {
         conversationId: message.conversationId,
-        text: commandReply,
+        text: replyText,
         contextToken: message.contextToken,
       })
       fileLog.info(`answered session command ${JSON.stringify(message.text.trim())} for ${message.conversationId}`)
@@ -2237,7 +2255,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
  * @param {{ info: (line: string) => void }} [params.fileLog]  Durable record.
  * @returns {Promise<string>} text to send, with a failure note when applicable
  */
-async function resolveOutboundReply(params) {
+export async function resolveOutboundReply(params) {
   const text = params.reply ?? ''
   const fileLog = params.fileLog ?? { info: () => {} }
   if (params.config.mediaEnabled === false) return { text, sent: [] }

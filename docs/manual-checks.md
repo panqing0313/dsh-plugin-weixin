@@ -39,6 +39,18 @@ grep "unfamiliar inbound shape" ~/.dsh/weixin/logs/openclaw-$(date +%F).log
 
 `voice_item` 能上传、`sendMessage` 返回 `ret=0`，手机**什么都不显示**。两次独立实测。所以 `voiceOutbound` 默认关闭，语音附件按文件发。这里不需要再试一次，只需要记住：不是我们没写对，是服务端不投递。
 
+## 4. `/export` 的附件（0.9.14 起可发）
+
+`/export 30` 在记录短于 3000 字时直接回正文；超过时写一个 `.md` 文件并发出来。文件走的是和模型回复附件完全相同的 `resolveOutboundReply`（路径必须落在 `mediaDirs` 内，exports 目录就在状态目录下），所以这里要验的是**真实上传链路**，不是路径判断（路径判断有单测）。
+
+```bash
+# 先在微信里让一个会话攒够 3000 字以上的流水（或直接改 state 目录里的 journal）
+/export 30
+```
+
+- 手机收到一条消息 + 一个 `chat-<会话>-YYYY-MM-DD.md` 文件 → 附件链路通；
+- 只有文字、文件躺在 `~/.dsh/weixin/exports/` → 看日志里的 `outbound media: ...` 与 `sent ... outbound media file(s)`，多半是 CDN 上传被拒（真机网络/服务端策略），不是命令本身。
+
 ## 一条经验
 
 三条都需要**真实账号**。跑之前先 `npm run doctor`：`host app` 那行如果写着「not in the tested list」，先把宿主版本记下来 —— 真机现象和版本强相关。

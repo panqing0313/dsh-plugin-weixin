@@ -2863,3 +2863,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **不是**「任意路径发送」：命令不绕过自动附件的守卫，这是它存在的前提。
 - **测试**：`test/send-file.test.js` 10 条（命令识别、相对/绝对路径、越界拒绝、`..` 拒绝、缺失文件、大小上限、空参数、上传失败、help 可发现）。
 - **文档**：`docs/extras.md`「要一个文件」。
+
+### ⑨ 导出的文件也发出来（`src/index.js` 命令分支）
+
+- **原来的断点**：`/export` 超过 3000 字时把 Markdown 写进 `exports/`，回复里只有一行路径 —— 命令回复走的是 `sendChunked`，不经过 `resolveOutboundReply`，所以文件不会上传，用户还得去手机之外找。
+- **改法**：命令回复分支里，`/export` 的回复再走一遍 `resolveOutboundReply`（与模型回复附件同一条管线、同一个 `mediaDirs` 白名单、同一个 `maxMediaBytes`），文本与附件一起发；其它命令不受影响。
+- **验证**：路径判定与上传管线沿用既有单测；真实上传需要真机，测法写进 `docs/manual-checks.md` 第 4 节（短回复直接正文、长回复文件 + 文字；失败看 `outbound media:` 日志）。
+- **注意**：`resolveOutboundReply` 从 `src/index.js` 导出（`export async function`），命令分支与后续真机脚本可复用；插件默认导出不变。
