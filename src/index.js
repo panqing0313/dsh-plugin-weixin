@@ -1346,22 +1346,26 @@ export function weixinSourceBlock(message) {
 
 function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, sideRoute }) {
   // The effective allowlist is per account: an account-level override in the
-  // registry narrows (or replaces) the global list. Resolved once per handler
-  // — the same "deployment property, not message property" rule as mediaDirs.
+  // registry narrows (or replaces) the global list.
   // `accountId` is always set here (bringUpAccount passes it), but the
   // fallback keeps the helper's contract honest.
-  const accountConfig = { ...config, ...allowlistForAccount(accountId, config) }
-  // The enrolment branch below re-resolves the allowlist mid-flight; the
-  // handler reads the config for THIS message through this cell so a
-  // first-contact enrolment takes effect on the very message that triggered
-  // it, without touching the per-handler `accountConfig` capture above.
-  const effectiveConfig = { current: accountConfig }
+  //
+  // Resolved per message, not captured once: `enrolFirstContact` writes the
+  // registry, so a snapshot taken when the handler was built still says "no
+  // allowlist" — which reset the effective config on the message AFTER the one
+  // that enrolled, refusing the very sender who had just been let in until the
+  // channel reconnected. The settings card edits the same registry, so a
+  // capture would also make its changes wait for a restart.
+  const resolveAccountConfig = () => ({ ...config, ...allowlistForAccount(accountId, config) })
+  // The handler reads the config for THIS message through this cell so a
+  // first-contact enrolment takes effect on the very message that triggered it.
+  const effectiveConfig = { current: resolveAccountConfig() }
   // Per-conversation overrides (config-scope.json) sit on top of the account
   // config for exactly one message. Re-read on every message so the card can
-  // change a scope without a restart, and reset from `accountConfig` so an
+  // change a scope without a restart, and rebuilt from the account config so an
   // override never leaks into the next conversation.
   const applyScope = (conversationId) => {
-    effectiveConfig.current = scopedConfig(accountConfig, readScope(stateRoot, accountId, conversationId, { warn }))
+    effectiveConfig.current = scopedConfig(resolveAccountConfig(), readScope(stateRoot, accountId, conversationId, { warn }))
   }
   // Persona + memory command handlers (/mode /remember /forget /memory), one
   // bundle per conversation. Every call re-reads its store: the settings card
@@ -1659,7 +1663,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (enrolled) {
           // Re-resolve the effective config so the rest of this message runs
           // under the list that now contains the sender.
-          const enrolledConfig = { ...config, ...allowlistForAccount(accountId, config) }
+          const enrolledConfig = resolveAccountConfig()
           if (isAllowedSender(enrolledConfig, message.senderId, message.conversationId)) {
             effectiveConfig.current = enrolledConfig
           } else {
@@ -1674,12 +1678,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         // rebind flow generates a fresh sender id per bot, so the most common
         // refusal is a stale allowedSenders entry, and this line is both the
         // diagnosis and the exact value the operator needs to paste into config.
+        // Read through `effectiveConfig`, not the raw config: the line must
+        // report the list the decision was actually made against.
         fileLog.info(
           `refused message from ${message.senderId} (conversation ${message.conversationId}): ` +
-            `${denialReason(accountConfig, message.senderId, message.conversationId)}; ` +
-            `allowedSenders=${JSON.stringify(accountConfig.allowedSenders ?? [])}`,
+            `${denialReason(effectiveConfig.current, message.senderId, message.conversationId)}; ` +
+            `allowedSenders=${JSON.stringify(effectiveConfig.current.allowedSenders ?? [])}`,
         )
-        warn(`refused message from ${message.senderId}: ${denialReason(accountConfig, message.senderId, message.conversationId)}`)
+        warn(`refused message from ${message.senderId}: ${denialReason(effectiveConfig.current, message.senderId, message.conversationId)}`)
         return
       }
     }
