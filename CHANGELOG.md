@@ -5,6 +5,7 @@
 
 ## 版本
 
+- **0.9.13** —— TODO: describe what changed in this release.
 - **0.9.12** —— **别人第一次发消息，不再只回一次**：修掉首联系人登记只对触发消息生效的 bug —— 此后每条消息都重新读白名单，登记过的发送者下一条就能正常收到回复，不用重连（PR #6，由 qianhaoq 提交）。CI 也从「1 秒红 / 6 小时挂」变成两条腿都绿：矩阵改 Node 22/24（`engines` 本来就要求 >=22.13），job 加 15 分钟超时；没有宿主包的裸 checkout 上，21 条驱动 `AgentBridge` 的用例改成显式 skip（缺 `@deepseek-ai/dsh-llm` 的失败会留下 unhandled rejection，让测试进程不退出）；两条只在东八区成立的时区断言改成时区无关；CI 不再全局设 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE=1`，links 的 SSRF 守卫用例重新生效。
 
 - **0.9.11**
