@@ -617,9 +617,11 @@ test('/export renders the journal as markdown and spills to a file when long', a
 		fake.deliver('/export', 'e1')
 		await waitFor(() => fake.outbound.length > 1, 'the spill reply')
 		assert.match(fake.outbound[1].text, /已导出成文件/)
-		const m = /已导出成文件：\n(\S+)/.exec(fake.outbound[1].text)
-		assert.ok(m, fake.outbound[1].text)
-		assert.ok(fs.existsSync(m[1]), `export file missing: ${m[1]}`)
+		// 长导出现在会把文件一起发出来：附件链路成功时路径会从正文里摘掉，
+		// 失败时正文保留路径并在末尾附上失败原因。两种情况文件都必须存在。
+		const exportsDir = path.join(root, 'exports')
+		const written = fs.existsSync(exportsDir) ? fs.readdirSync(exportsDir) : []
+		assert.ok(written.length > 0, 'the long export must be written to exports/')
 
 		// The zh alias reaches the command, not the agent turn.
 		fake.deliver('/导出', 'e2')
