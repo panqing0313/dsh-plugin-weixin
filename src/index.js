@@ -105,6 +105,7 @@ import { createTranslator, resolveLocale } from './i18n.js'
 import { routeFor, sideRouteFor } from './model-route.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
+import { createNotifyServer, DEFAULT_NOTIFY_PORT, ensureNotifyToken } from './notify.js'
 import { buildContactBlock, listContacts, readContact, saveContact, touchContact } from './message/contacts.js'
 import { describeAffinity, readAffinityHistory, recordAffinitySnapshot } from './message/affinity-history.js'
 import { buildDryRunBlock, describeDryRun, isGoAhead } from './message/dry-run.js'
@@ -241,6 +242,9 @@ export const Config = z.object({
   metricsExport: z.boolean().default(true).description('每 30 秒把指标写到状态目录的 metrics.json / metrics.prom，方便外部抓取（npm run metrics 读取）。'),
   backupEnabled: z.boolean().default(true).description('每天自动备份一次状态目录（记忆、人设、订阅、流水、账号）；备份在 <状态目录>/backups，含账号 token，别外传。'),
   backupKeep: z.number().min(1).max(60).default(DEFAULT_KEEP).description('保留最近几份自动备份；更旧的会被删掉。'),
+  notifyEnabled: z.boolean().default(false).description('本地通知桥：开启后向 http://127.0.0.1:47832/notify POST 一句话就能推到你的微信（构建、备份、cron 用）。只绑回环地址、必须带 token、不经过模型。'),
+  notifyPort: z.number().min(1).max(65535).default(DEFAULT_NOTIFY_PORT).description('通知桥监听端口；脚本里的 URL 要跟着改。'),
+  notifyToken: z.string().default('').description('通知桥的 token；留空则首次启动自动生成，存在 <状态目录>/notify.json（0600），不要外传。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
   digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
   memoryReviewEnabled: z.boolean().default(true).description('每周到点发一条记忆核对：「我记住的这些还准吗」，你回 /remember 或 /forget 纠正。'),
@@ -451,6 +455,7 @@ export function apply(ctx, config) {
     let proactiveScheduler
     let retentionTimer
     let reportScheduler
+    let notifyBridge
     const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
@@ -915,6 +920,30 @@ export function apply(ctx, config) {
       })
       proactiveScheduler.start()
 
+      // 本地通知桥: a loopback endpoint so a build, backup or cron job can push
+      // one sentence to WeChat without a model turn. Off by default; the token
+      // is generated once, stored 0600 under the state root, never logged.
+      if (withSavedConfig(config).notifyEnabled === true) {
+        const notifyTokenValue = ensureNotifyToken(stateRoot, { configured: String(withSavedConfig(config).notifyToken ?? ''), warn })
+        if (notifyTokenValue !== '') {
+          notifyBridge = createNotifyServer({
+            token: notifyTokenValue,
+            port: Number(withSavedConfig(config).notifyPort ?? DEFAULT_NOTIFY_PORT),
+            warn,
+            send: async (text) => {
+              const accountId = [...transports.keys()].find((id) => pickConversation(listConvMemories(stateRoot, id)) !== undefined)
+              if (accountId === undefined) throw new Error('no conversation has ever been spoken in')
+              const conversationId = pickConversation(listConvMemories(stateRoot, accountId))
+              const transport = transports.get(accountId)
+              if (transport === undefined || conversationId === undefined) throw new Error('the Weixin transport is not up yet')
+              await sendChunked(transport, withSavedConfig(config), { conversationId, text })
+            },
+          })
+          const boundPort = await notifyBridge.listen()
+          if (boundPort !== undefined) log(`notify bridge listening on http://127.0.0.1:${boundPort}/notify (token in notify.json under the state root)`)
+        }
+      }
+
     })()
 
     // Bring the loop up for one account (or every account on disk), replacing a
@@ -1162,6 +1191,7 @@ export function apply(ctx, config) {
       reminderScheduler?.stop()
       subscriptionScheduler?.stop()
       proactiveScheduler?.stop()
+      await notifyBridge?.stop()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()

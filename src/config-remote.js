@@ -690,6 +690,42 @@ export const FIELDS = [
       ],
     },
     {
+      group: "通知桥",
+      groupEn: "Notify bridge",
+      fields: [
+        {
+          path: "notifyEnabled",
+          type: T.boolean,
+          default: false,
+          label: "本地通知桥",
+          labelEn: "Local notify bridge",
+          hint: "开启后，向 http://127.0.0.1:47832/notify 带 token POST 一句话，就会发到你的微信。适合构建完成、备份、cron 这类提醒；不经过模型，不花 token。token 首次启动自动生成，在状态目录的 notify.json。",
+          hintEn: "POST one line with the token to http://127.0.0.1:47832/notify and it lands in WeChat. No model, no tokens. The token is generated on first start into <state>/notify.json.",
+        },
+        {
+          path: "notifyPort",
+          type: T.number,
+          default: 47832,
+          min: 1,
+          max: 65535,
+          step: 1,
+          label: "端口",
+          labelEn: "Port",
+          hint: "只绑 127.0.0.1；改端口后脚本里的 URL 也要跟着改。",
+          hintEn: "Binds 127.0.0.1 only. Scripts must use the same port.",
+        },
+        {
+          path: "notifyToken",
+          type: T.string,
+          default: "",
+          label: "token（留空自动生成）",
+          labelEn: "Token (blank = generated)",
+          hint: "脚本调用时带的令牌；留空则首次启动自动生成到状态目录的 notify.json（0600）。别把它贴到公开的地方。",
+          hintEn: "The bearer token scripts send. Blank generates one into <state>/notify.json (0600) on first start. Do not paste it anywhere public.",
+        },
+      ],
+    },
+    {
       group: "保留策略",
       groupEn: "Retention",
       fields: [

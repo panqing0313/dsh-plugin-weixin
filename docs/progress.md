@@ -2819,3 +2819,15 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **CHANGELOG 占位**：脚本在 bump 时插入的是 `TODO: describe what changed`；发布完成后本提交把它替换成实际内容（脚本的提示语就是这个意思，占位文案会随 tarball 一起发出去）。
 - **tag 触发的 release workflow**（run `40680818150`）如预期失败（版本已存在，重复 publish），未重试；main 的 CI（`40680808435`）绿。
 - **重启后生效**：重启 DSH 加载 0.9.13；之后主动开口在 09:00–23:00 窗口内每 5 分钟按 35% 概率触发，离上次入站已 >21h，所有闸门都是开的。
+
+## 扩展九项（2026-10-28）
+
+用户 m01192「按任务分开都给做了」。每项独立提交、独立测试、独立文档；`docs/extras.md` 是给人看的使用说明。
+
+### ① 通知桥（`src/notify.js`）
+
+- **为什么**：构建、备份、cron、CI 没有入口把一句话送到微信；agent 只能在一个回合里说话。
+- **做成什么**：`POST http://127.0.0.1:47832/notify`，带 `x-notify-token`（或 `Authorization: Bearer`），body 是 `{"text":"…"}` 或纯文本。只绑 127.0.0.1；token 首次启动生成到 `<状态目录>/notify.json`（0600）；每分钟 30 条；正文 4000 字截断；发送失败返回 502，不静默。
+- **开关**：`notifyEnabled`（默认 false）、`notifyPort`、`notifyToken`；设置卡「配置项 → 通知桥」。
+- **测试**：`test/notify.test.js` 11 条（鉴权、纯文本、限速、超大 body、发送失败、端口占用、token 持久化 0600）。
+- **文档**：`docs/extras.md`。
