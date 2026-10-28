@@ -2737,7 +2737,7 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **文档**：README（中英）的「发布」节重写步骤表 —— 把顺序改成实际顺序（发布 → **立刻** 打 tag/push → 等待 registry → 核验 → `install.mjs --pin`），补上「终端中途断开怎么办」段与 `--finish` 说明；顺手把示例版本号从 0.4.0 改成 0.9.11、把版本 bullet 指向 `CHANGELOG.md`。
 - **测试**：新增 `test/release-resume.test.js` 3 条（导入即安装 SIGHUP 处理器；`parseReleaseArgs(['0.9.11','--finish'])` 的完整形状；`--finish` 无版本号 → 非零退出且提示示例）。全量 **692/692**、`node bin/check.mjs` → `checked 146 files`。
 
-## 可拓展点十三项（2026-10-27，待随 0.9.11 发版）
+## 可拓展点十三项（2026-10-27，已随 0.9.11 发版）
 
 用户 m08866「都要做」。逐项提交、逐项全量绿，最后统一发版。
 
@@ -2767,3 +2767,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **只在写它那天通过的测试**：`quiet-hours` 那条把 23:30 钉死，导入日期一变（或当天 22:30 之后跑）就失败。改成从真实时钟推 5 小时后取整点，断言「缓发不吞当天的正常时段」。
 - **模板包不能带安全决策**。`allowedSenders` 与 `maxMediaBytes` 永远不进模板；白名单有测试断言。
 - **预演模式不是审批**。插件没有工具拦截入口（`dsh-agent` 里 grep 不到 permission/approval），所以它只能靠提示词自觉，危险工具提醒必须并存。
+
+## 发布 0.9.11（2026-10-28）
+
+- **核验**：`npm view dsh-plugin-weixin version` → `0.9.11`、`dist-tags.latest = 0.9.11`、`dist.shasum 4f85563cc784ea160c2656155b33d190090db212`（= 本地 `dsh-plugin-weixin-0.9.11.tgz` 的 `shasum -a 1`）、`dist.integrity sha512-pYZAi7edQ8D9xiXAqlVvm/BIXfE8XWqW4IW41UmwCX8gR++LmIXfOVQFj9KZ+ep4izveSh26TfP2Ctmg/y7gsw==`、`gitHead ffc907f995f038e16d5f9be8a70dafa2c3d50555`；tag `v0.9.11`（annotated，指向 `ffc907f`）、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.11 。
+- **发版前**：全量 `npm test` **736/736**、`node bin/check.mjs` → `checked 169 files`；`release.mjs 0.9.11 --dry-run` 打出 158 文件 / 1657kB 的 tarball 并成功还原工作树。
+- **2FA 卡点与解法**：非 TTY 下 `npm publish` 只报 `EOTP`，authUrl 被打码成 `***`；`script -q /dev/null` 申请 pty 被环境拒绝（`openpty: Operation not permitted`）。用 `NODE_OPTIONS="--require /tmp/fake-tty.cjs"` 预载一个把 stdin/stdout/stderr 的 `isTTY` 标成 true 的 shim，再 `npm publish --browser=false`，npm 自己走 web-OTP 分支：打印未脱敏的 `https://www.npmjs.com/auth/cli/...`、轮询 doneUrl，浏览器授权后自动带 token 重试。不写新 token 进 `~/.npmrc`，也不需要 pty 设备。
+- **注册表延迟**：publish 返回 `+ dsh-plugin-weixin@0.9.11` 后约 90 秒内 `npm view @0.9.11` 仍是 404；轮询等到 `0.9.11` 再跑 `release.mjs --finish 0.9.11`（tag + push + GitHub release + 核验四步全绿）。**发布后不要用「立刻查不到」判断失败。**
+- **装好的副本**：profile 依赖 `^0.9.10 → ^0.9.11`、`node_modules/dsh-plugin-weixin` 是 `0.9.11`、锁文件已刷新；`node bin/doctor.mjs` → `✓ installed version 0.9.11`、`✓ host app host 0.2.1-rc.3 (tested)`、`✓ published version up to date (0.9.11)`。重启 DSH 后生效。
+- **兼容表**：`docs/compatibility.md` 仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.11 装好但未重启复核，等按该页 5 步确认后再改，不提前写「已验证」。
+- **清理**：tag push 触发的 `release` workflow（run `40610159839`）会重复 publish，已取消；GitHub CI 的历史失败是 matrix 里 node 20 与 `engines >=22.13` 冲突，与本次发版无关。
