@@ -2855,3 +2855,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **边界**：不替人读全文、不调模型；非链接文本不发网络请求；标题只用于显示，不改 URL。
 - **测试**：`test/reading.test.js` 11 条（命令识别、空清单、标题、域名回退、纯文本、去重、done/rm、上限、格式化、help 可发现）。
 - **文档**：`docs/extras.md`「稍后读」。
+
+### ④ 要文件：`/send`（`src/message/send-file.js`）
+
+- **为什么**：出站附件原来只由模型回复里引用的路径触发，用户没有「把那个文件发我」的直通入口。
+- **做成什么**：`/send <路径>`，路径经 `resolveAllowedPath`（工作目录 / 状态目录 / `mediaDirs`，realpath 后判包含，拒绝 `..` 与符号链接逃逸），必须是普通文件，受 `maxMediaBytes` 限制；失败时文件保留并如实说明。
+- **不是**「任意路径发送」：命令不绕过自动附件的守卫，这是它存在的前提。
+- **测试**：`test/send-file.test.js` 10 条（命令识别、相对/绝对路径、越界拒绝、`..` 拒绝、缺失文件、大小上限、空参数、上传失败、help 可发现）。
+- **文档**：`docs/extras.md`「要一个文件」。
