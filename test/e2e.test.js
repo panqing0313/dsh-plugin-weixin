@@ -294,6 +294,58 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
   }
 })
 
+test('the sender enrolled on first contact is still allowed on their next message', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-enrol-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    // No global allowlist, so the first sender to arrive is the scanner and
+    // `enrolFirstContact` writes them into the account registry. BOTH messages
+    // come from that same sender: the enrolment has to survive into the message
+    // AFTER the one that triggered it. It did not — the per-message config
+    // re-read reset the effective config to the snapshot taken when the handler
+    // was built (allowlist still empty), so the sender who had just been let in
+    // was refused on every following message until the channel reconnected.
+    const sender = 'wxid_scanner'
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 4001, from_user_id: sender, group_id: '', message_type: 1, message_state: 2, context_token: 'e1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'one' } }] },
+        { message_id: 4002, from_user_id: sender, group_id: '', message_type: 1, message_state: 2, context_token: 'e2', create_time_ms: 2, item_list: [{ type: 1, text_item: { text: 'two' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: [], accountId: ACCOUNT_ID })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const refused = () => warnings.some((w) => w.includes(`refused message from ${sender}`))
+    const deadline = Date.now() + 10_000
+    while (sent.length < 2 && !refused() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    assert.equal(refused(), false, `the enrolled sender must not be refused: ${warnings.join(' | ')}`)
+    const answered = sent.map((entry) => entry.msg.item_list[0].text_item.text).sort()
+    assert.deepEqual(answered, ['pong: one', 'pong: two'], `both messages must be answered, got ${JSON.stringify(answered)}`)
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
 test('sourceContext on: the agent prompt carries a weixin_source block; off: it does not', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 
