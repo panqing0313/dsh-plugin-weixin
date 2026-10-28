@@ -1497,7 +1497,10 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       }
       plugin.apply(ctx, config)
 
-      const deadline = Date.now() + 10_000
+      // The release script runs this file while the rest of the suite still
+      // saturates the machine: 10s was enough on an idle laptop, and under
+      // that load the second fake poll sometimes had not come back yet.
+      const deadline = Date.now() + 30_000
       while (sent.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
