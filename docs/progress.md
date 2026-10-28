@@ -2788,3 +2788,14 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **CI 全局 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE=1` 把 SSRF 守卫关了**。`src/message/links.js:44` 在调用时读这个变量，于是 links 的三个用例真的放行了 `169.254.169.254`。e2e 自己会在用到时设（`test/e2e.test.js:507`），从 ci.yml 删掉即可。
 
 验证：`node:22` 与 `node:24` 容器、非 root、UTC、无宿主包、不带该 env —— 两条都 `test=0`，737 条里 691 pass / 46 skip / 0 fail；本机 macOS（有宿主包）737/737、`node bin/check.mjs` → `checked 170 files`。
+
+## 发布 0.9.12（2026-10-28）
+
+- **内容**：PR #6 的首联系人修复（`58ec924`）+ CI 转绿（`bb2fa3c`）；`npm test` 737/737、`node bin/check.mjs` → `checked 170 files`。
+- **认证卡点**：本机 `~/.npmrc` 里的 token 已失效（`npm whoami` → 401；publish 报 `E404 Not Found - PUT https://registry.npmjs.org/dsh-plugin-weixin`，不是 403）。首轮 release 因此停在 `[6] Publish`，版本已 bump 并提交 `1fc7770`，没有 push。用户在真实终端 `npm login --auth-type=web` 后恢复。
+- **又一次 web OTP**：publish 仍要求一次性密码；用伪 TTY（`NODE_OPTIONS="--require /tmp/fake-tty.cjs"`）拿到未脱敏的 `https://www.npmjs.com/auth/cli/...`，浏览器授权后自动重试，exit 0。
+- **注册表延迟比 0.9.11 更长**：metadata 先可读（`npm view ... version` = 0.9.12），tarball URL 连续 404 约 4 分钟才变 200；期间 profile 的 `pnpm install` 报 `ERR_PNPM_FETCH_404`。**不要用 tarball 404 判断发布失败。**
+- **核验**：本地 `dsh-plugin-weixin-0.9.12.tgz` 的 `shasum` = `94e2f7bfd1ef30f7ad3d55a53f903dac8b329504` = registry `dist.shasum`；`dist.integrity sha512-BjVKNlibN3vLioyhAgoIprau/dUokQnFdoFAPR1IJkteFSAnhrVkboZ8tMwpo49JpDn/F/VK0OVpMBVTjDfPbQ==`；`gitHead 1fc777078e4e3eadd43fcb5667130f252c44374a`；`dist-tags.latest = 0.9.12`；tag `v0.9.12`（指向 `1fc7770`）、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.12 。
+- **profile**：依赖 `^0.9.11 → ^0.9.12`、`node_modules/dsh-plugin-weixin` = 0.9.12、`pnpm-lock.yaml` 的 `dsh-plugin-weixin@0.9.12` integrity 与 registry 一致（`--finish` 首次刷锁文件时 tarball 还是 404，失败；tarball 可读后手工 `pnpm install --prefer-offline` → rc 0）。`node bin/doctor.mjs` → `installed version 0.9.12`、`host 0.2.1-rc.3 (tested)`、`published version up to date (0.9.12)`。重启 DSH 后生效。
+- **清理**：tag 触发的 `release` workflow run `40626549110` 已取消（否则会重复 publish）；main 的 CI run `40626543250` 绿。
+- **兼容表**：仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.12 装好但未重启复核，按该页 5 步确认后再改行。
