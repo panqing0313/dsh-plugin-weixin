@@ -5,6 +5,17 @@
 
 ## 版本
 
+- **0.9.14** —— **九个小功能，都是「用得上」的那种**：
+  - 通知桥：本机 `127.0.0.1` 起一个带 token 的 webhook，一条 `curl` 把话推到微信；默认关闭，token 只存在状态目录
+  - 文档理解：入站 `.docx` 与 `.txt/.md/.csv/.json` 自动抽出正文塞进这一回合（零依赖，PDF 明确说「暂不支持」，不猜）
+  - 离开模式：`/away 2h 在开会` 期间自动回一句，每半小时最多一次、最多记 30 条，`/back` 给汇总；不把「离开」变成骚扰
+  - `/send <路径>`：把工作目录/状态目录里的文件发出来，路径守卫与自动附件同一套，不绕过 `maxMediaBytes`
+  - 加密备份：`backup.mjs seal/open`，整份状态封成一个 scrypt + AES-256-GCM 文件，口令走环境变量，错误口令不写半个字节
+  - 共享清单：`/todo 买牛奶`、`/todo done 1`，同一个 bot 的所有会话看同一份
+  - 稍后读：`/later` 收链接与笔记，`/later done n` 归档；不抓正文也能存
+  - 省钱路由：主动开口、日报各有一条独立的 provider/model，留空回落到后台任务路由
+  - `/export` 的长记录：导出文件与文字一起发，不再只回一行路径
+
 - **0.9.13** —— **设置卡里的开关，终于真的生效了**：`withSavedConfig` 一直让宿主 schema 实例化出来的默认值盖过 `config.json` —— 宿主的 `config` 里每个字段都已填好默认值（`proactiveEnabled` 是 `false`），合并顺序 `{ ...saved, ...config }` 又让它赢，于是你在卡片里打开的「主动开口」在调度器第一条闸门就被判成 `disabled`，每个 tick 静默返回，7 小时零消息。同样受影响的还有 `quietHoursEnabled`、`groupChatEnabled`、`dryRun`（打开无效）与 `memoryEnabled`、`digestEnabled`、`memoryReviewEnabled`（关掉无效）。现在按 `asr` 在 2026-10-16 已经用过的规则统一处理：**存档值优先，只有存档里的空形态（`undefined` / `''` / `[]` / `{}`）才落回 schema**；`false` 与 `0` 是真值；`asr` 仍做一层深合并，非空 `allowedSenders` 仍以显式组合为准。全量 739 条测试。
 - **0.9.12** —— **别人第一次发消息，不再只回一次**：修掉首联系人登记只对触发消息生效的 bug —— 此后每条消息都重新读白名单，登记过的发送者下一条就能正常收到回复，不用重连（PR #6，由 qianhaoq 提交）。CI 也从「1 秒红 / 6 小时挂」变成两条腿都绿：矩阵改 Node 22/24（`engines` 本来就要求 >=22.13），job 加 15 分钟超时；没有宿主包的裸 checkout 上，21 条驱动 `AgentBridge` 的用例改成显式 skip（缺 `@deepseek-ai/dsh-llm` 的失败会留下 unhandled rejection，让测试进程不退出）；两条只在东八区成立的时区断言改成时区无关；CI 不再全局设 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE=1`，links 的 SSRF 守卫用例重新生效。
 
