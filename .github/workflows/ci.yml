@@ -9,10 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # `engines` requires node >=22.13, and the test glob only works from 22:
+    # the node-20 leg used to fail in seconds, before any test ran.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,11 +27,6 @@ jobs:
         run: npm run check
       - name: full suite
         run: npm test
-        env:
-          # The suite spins local fake iLink servers on 127.0.0.1; the link
-          # fetcher refuses private hosts by default (that is the point of the
-          # guard), so the e2e cases that fetch from it opt in explicitly.
-          DSH_WEIXIN_LINKS_ALLOW_PRIVATE: '1'
       - name: doctor, against an empty state directory
         run: |
           state="$(mktemp -d)"

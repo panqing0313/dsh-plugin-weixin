@@ -28,6 +28,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { hostTest } from './host-packages.mjs'
+
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 
 // The vendored logger resolves its directory when it is first imported, so it
@@ -139,7 +141,7 @@ async function bridgeWith(fake, overrides = {}) {
   return bridge
 }
 
-test('a message arriving during a turn is queued (default) and delivered after it settles', async () => {
+hostTest('a message arriving during a turn is queued (default) and delivered after it settles', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -172,7 +174,7 @@ test('a message arriving during a turn is queued (default) and delivered after i
   assert.equal(secondResult.text, 'answer-2')
 })
 
-test('steer mode injects into the running turn via agent.steer', async () => {
+hostTest('steer mode injects into the running turn via agent.steer', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -189,7 +191,7 @@ test('steer mode injects into the running turn via agent.steer', async () => {
   assert.equal(firstResult.text, 'steered-answer')
 })
 
-test('a steer arriving when the agent is idle degrades to a normal turn', async () => {
+hostTest('a steer arriving when the agent is idle degrades to a normal turn', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -203,7 +205,7 @@ test('a steer arriving when the agent is idle degrades to a normal turn', async 
   assert.equal(result.text, 'answer')
 })
 
-test('/steer <instruction> steers the running turn regardless of the configured mode', async () => {
+hostTest('/steer <instruction> steers the running turn regardless of the configured mode', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -221,7 +223,7 @@ test('/steer <instruction> steers the running turn regardless of the configured 
   await Promise.all([first, second])
 })
 
-test('progress streams: a changed tool set is re-announced, an unchanged one is not', async () => {
+hostTest('progress streams: a changed tool set is re-announced, an unchanged one is not', async () => {
   const notes = []
   const { agent, push } = streamingAgent()
   const { AgentBridge } = await import('../src/agent-bridge.js')
@@ -266,7 +268,7 @@ test('progress streams: a changed tool set is re-announced, an unchanged one is 
   assert.ok(readNotes.length >= 1, 'a changed tool set must be re-announced')
 })
 
-test('a running tool is reported before the quiet fallback would have fired', async () => {
+hostTest('a running tool is reported before the quiet fallback would have fired', async () => {
   const notes = []
   const { agent, push } = streamingAgent()
   const { AgentBridge } = await import('../src/agent-bridge.js')
@@ -303,7 +305,7 @@ test('a running tool is reported before the quiet fallback would have fired', as
   assert.ok(notes.every((note) => /\(\d+s\)/.test(String(note))), 'every note carries the elapsed clock')
 })
 
-test('a queued message resolves with its own reply; the receipt goes through onProgress', async () => {
+hostTest('a queued message resolves with its own reply; the receipt goes through onProgress', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
   const notes = []
@@ -328,7 +330,7 @@ test('a queued message resolves with its own reply; the receipt goes through onP
   assert.equal(secondResult.text, 'answer-2')
 })
 
-test('a turn that outlives the wait still delivers its answer through onLateReply', async () => {
+hostTest('a turn that outlives the wait still delivers its answer through onLateReply', async () => {
   const fake = fakeAgent()
   // Shrink both waits so the timeout path and the late window run quickly.
   const bridge = await bridgeWith(fake, { maxWaitMs: 150, lateReplyMaxWaitMs: 2000 })
@@ -355,14 +357,14 @@ test('a turn that outlives the wait still delivers its answer through onLateRepl
   assert.equal(late[1].text, 'the late answer')
 })
 
-test('without onLateReply the timeout path is unchanged', async () => {
+hostTest('without onLateReply the timeout path is unchanged', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake, { maxWaitMs: 120 })
   const reply = await bridge.deliver({ conversationId: 'room-1', text: 'q' })
   assert.equal(reply.text, '（处理超时，请稍后查看会话）')
 })
 
-test('a failed model turn is answered immediately instead of blocking the queue', async () => {
+hostTest('a failed model turn is answered immediately instead of blocking the queue', async () => {
   // The field report: one model call fails (e.g. 429 RATE_LIMIT), and every
   // message after it sits queued. Mechanism (measured in a real session
   // transcript): the failed turn emits assistant/attempt events holding ONLY
@@ -416,7 +418,7 @@ test('a failed model turn is answered immediately instead of blocking the queue'
   assert.equal(next.text, 'done', 'the next message must run normally after a failure')
 })
 
-test('the first message mirrors its fresh line title into the host sessionTitle', async () => {
+hostTest('the first message mirrors its fresh line title into the host sessionTitle', async () => {
   // The GUI sidebar renders the HOST's title, not the store's, so a fresh
   // `label: message` title must be mirrored through sessionTitle.rename —
   // the same call the host's own rename dialog makes. The store title stays
@@ -486,7 +488,7 @@ test('the first message mirrors its fresh line title into the host sessionTitle'
   assert.equal(receipt2.text, 'done', 'a missing sessionTitle service must not fail delivery')
 })
 
-test('the store title carries the account prefix the host mirror receives', async () => {
+hostTest('the store title carries the account prefix the host mirror receives', async () => {
   // Scoped lines are titled `label: message`; the mirror must forward THAT
   // text, so the sidebar shows the same attribution /list does.
   fs.rmSync(path.join(process.env.DSH_WEIXIN_STATE_DIR ?? '', 'sessions.json'), { force: true })

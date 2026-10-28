@@ -21,6 +21,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { after } from 'node:test'
 
+import { hostTest } from './host-packages.mjs'
+
 import { appendJournal } from '../src/message/journal.js'
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
@@ -657,7 +659,7 @@ test('/recall searches the local journal and answers without an agent turn', asy
 	})
 })
 
-test('/summary summarizes the conversation on demand and never writes the conv file', async () => {
+hostTest('/summary summarizes the conversation on demand and never writes the conv file', async () => {
   await withPlugin(async ({ fake, root }) => {
     // A short history so the recent window is non-empty.
     appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: '我们讨论了周五去哪吃饭' })
@@ -746,7 +748,7 @@ test('a correction replaces the fact it names, and /memory shows what changed', 
   })
 })
 
-test('a side session runs on the background route; the conversation keeps its own', async () => {
+hostTest('a side session runs on the background route; the conversation keeps its own', async () => {
   // C20. Provider/model reach the host as agentOptions, so this is the real
   // assertion that the routing knob does what the settings card promises.
   await withPlugin(async ({ fake, agentOptionsSeen }) => {

@@ -24,6 +24,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { hostTest } from './host-packages.mjs'
+
 // The vendored logger resolves its directory when it is first imported, so it
 // must be redirected before src/agent-bridge.js loads.
 const LOG_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-audit-logs-'))
@@ -193,7 +195,7 @@ async function bridgeWith(fake, overrides = {}) {
   })
 }
 
-test('a turn reports its tool call and result once, with who caused it', async () => {
+hostTest('a turn reports its tool call and result once, with who caused it', async () => {
   const entries = []
   const fake = toolAgent()
   const bridge = await bridgeWith(fake, { onToolAudit: (entry) => entries.push(entry) })
@@ -222,7 +224,7 @@ test('a turn reports its tool call and result once, with who caused it', async (
   assert.equal(typeof results[0].durationMs, 'number')
 })
 
-test('a result carrying an error is audited as not ok', async () => {
+hostTest('a result carrying an error is audited as not ok', async () => {
   const entries = []
   const fake = toolAgent({ error: { message: 'permission denied' } })
   const bridge = await bridgeWith(fake, { onToolAudit: (entry) => entries.push(entry) })
@@ -234,7 +236,7 @@ test('a result carrying an error is audited as not ok', async () => {
   assert.equal(result.ok, false)
 })
 
-test('with no sink the bridge runs the turn and writes nothing', async () => {
+hostTest('with no sink the bridge runs the turn and writes nothing', async () => {
   const fake = toolAgent()
   const bridge = await bridgeWith(fake)
 
@@ -274,7 +276,7 @@ function stuckToolAgent({ tool = 'bash', args = { command: 'sleep 120' }, callId
   }
 }
 
-test('a cancelled turn closes the tool call it interrupted instead of leaving it dangling', async () => {
+hostTest('a cancelled turn closes the tool call it interrupted instead of leaving it dangling', async () => {
   // Measured on a real account (2026-10-23 23:29): /cancel during `sleep 120`
   // left `tool/call bash` in the audit with no result line ever after it, so the
   // file could not answer "did that command finish?" about the one call an

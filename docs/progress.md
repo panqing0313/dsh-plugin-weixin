@@ -2777,3 +2777,14 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **装好的副本**：profile 依赖 `^0.9.10 → ^0.9.11`、`node_modules/dsh-plugin-weixin` 是 `0.9.11`、锁文件已刷新；`node bin/doctor.mjs` → `✓ installed version 0.9.11`、`✓ host app host 0.2.1-rc.3 (tested)`、`✓ published version up to date (0.9.11)`。重启 DSH 后生效。
 - **兼容表**：`docs/compatibility.md` 仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.11 装好但未重启复核，等按该页 5 步确认后再改，不提前写「已验证」。
 - **清理**：tag push 触发的 `release` workflow（run `40610159839`）会重复 publish，已取消；GitHub CI 的历史失败是 matrix 里 node 20 与 `engines >=22.13` 冲突，与本次发版无关。
+
+## CI 真正转绿（2026-10-28）
+
+用户报 `npm test` 在 GitHub Actions 上 1 秒失败（`Could not find '.../test/**/*.test.js'`），继续查下去发现 Node 22 那条腿会挂 6 小时。根因不是工作流写错，而是四件事叠在一起：
+
+- **Node 20 跑不了 `--test` 的 glob**。`engines` 本来就要求 `>=22.13`，矩阵里的 20 只是历史遗留。矩阵改成 `[22, 24]`，并给 job 加 `timeout-minutes: 15` —— 下次再挂，15 分钟就红，而不是六小时。
+- **没有宿主包时测试进程不退出**。`src/agent-bridge.js` 懒加载 `@deepseek-ai/dsh-llm` / `@deepseek-ai/dsh-agent`（optional peer），CI 的 `npm ci` 不装；缺模块的失败留下 unhandled rejection，进程不退出，TAP 停在 71 条，CI 只能干等超时。新增 `test/host-packages.mjs` 统一提供 `hostTest`，给 `busy-turns`（12）、`cancel-turn`（3）、`session-commands`（2）、`tool-audit`（4）共 21 条驱动 `AgentBridge` 的用例加上 skip；裸 checkout 现在是 691 pass / 46 skip / 0 fail。
+- **两条只在东八区成立的时区断言**。`audit-chain.test.js` 用 15:00Z/17:00Z 假装跨本地午夜，UTC 下其实是同一天 —— 改用本地 `new Date(2026,9,26,23,0,0)` 与次日 01:00；`reports.test.js` 的 `now` 改成当地 10:00，断言改成 `> now` 且 `<= now+24h`，不再要求「至少 20 小时后」。
+- **CI 全局 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE=1` 把 SSRF 守卫关了**。`src/message/links.js:44` 在调用时读这个变量，于是 links 的三个用例真的放行了 `169.254.169.254`。e2e 自己会在用到时设（`test/e2e.test.js:507`），从 ci.yml 删掉即可。
+
+验证：`node:22` 与 `node:24` 容器、非 root、UTC、无宿主包、不带该 env —— 两条都 `test=0`，737 条里 691 pass / 46 skip / 0 fail；本机 macOS（有宿主包）737/737、`node bin/check.mjs` → `checked 170 files`。

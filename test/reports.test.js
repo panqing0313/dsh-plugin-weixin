@@ -15,8 +15,10 @@ import {
 const HOUR = 60 * 60 * 1000
 
 test('a daily and a weekly report both resolve to a future instant', () => {
-  // 2026-10-28T02:00Z — 10:00 in Asia/Shanghai, a Wednesday.
-  const now = Date.UTC(2026, 9, 28, 2, 0, 0)
+  // 10:00 on a Wednesday, in the runner's own timezone: the module schedules
+  // in local time, so a fixed UTC instant would assert a Shanghai outcome
+  // that is false on a UTC runner (CI).
+  const now = new Date(2026, 9, 28, 10, 0, 0).getTime()
   const today = nextReportAt('每天 21:00', now)
   assert.ok(today > now)
   assert.equal(new Date(today).getHours(), 21)
@@ -25,9 +27,12 @@ test('a daily and a weekly report both resolve to a future instant', () => {
   assert.ok(weekly > now)
   assert.equal(new Date(weekly).getDay(), 0)
 
-  // A time that already passed today moves to tomorrow, never to the past.
+  // A time that already passed today moves to tomorrow, never to the past —
+  // and stays within a day, whatever the runner's offset.
   const earlier = nextReportAt('每天 09:00', now)
-  assert.ok(earlier > now + 20 * HOUR)
+  assert.ok(earlier > now)
+  assert.ok(earlier - now <= 24 * HOUR, 'the next 09:00 is tomorrow, not further out')
+  assert.equal(new Date(earlier).getHours(), 9)
 
   assert.equal(nextReportAt('胡说八道', now), undefined)
 })

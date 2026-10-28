@@ -29,6 +29,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { hostTest } from './host-packages.mjs'
+
 // The vendored logger resolves its directory when it is first imported, so it
 // must be redirected before src/agent-bridge.js (via src/index.js) loads.
 const LOG_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-cancel-logs-'))
@@ -128,7 +130,7 @@ test('/cancel with no running turn says so and calls nothing', async () => {
   assert.deepEqual(fake.calls.cancel, [], 'nothing to cancel must not reach the host')
 })
 
-test('/cancel interrupts a running turn and reports it as cancelled, not failed', async () => {
+hostTest('/cancel interrupts a running turn and reports it as cancelled, not failed', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -147,7 +149,7 @@ test('/cancel interrupts a running turn and reports it as cancelled, not failed'
   assert.equal(result.cancelled, true)
 })
 
-test('the cancelled flag does not leak into the next turn', async () => {
+hostTest('the cancelled flag does not leak into the next turn', async () => {
   const fake = fakeAgent()
   const bridge = await bridgeWith(fake)
 
@@ -166,7 +168,7 @@ test('the cancelled flag does not leak into the next turn', async () => {
   assert.notEqual(result.cancelled, true)
 })
 
-test('a host without cancel() is told it cannot interrupt, instead of a false success', async () => {
+hostTest('a host without cancel() is told it cannot interrupt, instead of a false success', async () => {
   const fake = fakeAgent({ withCancel: false })
   const bridge = await bridgeWith(fake)
 

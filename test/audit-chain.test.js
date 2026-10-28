@@ -52,10 +52,11 @@ test('editing a line breaks the chain at that line', () => {
 test('a chain continues across days, one chain per file', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'audit-days-'))
   try {
-    // Day files are keyed by LOCAL date, so pick two instants that straddle a
-    // local midnight in any timezone east of UTC (23:00 and 01:00 local).
-    appendToolAudit(root, { at: Date.UTC(2026, 9, 26, 15, 0, 0), kind: 'tool/call', tool: 'bash' })
-    appendToolAudit(root, { at: Date.UTC(2026, 9, 26, 17, 0, 0), kind: 'tool/call', tool: 'bash' })
+    // Day files are keyed by LOCAL date. Construct the instants locally
+    // (23:00 then 01:00 the next day) so they straddle midnight in every
+    // timezone — CI runs in UTC, where 15:00Z and 17:00Z are the same day.
+    appendToolAudit(root, { at: new Date(2026, 9, 26, 23, 0, 0).getTime(), kind: 'tool/call', tool: 'bash' })
+    appendToolAudit(root, { at: new Date(2026, 9, 27, 1, 0, 0).getTime(), kind: 'tool/call', tool: 'bash' })
     const result = verifyAuditChain(root)
     assert.equal(result.files, 2)
     assert.equal(result.broken, null)
