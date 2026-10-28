@@ -2878,3 +2878,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **边界**：拒绝归档里 `..` 或绝对路径；恢复前检查 DSH 是否在跑（`--yes` 可强来）；跳过 `backups/`、`instance.lock`、`node_modules`。
 - **测试**：`test/backup-crypto.test.js` 8 条（密文不含明文、往返、错口令、篡改拒绝、还原、路径逃逸、口令必填、随机 salt）。
 - **文档**：`docs/extras.md`「加密备份」；`bin/backup.mjs` 用法表。
+
+### ⑦ 省钱：按用途分开路由（`src/model-route.js`）
+
+- **原来的问题**：主动开口、日报、`/summary` 全挤在 `sideProvider` 一条线上；开口只有二十个 token，却和要读流水的日报用同一个（往往不便宜的）模型。
+- **做成什么**：`ROUTE_PURPOSES` 扩到 `chat / side / memory / proactive / report`；主动开口用 `proactiveProvider+proactiveModel`，日报与记忆核对用 `reportProvider+reportModel`，都留空则回落到原来的 `side → memory` 链。`index.js` 的 `sideRoute` thunk 改为 `(purpose) => routeFor(purpose, config) ?? sideRouteFor(config)`，三个调用点显式传 `'proactive'` / `'report'`。
+- **半对不生效**：只填 provider 或只填 model 不算路由，测试钉住；避免把会话丢进一个模型名缺失的路由。
+- **测试**：`test/model-route.test.js` 新增 2 条，覆盖独立性与回落；`config-remote` 表单同步加四个字段（表单/ schema 双向一致测试仍绿）。
+- **文档**：README 模型路由表、`docs/extras.md`「省钱路由」。

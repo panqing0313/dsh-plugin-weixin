@@ -91,3 +91,14 @@ node bin/backup.mjs open ~/Desktop/weixin-state.enc
 - 只封 `config.json`、`memory/`、`journal/` 等真实状态；跳过 `backups/`、`instance.lock`、`node_modules`。
 - 恢复前会检查 DSH 是否在跑（在跑就拒绝，`--yes` 可强来），写入走临时文件 + rename。
 - 口令不写进任何文件，也不进命令行历史（走环境变量）。
+
+## 省钱路由：三种花销分开定价（0.9.14）
+
+| 配置 | 谁在用 | 留空时 |
+| --- | --- | --- |
+| `chatProvider` / `chatModel` | 主对话 | 会话默认 |
+| `sideProvider` / `sideModel` | `/summary`、`/subscribe` 到点 | 记忆模型 → 会话 |
+| `proactiveProvider` / `proactiveModel` | 主动开口 | side → 记忆 → 会话 |
+| `reportProvider` / `reportModel` | 日报、记忆核对 | side → 记忆 → 会话 |
+
+主动开口只有一句，放最便宜的模型；日报要读流水再压缩，单独给一个。两者都必须成对填写，只填一半不生效（回落到下一层），避免把自己路由到一个没有模型名的线路。

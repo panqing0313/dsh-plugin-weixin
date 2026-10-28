@@ -716,7 +716,9 @@ npm run pack -- import 毒舌陪聊.json --account b1b2d0b10d66@im.bot
 | 配置 | 用在哪 | 留空时 |
 | --- | --- | --- |
 | `chatProvider` / `chatModel` | 主对话回合 | 沿用 DSH 当前会话模型 |
-| `sideProvider` / `sideModel` | 侧会话：`/summary`、`/subscribe` 到点、主动开口 | 先回落到记忆模型，再回落到会话模型 |
+| `sideProvider` / `sideModel` | 侧会话：`/summary`、`/subscribe` 到点 | 先回落到记忆模型，再回落到会话模型 |
+| `proactiveProvider` / `proactiveModel` | 主动开口（很短，适合最便宜的模型） | 回落到 side，再回落到 memory |
+| `reportProvider` / `reportModel` | 日报与记忆核对（要读流水） | 回落到 side，再回落到 memory |
 | `memoryProvider` / `memoryModel` | 后台记忆摘要、事实抽取、整理小传 | 回落到会话模型 |
 
 两条规矩：**只填一半不生效**（provider 和 model 都要，否则等于让宿主去猜，而这正是这个开关要消掉的暧昧）；**路由在每次请求时重读**，所以设置卡改完下一条消息就生效，不用重启。

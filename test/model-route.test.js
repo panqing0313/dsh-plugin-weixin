@@ -54,3 +54,22 @@ test('a route reads well in a log line', () => {
   assert.equal(describeRoute({ provider: 'zai', model: 'glm' }), 'zai/glm')
   assert.equal(describeRoute(undefined, '托管默认'), '托管默认')
 })
+
+test('proactive and report routes are independent of the background route', () => {
+  const config = {
+    sideProvider: 'b', sideModel: 'b-1',
+    proactiveProvider: 'p', proactiveModel: 'p-1',
+    reportProvider: 'r', reportModel: 'r-1',
+  }
+  assert.deepEqual(routeFor('proactive', config), { provider: 'p', model: 'p-1' })
+  assert.deepEqual(routeFor('report', config), { provider: 'r', model: 'r-1' })
+  assert.deepEqual(routeFor('side', config), { provider: 'b', model: 'b-1' })
+})
+
+test('half a proactive pair does not shadow the background fallback', () => {
+  // The index.js thunk is `routeFor(purpose) ?? sideRouteFor(config)`; these
+  // assertions pin the two halves of that expression for the new purposes.
+  const config = { proactiveProvider: 'p', memoryProvider: 'c', memoryModel: 'c-1' }
+  assert.equal(routeFor('proactive', config), undefined)
+  assert.deepEqual(sideRouteFor(config), { provider: 'c', model: 'c-1' })
+})

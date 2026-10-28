@@ -189,6 +189,10 @@ export const Config = z.object({
   chatModel: z.string().default('').description('主对话模型 model：和 chatProvider 一起填才生效。'),
   sideProvider: z.string().default('').description('后台任务模型 provider：/summary、/subscribe 到点、主动开口这类侧会话用它；留空则回落到记忆模型，再回落到会话模型。'),
   sideModel: z.string().default('').description('后台任务模型 model：和 sideProvider 一起填才生效。'),
+  proactiveProvider: z.string().default('').description('主动开口 provider：只给「主动开口」用，留空回落到后台任务路由。'),
+  proactiveModel: z.string().default('').description('主动开口 model：和 proactiveProvider 一起填才生效。'),
+  reportProvider: z.string().default('').description('日报/记忆核对 provider：只给定时报告用，留空回落到后台任务路由。'),
+  reportModel: z.string().default('').description('日报/记忆核对 model：和 reportProvider 一起填才生效。'),
   memoryProvider: z.string().default('').description('Provider for the memory model (summaries, fact extraction and consolidation). Empty follows the conversation model — the summaries then cost exactly what a normal turn costs.'),
   memoryModel: z.string().default('').description('Model id for the memory model. Only used together with memoryProvider; a cheaper model here keeps background memory work off the expensive route.'),
   memoryRecentTurns: z.number().min(0).default(5).description(
@@ -540,7 +544,8 @@ export function apply(ctx, config) {
       // C20: background side sessions (summary, subscriptions, proactive) get
       // their own route; without one they fall back to the memory route, so a
       // single cheap model covers everything that is not the conversation.
-      sideRoute = () => sideRouteFor(config)
+      // purpose 明确时优先用该用途自己的路由；否则保持原来的回落链。
+      sideRoute = (purpose = 'side') => routeFor(purpose, config) ?? sideRouteFor(config)
       memorySummarizer = createMemorySummarizer({
         bridge,
         stateRoot,
@@ -717,7 +722,7 @@ export function apply(ctx, config) {
             prompt = buildDigestPrompt({ day, total, conversations, events, summary: conv.summary })
           }
 
-          const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute() })
+          const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute('report') })
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') {
             log(`${kind} report produced nothing to send`)
@@ -796,7 +801,7 @@ export function apply(ctx, config) {
               `直接输出这条消息的正文，就像你在微信里自己发起的一条消息。不要复述或解释这个约定本身。`,
               `</weixin_subscription>`,
             ].filter((part) => part !== '').join('\n\n')
-            const result = await bridge.summarize({ conversationId: item.conversationId, accountId: item.accountId, prompt, sessionPrefix: 'wx-sub-', route: sideRoute() })
+            const result = await bridge.summarize({ conversationId: item.conversationId, accountId: item.accountId, prompt, sessionPrefix: 'wx-sub-', route: sideRoute('report') })
             const text = typeof result?.text === 'string' ? result.text.trim() : ''
             if (text === '' || text === '（已取消）') {
               log(`subscription ${item.id} produced nothing to send`)
@@ -896,7 +901,7 @@ export function apply(ctx, config) {
             accountId: candidate.accountId,
             prompt,
             sessionPrefix: 'wx-pro-',
-            route: sideRoute(),
+            route: sideRoute('proactive'),
           })
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') return ''

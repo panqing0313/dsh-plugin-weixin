@@ -13,12 +13,12 @@
  */
 
 /** The jobs this plugin runs on a model. */
-export const ROUTE_PURPOSES = Object.freeze(['chat', 'side', 'memory'])
+export const ROUTE_PURPOSES = Object.freeze(['chat', 'side', 'memory', 'proactive', 'report'])
 
 /**
  * Which provider/model pair a purpose should use, or undefined for the host default.
  *
- * @param {'chat' | 'side' | 'memory'} purpose
+ * @param {'chat' | 'side' | 'memory' | 'proactive' | 'report'} purpose
  * @param {Record<string, unknown>} config live plugin config
  * @returns {{ provider: string, model: string } | undefined}
  */
@@ -28,6 +28,10 @@ export function routeFor(purpose, config) {
         memory: ['memoryProvider', 'memoryModel'],
         side: ['sideProvider', 'sideModel'],
         chat: ['chatProvider', 'chatModel'],
+        // 主动开口和日报是两种不同的花销：开口只值二十个 token 的人格化，
+        // 日报要读流水再压缩，可以各自钉一个便宜模型。
+        proactive: ['proactiveProvider', 'proactiveModel'],
+        report: ['reportProvider', 'reportModel'],
     }
     const keys = pairs[purpose]
     if (keys === undefined) return undefined
