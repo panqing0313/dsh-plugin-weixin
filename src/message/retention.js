@@ -131,6 +131,56 @@ export function sweepRetention(stateRoot, options = {}) {
 }
 
 /**
+ * 按总容量上限删最旧的入站媒体。
+ *
+ * 只对 `media/inbound` 生效：它没有「按天」的名字（UUID 文件名），所以走不了
+ * {@link sweepRetention} 的日期规则，而它又是唯一会因为「朋友连发一百张图」
+ * 而突然涨大的类别。先按 mtime 从旧到新删，直到总量落回 `maxBytes`；正在被
+ * 引用的最新文件不会被删（上限以下时一个都不动）。
+ *
+ * @param {string} dir
+ * @param {{ maxBytes: number, warn?: (line: string) => void, now?: number }} options
+ * @returns {{ removed: Array<{ file: string, bytes: number }>, bytes: number, kept: number, total: number }}
+ */
+export function enforceMediaCap(dir, { maxBytes, warn = () => {} } = {}) {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return { removed: [], bytes: 0, kept: 0, total: 0 }
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return { removed: [], bytes: 0, kept: 0, total: 0 }
+  }
+  const files = []
+  let total = 0
+  for (const name of names) {
+    const file = path.join(dir, name)
+    let stat
+    try {
+      stat = fs.statSync(file)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) continue
+    files.push({ file, at: stat.mtimeMs, bytes: stat.size })
+    total += stat.size
+  }
+  files.sort((a, b) => a.at - b.at)
+  const removed = []
+  let bytes = 0
+  for (const entry of files) {
+    if (total - bytes <= maxBytes) break
+    try {
+      fs.rmSync(entry.file, { force: true })
+      removed.push({ file: entry.file, bytes: entry.bytes })
+      bytes += entry.bytes
+    } catch (error) {
+      warn(`could not remove media ${path.basename(entry.file)}: ${String(error?.message ?? error)}`)
+    }
+  }
+  return { removed, bytes, kept: files.length - removed.length, total: total - bytes }
+}
+
+/**
  * How much room the state directory is taking, per class.
  *
  * Uses file names where the class is name-addressable and stat() elsewhere, so

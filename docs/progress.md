@@ -3110,3 +3110,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：把「今天长什么样」抽成 `composeDigest({stateRoot, accountId, conversationId, now, warn, day})`（流水统计 + 未完成事件 + 会话摘要 + 习惯打卡行），定时器（`src/index.js` 的 `ReportScheduler.fire`）与新的 `digest` handler 共用；命令走 `sideRoute('report')`，回复即日报，不额外发消息、不写 journal、不动定时器。
 - **测试**：`test/digest.test.js` 3 条（数字/事件/摘要/习惯全在、安静的一天、不追踪习惯时没有那行）；`test/sessions.test.js` 1 条（`/digest` 是命令且带参数就不算）。
 - **文档**：README 命令表、`docs/extras.md`「`/digest`」。
+
+### F2 归档清理 `/media clean` 与容量上限（`src/message/retention.js`）
+
+- **为什么**：`media/inbound` 只有「按天」清理（`retentionMediaDays: 30`），没有手动入口，也没有总容量上限；本机已经攒到 110 个文件，突发连发会一直涨。
+- **做成什么**：`enforceMediaCap(dir, {maxBytes})` 按 mtime 从旧到新删到落回上限（0 = 不限，上限以内不动作，缺失目录不算错）；`/media clean [天数]` 复用 `sweepRetention` 只对 media 一类按天数清一次，随后再受容量上限约束，回复里报告件数与字节。schema 加 `mediaMaxBytes`（默认 0），设置卡同步（MB 单位）。
+- **测试**：`test/retention.test.js` 新增 1 条（删最旧、上限内不动、0 = 不限、缺失目录）；`test/media-archive.test.js` 新增 2 条（容量上限只删最旧、按天数清理与非法天数）。
+- **文档**：README 命令表、`docs/extras.md`「归档清理」。

@@ -391,3 +391,14 @@ x-weixin-signature: sha256=<hex>        # 配置了 webhookSecret 才有
 - 今天一条流水都没有时直接说「没什么可写的」，不硬凑；
 - 走 `reportProvider/reportModel` 那条便宜路由（留空则回落到后台任务路由）；
 - 不写 journal、不动 21:00 的定时器。
+
+## 归档清理：`/media clean` 与 `mediaMaxBytes`（0.9.19）
+
+`media/inbound` 只按时间清理（`retentionMediaDays`，默认 30 天），朋友连发一百张图时仍然会涨。
+
+```text
+/media clean        # 立刻按 retentionMediaDays 清一次
+/media clean 7      # 只清 7 天前的
+```
+
+设置卡里还有 `mediaMaxBytes`（0 = 不限）：超过上限就从**最旧**的文件开始删，直到落回上限；上限以内一个都不动（最新的那批不会因为一次清理就消失）。两者都会在回复里报告删了几件、多少字节，以及归档里还剩多少。

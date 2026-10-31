@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-const { DEFAULT_RETENTION, describeSweep, directoryUsage, sweepRetention } = await import('../src/message/retention.js')
+const { DEFAULT_RETENTION, describeSweep, directoryUsage, enforceMediaCap, sweepRetention } = await import('../src/message/retention.js')
 
 /**
  * Retention: the state directory stops growing.
@@ -110,4 +110,23 @@ test('an unwritable directory is skipped, not fatal', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('enforceMediaCap removes oldest files until the directory fits', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-cap-'))
+  const at = (day) => new Date(2026, 9, day, 9, 0)
+  for (const [name, day] of [['a.png', 1], ['b.png', 2], ['c.png', 3]]) {
+    fs.writeFileSync(path.join(dir, name), Buffer.alloc(1000))
+    fs.utimesSync(path.join(dir, name), at(day), at(day))
+  }
+  const result = enforceMediaCap(dir, { maxBytes: 2500 })
+  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed[0].file.endsWith('a.png'), true)
+  assert.equal(result.total, 2000)
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['b.png', 'c.png'])
+  // Under the cap: nothing happens, and 0 means "no cap at all".
+  assert.equal(enforceMediaCap(dir, { maxBytes: 5000 }).removed.length, 0)
+  assert.equal(enforceMediaCap(dir, { maxBytes: 0 }).removed.length, 0)
+  // A missing directory is not an error.
+  assert.deepEqual(enforceMediaCap(path.join(dir, 'nope'), { maxBytes: 10 }).removed, [])
 })

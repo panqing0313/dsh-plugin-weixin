@@ -37,7 +37,7 @@ import { createRequire } from 'node:module'
 
 // 服务端也要知道自己的版本（`/diag` 用），但 client.js 是浏览器入口，不能 import。
 const PLUGIN_VERSION = createRequire(import.meta.url)('../package.json').version
-import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
+import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, enforceMediaCap, sweepRetention } from './message/retention.js'
 import { DEFAULT_KEEP, createBackup } from './backup.js'
 import { DEFAULT_DIGEST_WHEN, DEFAULT_REVIEW_WHEN, ReportScheduler, buildDigestPrompt, buildReviewPrompt, describeReport, pickConversation } from './message/reports.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
@@ -293,6 +293,7 @@ export const Config = z.object({
   awayAutoReply: z.string().default('').description('离开模式的自动回复；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。'),
   dateReminderEnabled: z.boolean().default(true).description('重要日子的当天提醒：记忆里的生日/纪念日、以及写死日期的待办，到点发一条短消息，不跑模型。'),
   dateReminderWhen: z.string().default('09:00').description('当天提醒的发送时间（HH:MM，本地时区）。'),
+  mediaMaxBytes: z.number().min(0).default(0).description('入站媒体的总容量上限（字节）；超过就从最旧的开始删。0 表示不限。'),
   dateReminderLeadDays: z.number().min(0).max(30).default(0).description('提前几天提醒：0 只在当天说；3 就会在三天前先说一声。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
   backgroundDailyLimit: z.number().default(0).description('每天允许的后台模型调用次数上限（记忆折叠、日报、核对、订阅、主动开口都算）；0 表示不限。主对话不受影响。'),
@@ -1812,7 +1813,22 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
       ...createHabitCommands({ stateRoot, accountId, warn }),
-      ...createMediaCommands({ dir: inboxDir(), conversationId, sendMedia: (params) => transport.sendMedia(params), warn }),
+      ...createMediaCommands({
+        dir: inboxDir(),
+        conversationId,
+        sendMedia: (params) => transport.sendMedia(params),
+        maxBytes: Number(withSavedConfig(config).mediaMaxBytes ?? 0),
+        clean: (days) => {
+          const live = withSavedConfig(config)
+          const window = days ?? Number(live.retentionMediaDays ?? DEFAULT_RETENTION.mediaDays)
+          const result = sweepRetention(stateRoot, {
+            retention: { journalDays: 0, auditDays: 0, mediaDays: window, exportsDays: 0, logsDays: 0 },
+            warn,
+          })
+          return { removed: result.removed.length, bytes: result.bytes }
+        },
+        warn,
+      }),
       ...createReadingCommands({ stateRoot, accountId, warn }),
       ...createSendCommands({
         conversationId,

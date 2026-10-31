@@ -127,3 +127,33 @@ test('a failing send keeps the file and says so', async () => {
   assert.match(reply, /文件还在/)
   assert.equal(fs.existsSync(path.join(dir, 'b-voice.silk')), true)
 })
+
+test('a capacity cap removes the oldest first and never touches the newest', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-media-cap-'))
+  const at = (day) => new Date(2026, 9, day, 9, 0)
+  fs.writeFileSync(path.join(dir, 'old.png'), Buffer.alloc(1024))
+  fs.writeFileSync(path.join(dir, 'mid.png'), Buffer.alloc(1024))
+  fs.writeFileSync(path.join(dir, 'new.png'), Buffer.alloc(1024))
+  fs.utimesSync(path.join(dir, 'old.png'), at(1), at(1))
+  fs.utimesSync(path.join(dir, 'mid.png'), at(2), at(2))
+  fs.utimesSync(path.join(dir, 'new.png'), at(3), at(3))
+
+  const commands = createMediaCommands({ dir, conversationId: 'c', sendMedia: async () => {}, maxBytes: 2048 })
+  const reply = await commands.media('clean')
+  assert.match(reply, /容量上限 2\.0 KB：又删了 1 件/)
+  assert.deepEqual(fs.readdirSync(dir), ['mid.png', 'new.png'], 'the oldest went, the newest stayed')
+})
+
+test('a manual clean by days removes only what is older', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-media-clean-'))
+  fs.writeFileSync(path.join(dir, 'x.png'), Buffer.alloc(10))
+  const commands = createMediaCommands({
+    dir,
+    conversationId: 'c',
+    sendMedia: async () => {},
+    clean: (days) => { assert.equal(days, 7); return { removed: 2, bytes: 2048 } },
+  })
+  const reply = await commands.media('clean 7')
+  assert.match(reply, /按 7 天清掉 2 件（2\.0 KB）/)
+  assert.match(await commands.media('clean 0'), /天数给 1–3650 之间的整数/)
+})

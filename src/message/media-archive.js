@@ -20,6 +20,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { enforceMediaCap } from './retention.js'
+
 /** 默认列最近多少件。 */
 export const DEFAULT_MEDIA_LIMIT = 8
 /** 一次最多列多少（防止刷屏）。 */
@@ -136,16 +138,34 @@ export function resolveArchivePath(dir, index, items) {
  *   warn?: (line: string) => void,
  *   now?: () => number,
  * }} options
+ *   maxBytes?: number,
+ *   clean?: (days: number) => { removed: number, bytes: number },
  * @returns {{ media: (arg?: string) => Promise<string> }}
  */
-export function createMediaCommands({ dir, conversationId, contextToken, sendMedia, limit = DEFAULT_MEDIA_LIMIT, warn, now = () => Date.now() }) {
+export function createMediaCommands({ dir, conversationId, contextToken, sendMedia, limit = DEFAULT_MEDIA_LIMIT, maxBytes = 0, clean, warn, now = () => Date.now() }) {
   return {
     async media(arg = '') {
       const raw = String(arg ?? '').trim()
       if (raw === '') return formatMediaList(listInboundMedia(dir, { limit, warn }), { now: now() })
 
+      // `/media clean [天数]`：立刻按天数清一次（默认用 retention 的 mediaDays），
+      // 清完若设了 mediaMaxBytes 再按容量从最旧开始删。
+      const cleanMatch = /^(?:clean|清理|清)\s*(\d+)?$/i.exec(raw)
+      if (cleanMatch !== null) {
+        const days = cleanMatch[1] === undefined ? undefined : Number(cleanMatch[1])
+        if (days !== undefined && (!Number.isFinite(days) || days < 1 || days > 3650)) return '天数给 1–3650 之间的整数，例如 /media clean 30。'
+        const sweep = clean?.(days) ?? { removed: 0, bytes: 0 }
+        const cap = enforceMediaCap(dir, { maxBytes, warn })
+        const parts = []
+        if (sweep.removed > 0 || days !== undefined) parts.push(`按 ${days ?? '当前'} 天清掉 ${sweep.removed} 件（${humanBytes(sweep.bytes)}）`)
+        if (maxBytes > 0) parts.push(cap.removed.length > 0 ? `容量上限 ${humanBytes(maxBytes)}：又删了 ${cap.removed.length} 件（${humanBytes(cap.bytes)}）` : `容量上限 ${humanBytes(maxBytes)}：没有超`)
+        if (parts.length === 0) parts.push('没有可清理的媒体。')
+        parts.push(`现在归档里还剩 ${listInboundMedia(dir, { limit: MAX_MEDIA_LIMIT, warn }).length >= MAX_MEDIA_LIMIT ? `${MAX_MEDIA_LIMIT}+` : listInboundMedia(dir, { limit: MAX_MEDIA_LIMIT, warn }).length} 件。`)
+        return parts.join('；')
+      }
+
       const match = /^(?:resend|重发|再发)\s+(\S+)$/i.exec(raw)
-      if (match === null) return '用法：/media 看最近收到的媒体；/media resend 3 把第 3 件重新发回来。'
+      if (match === null) return '用法：/media 看最近收到的媒体；/media resend 3 把第 3 件重新发回来；/media clean [天数] 立刻清理。'
 
       const items = listInboundMedia(dir, { limit: MAX_MEDIA_LIMIT, warn })
       const filePath = resolveArchivePath(dir, match[1], items)
