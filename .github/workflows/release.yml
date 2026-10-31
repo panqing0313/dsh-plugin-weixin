@@ -42,9 +42,11 @@ jobs:
       - name: fast checks (syntax + packaging rules)
         run: npm run check
       - name: full suite
+        # No global DSH_WEIXIN_LINKS_ALLOW_PRIVATE here: the link tests assert
+        # the SSRF guard refuses private hosts, and that variable switches the
+        # guard off at call time. The e2e cases that need a loopback server opt
+        # in themselves (test/e2e.test.js), so the suite runs with the guard on.
         run: npm test
-        env:
-          DSH_WEIXIN_LINKS_ALLOW_PRIVATE: '1'
       - name: the tag and package.json must agree
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
