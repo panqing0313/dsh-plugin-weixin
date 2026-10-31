@@ -143,6 +143,7 @@ import { describeUnknownItems, firstSighting } from './message/unknown-items.js'
 import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
+import { recordPromptComposition } from './message/prompt-composition.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
@@ -2345,6 +2346,22 @@ ${neutralizeTags(ocr.text)}
     if (dryRunBlock !== '') log(describeDryRun())
     const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, dryRunBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
+
+    // 统计页签的「提示词构成」：记下这一回合每段实际占了多少字符。各段之和
+    // 加分隔符必须等于 prompt.length，剩下的（引用、链接正文、文档、用户原话）
+    // 合并成 message 一段，这样卡片上的比例不会说谎。
+    const joinedBlocks = blocks.join('\n\n')
+    const separators = blocks.length > 0 ? 2 : 0
+    recordPromptComposition(accountId, [
+      { key: 'persona', chars: personaBlock.length },
+      { key: 'style', chars: styleBlock.length },
+      { key: 'life', chars: lifeBlockText.length },
+      { key: 'contact', chars: contactBlock.length },
+      { key: 'memory', chars: memoryBlock.length },
+      { key: 'recall', chars: recallBlock.length },
+      { key: 'dryRun', chars: dryRunBlock.length },
+      { key: 'message', chars: Math.max(0, prompt.length - joinedBlocks.length - separators) },
+    ], { total: prompt.length, at: journaledAt })
 
     // The user spoke: clear the proactive backoff. Reset before the turn so a
     // slow reply cannot count as silence and trigger a second message.

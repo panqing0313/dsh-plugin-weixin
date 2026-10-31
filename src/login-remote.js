@@ -64,7 +64,9 @@ function donateQrDataUrl() {
 import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
 import { readJournalRange, renderChatMarkdown } from "./message/chat-export.js";
-import { computeStats } from "./message/stats.js";
+import { computeStats, buildHealth } from "./message/stats.js";
+import { readPromptComposition } from "./message/prompt-composition.js";
+import { readBudget } from "./budget.js";
 
 const FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 const DEFAULT_BOT_TYPE = "3";
@@ -876,7 +878,38 @@ export class WeixinLoginController extends TypertRemoteService {
         const daysRaw = Number(opts.days);
         const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(Math.floor(daysRaw), 90) : 14;
         const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
-        return computeStats(stateDir(), { days, accountId });
+        const result = computeStats(stateDir(), { days, accountId });
+
+        // 提示词构成与健康度：构成来自运行时记录（进程内、最近一个回合），
+        // 健康度来自四件我们真的知道的事。两者都可能在重启后为空/降级，
+        // 所以卡片必须能画出「还没有记录」而不是编一个数字。
+        const live = readSavedConfig();
+        const compositionAccount =
+            accountId ?? (typeof live.accountId === "string" && live.accountId !== "" ? live.accountId : "");
+        const composition = readPromptComposition(compositionAccount);
+
+        const pending = readOutbox(stateDir()).items.length;
+        let connected = false;
+        try {
+            const status = await this.status();
+            connected = Array.isArray(status?.accounts) && status.accounts.some((account) => account?.accountId);
+        } catch {
+            connected = false;
+        }
+        const budget = readBudget(stateDir());
+        const health = buildHealth({
+            connected,
+            outboxPending: pending,
+            budgetUsed: budget.used,
+            budgetLimit: Number(live.backgroundDailyLimit ?? 0),
+            retention: {
+                journalDays: live.retentionJournalDays,
+                auditDays: live.retentionAuditDays,
+                mediaDays: live.retentionMediaDays,
+            },
+        });
+
+        return { ...result, composition, health };
     }
 
     async pause(accountId) {

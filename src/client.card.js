@@ -1480,6 +1480,90 @@ window.__ModuleLoader__.load({
 			const conversations = Array.isArray(stats?.conversations) ? stats.conversations : [];
 			const maxDaily = Math.max(1, ...daily.map((d) => d.all));
 			const maxHour = Math.max(1, ...hours);
+			const health = stats?.health ?? null;
+			const composition = stats?.composition ?? null;
+
+			// 健康度环：四项各 25 分，口径写在下面每一行里。纯 SVG，零依赖。
+			const ring = (score, max, size = 76) => {
+				const radius = (size - 10) / 2;
+				const circumference = 2 * Math.PI * radius;
+				const ratio = max > 0 ? Math.max(0, Math.min(1, score / max)) : 0;
+				const center = size / 2;
+				return createElement("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}`, style: { flex: "0 0 auto" } },
+					createElement("circle", { cx: center, cy: center, r: radius, fill: "none", stroke: C.border, strokeWidth: 7 }),
+					createElement("circle", {
+						cx: center, cy: center, r: radius, fill: "none",
+						stroke: C.primaryFill, strokeWidth: 7, strokeLinecap: "round",
+						strokeDasharray: `${circumference} ${circumference}`,
+						strokeDashoffset: circumference * (1 - ratio),
+						transform: `rotate(-90 ${center} ${center})`,
+					}),
+					createElement("text", { x: center, y: center + 5, textAnchor: "middle", fill: C.labelPrimary, fontSize: 20, fontWeight: 600 }, String(score)),
+					createElement("text", { x: center, y: center + 21, textAnchor: "middle", fill: C.labelTertiary, fontSize: 10 }, `/${max}`));
+			};
+
+			// 会话 sparkline：最近 N 天每天的消息数，折线即可，不画坐标轴。
+			const spark = (points, width = 108, height = 22) => {
+				const values = Array.isArray(points) && points.length > 0 ? points : [0];
+				const peak = Math.max(1, ...values);
+				const step = values.length > 1 ? width / (values.length - 1) : width;
+				const path = values
+					.map((value, index) => `${index === 0 ? "M" : "L"}${(index * step).toFixed(1)},${(height - 2 - (value / peak) * (height - 4)).toFixed(1)}`)
+					.join(" ");
+				return createElement("svg", { width, height, viewBox: `0 0 ${width} ${height}`, style: { flex: "0 0 auto" } },
+					createElement("path", { d: path, fill: "none", stroke: C.primaryFill, strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round" }));
+			};
+
+			const COMPOSITION_COLORS = ["#5B8DEF", "#7C6CF0", "#4FB3A5", "#E0A44B", "#D97A7A", "#9AA5B1", "#8BC48A", "#B48BE0"];
+			const COMPOSITION_NAMES = {
+				persona: ["Persona", "人设"],
+				style: ["Style", "语气与节奏"],
+				life: ["Life state", "生活状态"],
+				contact: ["Member card", "群成员名片"],
+				memory: ["Memory", "记忆"],
+				recall: ["Recall", "往事检索"],
+				dryRun: ["Dry run", "预演约定"],
+				message: ["Message & attachments", "这条消息与附件"],
+			};
+			const compositionTotal = composition?.total > 0
+				? composition.total
+				: (composition?.sections ?? []).reduce((sum, section) => sum + section.chars, 0);
+			const compositionBar = composition === null || compositionTotal <= 0 ? null : createElement("div", { style: { display: "flex", height: 12, borderRadius: RADIUS.pill, overflow: "hidden", border: `1px solid ${C.border}` } },
+				(composition.sections ?? []).map((section, index) => createElement("div", {
+					key: section.key,
+					title: `${(COMPOSITION_NAMES[section.key] ?? [section.key, section.key])[1]}: ${section.chars}`,
+					style: { width: `${(section.chars / compositionTotal) * 100}%`, background: COMPOSITION_COLORS[index % COMPOSITION_COLORS.length] },
+				})));
+			const compositionLegend = composition === null || compositionTotal <= 0 ? null : createElement("div", { style: { display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, lineHeight: "16px", color: C.labelSecondary } },
+				(composition.sections ?? []).map((section, index) => createElement("span", { key: section.key, style: { display: "flex", alignItems: "center", gap: 4 } },
+					createElement("span", { style: { width: 8, height: 8, borderRadius: 2, background: COMPOSITION_COLORS[index % COMPOSITION_COLORS.length] } }),
+					`${(COMPOSITION_NAMES[section.key] ?? [section.key, section.key])[1]} ${Math.round((section.chars / compositionTotal) * 100)}%`)));
+			const compositionPanel = createElement("div", { key: "composition", style: { display: "flex", flexDirection: "column", gap: 6 } },
+				createElement("p", { style: { ...captionStyle, marginBottom: 0 } },
+					t("Prompt composition (characters, not tokens)", "提示词构成（字符，不是 token）")),
+				compositionBar === null
+					? createElement("p", { style: captionStyle }, t("No turn has been recorded since the plugin started.", "插件启动后还没有记录到一个回合。"))
+					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+						compositionBar,
+						compositionLegend,
+						createElement("p", { style: captionStyle },
+							t(`Last turn: ${compositionTotal} characters in total.`,
+								`最近一个回合共 ${compositionTotal} 个字符。`))));
+
+			const HEALTH_NAMES = {
+				connected: [t("Connected", "连接"), t("At least one account can be loaded.", "至少一个账号能加载。")],
+				outbox: [t("Delivery", "投递"), t("Nothing waiting to be retried.", "没有待重发的消息。")],
+				budget: [t("Budget", "预算"), t("Background calls below the daily limit.", "后台调用未超每日上限。")],
+				retention: [t("Retention", "留存"), t("Journal, audit and media windows are set.", "流水、审计、媒体的保留天数都设了。")],
+			};
+			const healthPanel = health === null ? null : createElement("div", { key: "health", style: { display: "flex", gap: 16, alignItems: "center" } },
+				ring(health.score, 100),
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, flex: "1 1 auto" } },
+					createElement("p", { style: { ...captionStyle, marginBottom: 0 } }, t("Health (our own formula, not a model score)", "健康度（我们自己的口径，不是模型评分）")),
+					(health.parts ?? []).map((part) => createElement("div", { key: part.key, style: { display: "flex", gap: 8, fontSize: 11, lineHeight: "16px", color: C.labelSecondary } },
+						createElement("span", { style: { flex: "0 0 64px", color: C.labelPrimary } }, (HEALTH_NAMES[part.key] ?? [part.key])[0]),
+						createElement("span", { style: { flex: "0 0 44px", textAlign: "right", color: C.labelPrimary } }, `${part.score}/${part.max}`),
+						createElement("span", { style: { flex: "1 1 auto", color: C.labelTertiary } }, (HEALTH_NAMES[part.key] ?? [part.key, ""])[1])))));
 
 			const summaryRow = createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, lineHeight: "18px", color: C.labelSecondary } },
 				createElement("span", null, t("Total", "总计"), ": ", createElement("strong", { style: { color: C.labelPrimary } }, String(total.all))),
@@ -1573,15 +1657,17 @@ window.__ModuleLoader__.load({
 
 			const convRows = conversations.map((c) => createElement("div", {
 				key: `${c.accountId}|${c.conversationId}`,
-				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
+				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "center" },
 			},
 				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, c.accountId),
 				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, c.conversationId),
+				spark(c.series),
 				createElement("span", { style: { flex: "0 0 auto", color: C.labelPrimary } }, String(c.all)),
 				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, `\u2193${c.in} \u2191${c.out}`)));
 
 			return createElement("div", { style: panelStyle }, head,
 				summaryRow,
+				healthPanel,
 				total.all === 0
 					? createElement("p", { style: hintStyle }, t("No messages in this window yet.", "这个时间窗口里还没有消息。"))
 					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
@@ -1593,9 +1679,13 @@ window.__ModuleLoader__.load({
 						conversations.length === 0 ? null : createElement("div", null,
 							createElement("p", { style: { ...captionStyle, marginBottom: 4 } }, t("Busiest conversations", "最活跃的会话")),
 							createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, convRows))),
+				compositionPanel,
 				createElement("p", { style: captionStyle },
 					t("Computed live from the message journal. \u2191 sent by the bot, \u2193 received.",
 						"由消息流水现算。\u2191 机器人发出，\u2193 收到。")),
+				createElement("p", { style: captionStyle },
+					t("Token counts and cache hit rates are not shown: the host does not hand them to plugins, so any number here would be a guess.",
+						"token 用量与缓存命中率不显示：宿主不把这两样交给插件，写出来的任何数字都只能是猜的。")),
 				outboxPanel,
 				storagePanel,
 				metricsPanel);

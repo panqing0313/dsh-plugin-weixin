@@ -3155,3 +3155,21 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **profile**：`^0.9.19 → ^0.9.20`、`node_modules/dsh-plugin-weixin` = 0.9.20、锁文件刷新；`doctor` → `installed version 0.9.20`、`host 0.2.1-rc.5 (tested)`、`published up to date (0.9.20)`。重启 DSH 后生效。
 - **清理**：tag 触发的 release workflow `41206878317` 已取消（否则会重复 publish）；发布提交的 CI run `41206872998` 随后确认。
 - **未验证**：插件管理器行标题 / 设置分组标题在宿主里的真实渲染，要重启后看；若仍显示包名，需按宿主实际读取的字段再调。
+
+## 统计页签：只画我们真的知道的（2026-10-31）
+
+用户发来 MAPGIE 的两张看板截图问「统计页签能实现这种效果吗」。视觉层能做（设置卡里自绘 SVG，沿用主题 token，零依赖），但数据层有一半根本不在我们手里 —— 先把话说清楚，再动手。
+
+- **拿不到的**：精确 token、缓存命中率、「输入 10M / 缓存读取 245M」这类数字来自网关对每次请求的记账。查过 `@deepseek-ai/dsh-agent` 的事件类型没有 `usage`；`dsh-llm` 的 `usage` 只出现在流式 chunk 里，那条流不经过插件。账户余额/积分/预计用完时间同理（供应商账户 API + 宿主登录态都不对插件开放）。
+- **拿得到的**：journal 的收发条数与按天/按小时/按会话分布；每个回合实际拼进 prompt 的各段字符数；outbox 待发；后台预算；保留期；连接状态。
+
+做成什么：
+
+- `src/message/stats.js`：`computeStats` 的每个会话多一条 `series`（窗口内按天、缺失补 0）；新增 `buildHealth({connected, outboxPending, budgetUsed, budgetLimit, retention})` → 25×4 分（连接 / 投递 / 预算 / 留存），`score` 与逐项 `parts` 一起返回，卡片把口径写在每一项旁边。
+- 新增 `src/message/prompt-composition.js`：`recordPromptComposition(accountId, sections, {at, total})` 在 `src/index.js` 拼完 blocks 后记录 persona/style/life/contact/memory/recall/dryRun 各段长度，剩下的（引用、链接正文、文档、用户原话）合并为 `message` 一段，保证各段之和 + 分隔符 = `prompt.length`。进程内 Map，每账号只留最近一条，最多 8 个账号。
+- `src/login-remote.js` 的 `stats()` 返回 `{...computeStats(...), composition, health}`；health 的 connected 用 `this.status()`，预算用 `readBudget` + `live.backgroundDailyLimit`，retention 用三个保留字段。
+- `src/client.card.js` 的 `StatsSection`：`ring()` 双 circle 环、`spark()` polyline 迷你折线、8 色堆叠构成条 + 图例、健康度四行，末尾两行说明 —— 一行说数字来自流水，一行明说 token 与缓存不显示及其原因。
+
+测试：`test/stats.test.js` 新增 2 条（会话 series 补 0；health 满分/降级/未设预算三种情况），新建 `test/prompt-composition.test.js` 4 条（读取与覆盖、空值与非数字段丢弃、8 账号淘汰、标签双语齐全）。全量 **927/927**、`node bin/check.mjs` → `checked 213 files`。
+
+文档：README 统计页签一节改写成「精确 / 估算 / 故意不显示」三段；`docs/extras.md` 新增本节，附一张数据边界表。

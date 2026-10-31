@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { appendJournal } from '../src/message/journal.js'
-import { computeStats } from '../src/message/stats.js'
+import { buildHealth, computeStats } from '../src/message/stats.js'
 
 const DAY = 86_400_000
 const NOW = new Date('2026-10-26T12:00:00').getTime()
@@ -87,4 +87,41 @@ test('an accountId filter narrows every number, and an empty window is all zeroe
         assert.equal(empty.hours.every((h) => h === 0), true)
         assert.deepEqual(empty.conversations, [])
     })
+})
+
+test('each conversation carries its own per-day series, zero-filled to the window', () => {
+    withRoot((root) => {
+        appendJournal(root, { dir: 'in', accountId: 'bot1', conversationId: 'busy', text: 'a', at: NOW })
+        appendJournal(root, { dir: 'out', accountId: 'bot1', conversationId: 'busy', text: 'b', at: NOW })
+        appendJournal(root, { dir: 'in', accountId: 'bot1', conversationId: 'busy', text: 'c', at: NOW - 2 * DAY })
+        appendJournal(root, { dir: 'in', accountId: 'bot1', conversationId: 'quiet', text: 'd', at: NOW })
+
+        const stats = computeStats(root, { days: 3, now: NOW })
+        const busy = stats.conversations.find((c) => c.conversationId === 'busy')
+        // Oldest → newest, one entry per day in the window.
+        assert.deepEqual(busy.series, [1, 0, 2])
+        const quiet = stats.conversations.find((c) => c.conversationId === 'quiet')
+        assert.deepEqual(quiet.series, [0, 0, 1])
+    })
+})
+
+test('health scores four things out of 25 and always explains itself', () => {
+    const perfect = buildHealth({
+        connected: true,
+        outboxPending: 0,
+        budgetUsed: 2,
+        budgetLimit: 10,
+        retention: { journalDays: 30, auditDays: 30, mediaDays: 30 },
+    })
+    assert.equal(perfect.score, 100)
+    assert.equal(perfect.parts.length, 4)
+    assert.deepEqual(perfect.parts.map((p) => p.max), [25, 25, 25, 25])
+
+    const down = buildHealth({ connected: false, outboxPending: 9, budgetUsed: 10, budgetLimit: 10, retention: {} })
+    assert.equal(down.score, 0 + 5 + 0 + 10)
+    assert.equal(down.parts[0].key, 'connected')
+    assert.equal(down.parts[1].score, 5, 'a long retry queue is worse than a short one')
+
+    // No budget configured is not a failure — it just means nothing to spend.
+    assert.equal(buildHealth({ connected: true, outboxPending: 1, budgetUsed: 0, budgetLimit: 0, retention: { journalDays: 1, auditDays: 1, mediaDays: 1 } }).score, 90)
 })
