@@ -3213,3 +3213,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 所以 1.0.0 = 上面三批 + 版本号跨越到 1.0。语义上这是**功能里程碑**而非 API 稳定承诺：插件的对外面仍是 DSH 宿主、微信服务与本地状态文件，没有对外 SDK，1.0 表示「这批界面与统计口径我们认为可以定下来」。
 
 发版流程沿用既定步骤：`git ls-files | chmod go+rX` 防 tarball 权限坑 → `bin/release.mjs 1.0.0`（preflight/全量/bump/tarball/publish）→ 用户在真实终端点 npm 授权（或直接 `npm publish`）→ 等注册表可读 → `bin/release.mjs --finish 1.0.0`（tag/push/release/profile 安装）→ 核验 shasum/integrity/gitHead → `docs: 1.0.0 is published`。
+
+## 发布 1.0.0（2026-11-01）
+
+- **内容**：三个未发版的批次一起跨过 1.0 —— 统计可视化（`ca29fd1`）、消息流水聊天时间线（`6914da3`）、设置卡全面美化 + 修 `C.stateOk` 透明下划线（`7578aac`）；CHANGELOG 条目 `97144f9`。
+- **发布前**：全量 **929/929**、`check.mjs` → `checked 214 files`；`git ls-files -z | xargs -0 chmod go+rX` 防住 0600 权限坑（本批没有新文件，纯粹例行）。
+- **npm 登录又过期了**：`npm whoami` → 401。这次不用用户动手：`( sleep 8; printf '\n'; sleep 900 ) | script -q /tmp/npm-login-1.0.0.txt npm login --auth-type=web` 在 pty 里等到 `Press ENTER` 后自动回车，把 `Login at: https://www.npmjs.com/login?next=/login/cli/…` 留在日志里，用户点链接授权后 `Logged in on https://registry.npmjs.org/.`，token 直接落进 `~/.npmrc`。比 0.9.20 的「用户自己在终端 publish」省事，比伪 TTY 手动喂 token 干净。
+- **publish**：脚本打印 `https://www.npmjs.com/auth/cli/02f7f3b8-…`，用户授权后 `+ dsh-plugin-weixin@1.0.0`（181 文件）。
+- **核验**：本地 tarball `shasum a06f96e0e7666f10aeedd7132c3380d04a8250da` = registry `dist.shasum`；`dist.integrity sha512-dTEx/Lybux9HC1HztqdqoSxOHpwi11J5wMLWO1XkrwtzEBfk7mRR5AtxyniFMwVRT471DD9TDWuRit0vDya+bQ==`；`gitHead 84e3ea0c64c03576f9c8dcbb8e52b624ae1bcd36`；`dist-tags.latest = 1.0.0`；tag `v1.0.0` 指向 `84e3ea0`；GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.0.0 。
+- **profile**：依赖 `^0.9.20 → ^1.0.0`、`node_modules` = 1.0.0、`pnpm-lock.yaml` 45–46 行已是 `^1.0.0 / 1.0.0`；`doctor` → `installed 1.0.0`、`host 0.2.1-rc.5 (tested)`、`published up to date`。重启 DSH 生效。
+- **CI**：发布提交 run `41216033552` success、docs 提交 run `41214665903` success；tag 触发的 release workflow `41216038744` 失败（版本已存在，预期）。
