@@ -3089,3 +3089,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
   1. 第一次 publish 的 web OTP 会话在等待时过期，`GET /-/v1/done?authId=…` 返回 `404`，脚本报 `npm publish failed`——**版本已 bump 但什么都没发出去**。重开一次 publish 拿新链接、授权成功，之后 `--finish` 才跑完（脚本第一次 `--finish` 还因为注册表尚未可见而拒绝，约一分钟后 `npm view` 才显示 0.9.18）。
   2. CI（Node 24 那条腿）发现 `test/media-archive.test.js` 的真 flake：同一 tick 写入的三个文件 mtime 相同，`listInboundMedia` 只按时间排序时顺序随 `readdir` 变化，Linux 上 `resend 1` 拿到的不是 `report.pdf`。修法：排序加名字作为 tie-breaker，并把测试的 mtime 固定；提交 `abbf3ae`，CI run `41182008158` 绿。
 - **兼容表**：用户重启后复核「可以了」（设置卡九个页签、左侧栏入口、收发），`docs/compatibility.md` 新增 `0.9.18 / 0.2.1-rc.5` 真机验证行；宿主版本没变，`TESTED_HOSTS` 不动。
+
+### P1 启动并行化（`src/startup.js`）
+
+- **原来的问题**：`src/index.js` 的 `bringUpLoop` 用 `for (const account of accounts) { await bringUpAccount(...) }`，N 个账号要等 N 次握手；第二个账号的连接要等第一个账号的登录/拉取全部就绪才开始，而它们本来就是互不依赖的长轮询。
+- **做成什么**：新增 `startAccounts(accounts, bringUp, warn)` —— `Promise.allSettled` 并行扇出，失败按账号收集成 `{ started, failures }` 并逐条 warn；一个坏凭据（文件损坏/CDN 不可达/ticket 被拒）只让它自己起不来。
+- **测试**：`test/startup.test.js` 4 条 —— 用「三个人都进门才开闸」证明并发（串行会超时失败，不靠 wall-clock）、坏凭据隔离、空列表、非 Error 的 rejection 也能读。
+- **判据**：串行时 N×t → 并行约 t；单账号行为与错误隔离语义不变。

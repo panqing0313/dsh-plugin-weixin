@@ -86,6 +86,7 @@ import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
 import { createHabitCommands, habitDigestLine, habitsList } from './message/habits.js'
 import { createMediaCommands } from './message/media-archive.js'
+import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -1114,16 +1115,11 @@ export function apply(ctx, config) {
         return
       }
 
-      for (const account of accounts) {
-        if (cancelled) return
-        try {
-          await bringUpAccount(account, { force })
-        } catch (error) {
-          // One bad credential (corrupt file, unreachable CDN, rejected ticket)
-          // must not stop the accounts after it from being served.
-          warn(`could not start the loop for ${account.accountId}: ${String(error)}`)
-        }
-      }
+      // Every account is an independent long poll: start them together instead
+      // of making the second wait for the first handshake. `startAccounts`
+      // keeps the per-account isolation — one bad credential is reported and
+      // skipped, never blocking the rest.
+      await startAccounts(accounts, (account) => bringUpAccount(account, { force }), warn)
     }
 
     /**
