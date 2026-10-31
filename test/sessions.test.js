@@ -638,3 +638,27 @@ test('a reminder time may contain spaces, and the rest is the text', () => {
   assert.match(workday, /工作日 08:30（重复）/)
   assert.deepEqual(scheduled[3].recurrence, { kind: 'weekdays' })
 })
+
+test('snooze and skip reach the scheduler without a model turn', () => {
+  const calls = []
+  const scheduler = {
+    schedule: () => ({ id: 'r1' }),
+    list: () => [],
+    cancel: () => true,
+    snooze: (accountId, minutes) => {
+      calls.push(['snooze', accountId, minutes])
+      return { id: 'r1', text: '开会', fireAt: Date.now() + minutes * 60_000 }
+    },
+    skipNext: (accountId) => {
+      calls.push(['skip', accountId])
+      return { id: 'r2', text: '吃药', fireAt: Date.now() + 24 * 60 * 60_000, recurrenceLabel: '每天 09:00' }
+    },
+  }
+  const snoozed = runSessionCommand([], 'wxid_a', '/snooze 10m', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(snoozed, /已推后 10 分钟：开会/)
+  const skipped = runSessionCommand([], 'wxid_a', '/remind skip', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(skipped, /已跳过下一次：吃药（每天 09:00，下次 /)
+  assert.deepEqual(calls, [['snooze', 'acc', 10], ['skip', 'acc']])
+  const usage = runSessionCommand([], 'wxid_a', '/snooze', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(usage, /用法：\/snooze 10m/)
+})

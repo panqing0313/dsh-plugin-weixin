@@ -3034,3 +3034,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **闸门**：`quietGate(now, accountId)` 把固定时段与临时静默取较晚者，`ReminderScheduler` / `SubscriptionScheduler` 触发时把 `accountId` 传进来；主动开口的 `candidates()` 直接跳过静默账号（不判断、不花 token）；离开模式仍记未读但不自动回。入站回复不受影响。
 - **测试**：`test/temp-quiet.test.js` 4 条（存取/清除、过期与账号隔离、边界、文案）；`test/session-commands.test.js` 端到端 1 条（设置/查询/恢复，且不开会话）。
 - **文档**：README 命令表、`docs/extras.md`「临时静默」。
+
+### ② 提醒的「等会儿」：`/snooze` 与 `/remind skip`（`src/message/scheduler.js`）
+
+- **为什么**：提醒到点时人可能正忙；取消再重排会丢内容，重复提醒还会把周期弄乱。
+- **做成什么**：`ReminderScheduler.snooze(accountId, minutes, now)` 取最早一条，清掉旧 timer、`fireAt = max(fireAt, now) + span`，重复项同步 `scheduledFor` 后写盘重臂；`skipNext(accountId)` 取最早的重复项，用 `nextRecurrenceAt(..., scheduledFor)` 跳到再下一次。一次性提醒 `skipNext` 返回 undefined（取消请走 `/remindcancel`）。
+- **命令**：`/snooze 10m|1h`（`parseWhen` 解析时长）、`/remind skip|跳过`；两者都不开模型会话。
+- **测试**：`test/scheduler.test.js` 新增 2 条（推后与周期对齐、跳过与一次性拒绝）；`test/sessions.test.js` 新增 1 条（命令到调度器的参数与回执）。
+- **文档**：README 命令表、`docs/extras.md`「提醒的等会儿」。

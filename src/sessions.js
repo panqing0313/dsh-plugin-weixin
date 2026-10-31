@@ -592,6 +592,7 @@ const COMMANDS = [
   { id: 'diag', pattern: /^\/diag$/i, build: identity, helpRank: 22, helpKey: 'help.diag' },
   { id: 'outbox', pattern: /^\/outbox(?:\s+([\s\S]+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 23, helpKey: 'help.outbox' },
   { id: 'quiet', pattern: /^\/quiet(?:\s+([\s\S]+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 24, helpKey: 'help.quiet' },
+  { id: 'snooze', pattern: /^\/snooze(?:\s+(\S+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 25, helpKey: 'help.snooze' },
   // `/remind 明天 9:00 内容`：时间本身可能带空格（`明天 9:00`、`下周一 10点`），
   // 所以整段交给执行分支按前缀尝试解析，第一个能解析的前缀是时间，其余是内容。
   {
@@ -795,6 +796,13 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     const scheduler = context?.reminders
     if (scheduler === undefined) return '当前无法安排提醒（调度器不可用）。'
     const raw = String(command.arg ?? '').trim()
+    const accountIdForRemind = context?.accountId ?? accountId ?? ''
+    if (/^(?:skip|跳过)$/i.test(raw)) {
+      const skipped = scheduler.skipNext(accountIdForRemind)
+      if (skipped === undefined) return '没有可跳过的重复提醒（/remindlist 看有哪些；一次性提醒用 /remindcancel 取消）。'
+      const next = new Date(skipped.fireAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      return `已跳过下一次：${skipped.text}（${skipped.recurrenceLabel ?? '重复'}，下次 ${next}）`
+    }
     if (raw === '') {
       return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了 或 /remind 明天 9:00 开会\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、下周一 10点、3小时后'
     }
@@ -825,7 +833,6 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (text.trim() === '') {
       return '用法：/remind <时间> <内容>，例如 /remind 明天 9:00 开会 或 /remind 每天 9:00 吃药（只给时间没有内容，没有可提醒的事）'
     }
-    const accountIdForRemind = context?.accountId ?? accountId ?? ''
     const planned = recurrence === undefined
       ? scheduler.schedule({ accountId: accountIdForRemind, conversationId, text, fireAt: when.fireAt })
       : scheduler.schedule({
@@ -841,6 +848,19 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     if (planned.error !== undefined) return `没有安排：${planned.error}`
     const label = recurrence === undefined ? when.label : `${recurrence.label}（重复）`
     return `好的，${label} 我会提醒你（编号 ${planned.id}）。\n用 /remindlist 可以查看，/remindcancel ${planned.id} 取消。`
+  }
+  if (command.command === 'snooze') {
+    const scheduler = context?.reminders
+    if (scheduler === undefined) return '当前无法推后提醒（调度器不可用）。'
+    const raw = String(command.arg ?? '').trim()
+    if (raw === '') return '用法：/snooze 10m —— 把最近的一条提醒往后推；/remind skip 跳过重复提醒的下一次。'
+    const parsed = parseWhen(raw)
+    if (parsed.ok !== true) return `没听懂「${raw}」。用法：/snooze 10m、/snooze 1h。`
+    const minutes = Math.max(1, Math.round((parsed.fireAt - Date.now()) / 60_000))
+    const item = scheduler.snooze(context?.accountId ?? accountId ?? '', minutes)
+    if (item === undefined) return '没有待发的提醒可以推后。'
+    const at = new Date(item.fireAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    return `已推后 ${minutes} 分钟：${item.text}（${at}）`
   }
   if (command.command === 'remindlist') {
     const scheduler = context?.reminders

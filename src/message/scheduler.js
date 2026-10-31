@@ -379,6 +379,57 @@ export class ReminderScheduler {
   }
 
   /**
+   * Push the soonest pending reminder later by `minutes` (the `/snooze` command).
+   * A recurring reminder shifts its `scheduledFor` too, so the next cycle is
+   * counted from the snoozed moment instead of re-firing the skipped slot.
+   *
+   * @param {string} accountId
+   * @param {number} minutes
+   * @param {number} [now]
+   * @returns {Reminder | undefined} the item, or undefined when nothing is pending
+   */
+  snooze(accountId, minutes, now = Date.now()) {
+    const item = this.list(accountId)[0]
+    if (item === undefined) return undefined
+    const span = Math.max(1, Math.round(minutes)) * 60_000
+    const timer = this.timers.get(item.id)
+    if (timer !== undefined) {
+      this.clearTimeoutRef(timer)
+      this.timers.delete(item.id)
+    }
+    const base = Math.max(item.fireAt, now)
+    item.fireAt = base + span
+    if (item.recurrence !== undefined) item.scheduledFor = item.fireAt
+    writeReminders(this.stateRoot, this.store, this.warn)
+    this.#arm(item)
+    return item
+  }
+
+  /**
+   * Skip the next occurrence of the soonest recurring reminder (`/remind skip`).
+   * One-off reminders are not skipped: dropping one is `cancel`.
+   *
+   * @param {string} accountId
+   * @returns {Reminder | undefined} the item now pointing at the following slot
+   */
+  skipNext(accountId) {
+    const item = this.list(accountId).find((entry) => entry.recurrence !== undefined)
+    if (item === undefined) return undefined
+    const base = item.scheduledFor ?? item.fireAt
+    const next = nextRecurrenceAt(item.recurrence, Number(item.hour ?? 0), Number(item.minute ?? 0), base)
+    const timer = this.timers.get(item.id)
+    if (timer !== undefined) {
+      this.clearTimeoutRef(timer)
+      this.timers.delete(item.id)
+    }
+    item.scheduledFor = next
+    item.fireAt = next
+    writeReminders(this.stateRoot, this.store, this.warn)
+    this.#arm(item)
+    return item
+  }
+
+  /**
    * Pending reminders, soonest first. Optionally narrowed to one account.
    * @returns {Reminder[]}
    */

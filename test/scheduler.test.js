@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { parseRecurrence, parseWhen, ReminderScheduler, readReminders, MAX_REMINDER_TEXT_CHARS, MAX_PENDING_PER_ACCOUNT } from '../src/message/scheduler.js'
+import { nextRecurrenceAt, parseRecurrence, parseWhen, ReminderScheduler, readReminders, MAX_REMINDER_TEXT_CHARS, MAX_PENDING_PER_ACCOUNT } from '../src/message/scheduler.js'
 
 function tmpState() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wx-sched-'))
@@ -228,5 +228,65 @@ test('a repeat re-arms to the next slot instead of vanishing', () => {
     scheduler.stop()
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('snooze pushes the next reminder back, and a repeat keeps its cycle', () => {
+  const stateRoot = tmpState()
+  const timers = []
+  const scheduler = new ReminderScheduler({
+    stateRoot,
+    fire: async () => {},
+    setTimeoutRef: (ms) => { timers.push(ms); return timers.length },
+    clearTimeoutRef: () => {},
+  })
+  try {
+    const now = Date.now()
+    const one = scheduler.schedule({ accountId: 'a1', conversationId: 'c1', text: '开会', fireAt: now + 60 * 60_000 })
+    const snoozed = scheduler.snooze('a1', 10, now)
+    assert.equal(snoozed.id, one.id)
+    assert.equal(snoozed.fireAt, now + 70 * 60_000, 'ten minutes later than the original slot')
+    assert.equal(readReminders(stateRoot).items[0].fireAt, now + 70 * 60_000, 'the shift is on disk')
+    assert.equal(scheduler.snooze('someone-else', 10, now), undefined, 'nothing pending for another account')
+
+    const repeat = scheduler.schedule({
+      accountId: 'a2', conversationId: 'c2', text: '吃药', fireAt: now + 30 * 60_000,
+      recurrence: { kind: 'daily' }, recurrenceLabel: '每天 09:00', hour: 9, minute: 0,
+    })
+    const shifted = scheduler.snooze('a2', 15, now)
+    assert.equal(shifted.id, repeat.id)
+    assert.equal(shifted.fireAt, now + 45 * 60_000)
+    assert.equal(shifted.scheduledFor, shifted.fireAt, 'the cycle counts from the snoozed moment')
+  } finally {
+    scheduler.stop()
+  }
+})
+
+test('skip jumps a repeating reminder to its following slot, and refuses one-offs', () => {
+  const stateRoot = tmpState()
+  const scheduler = new ReminderScheduler({
+    stateRoot,
+    fire: async () => {},
+    setTimeoutRef: () => 1,
+    clearTimeoutRef: () => {},
+  })
+  try {
+    const now = Date.now()
+    const at = now + 2 * 60 * 60_000
+    scheduler.schedule({ accountId: 'a1', conversationId: 'c1', text: '一次性', fireAt: at })
+    assert.equal(scheduler.skipNext('a1'), undefined, 'a one-off has no next occurrence to skip')
+
+    const daily = scheduler.schedule({
+      accountId: 'a1', conversationId: 'c1', text: '吃药', fireAt: at,
+      recurrence: { kind: 'daily' }, recurrenceLabel: '每天 09:00', hour: 9, minute: 0,
+    })
+    const before = daily.scheduledFor
+    const skipped = scheduler.skipNext('a1')
+    assert.equal(skipped.id, daily.id)
+    assert.ok(skipped.fireAt > before, 'the next slot is strictly later')
+    assert.equal(skipped.fireAt, nextRecurrenceAt({ kind: 'daily' }, 9, 0, before), 'the slot after the skipped one')
+    assert.equal(readReminders(stateRoot).items.find((item) => item.id === daily.id).fireAt, skipped.fireAt)
+  } finally {
+    scheduler.stop()
   }
 })
