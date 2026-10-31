@@ -37,7 +37,7 @@ import path from 'node:path'
 
 import { stateDir } from './state.js'
 import { labelForAccount } from './account-registry.js'
-import { parseWhen } from './message/scheduler.js'
+import { parseRecurrence, parseWhen } from './message/scheduler.js'
 import { parseSubscriptionWhen, describeSubscription } from './message/subscriptions.js'
 
 /** Filename under the state root holding every conversation's line list. */
@@ -799,32 +799,57 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     }
     // 时间可能自己带空格（`明天 9:00`），按前缀逐段尝试：第一个能解析的前缀
     // 就是时间，其余是内容。这样不用在正则里穷举所有中文写法。
+    // 重复写法（每天/工作日/每周X）先试 —— `每周一 10点` 里的「每周一」不能
+    // 被一次性规则当成日期，`每天 9:00` 更是一次性规则根本没有的形态。
     const tokens = raw.split(/\s+/)
     let when
+    let recurrence
     let text = ''
     for (let take = 1; take <= tokens.length && take <= 4; take += 1) {
-      const parsed = parseWhen(tokens.slice(0, take).join(' '))
+      const prefix = tokens.slice(0, take).join(' ')
+      const repeat = parseRecurrence(prefix)
+      if (repeat.ok === true) {
+        recurrence = repeat
+        text = tokens.slice(take).join(' ')
+        break
+      }
+      const parsed = parseWhen(prefix)
       if (parsed.ok === true) {
         when = parsed
         text = tokens.slice(take).join(' ')
         break
       }
     }
-    if (when === undefined) return `没有安排：${parseWhen(tokens[0]).reason}`
+    if (when === undefined && recurrence === undefined) return `没有安排：${parseWhen(tokens[0]).reason}`
     if (text.trim() === '') {
-      return '用法：/remind <时间> <内容>，例如 /remind 明天 9:00 开会（只给时间没有内容，没有可提醒的事）'
+      return '用法：/remind <时间> <内容>，例如 /remind 明天 9:00 开会 或 /remind 每天 9:00 吃药（只给时间没有内容，没有可提醒的事）'
     }
     const accountIdForRemind = context?.accountId ?? accountId ?? ''
-    const planned = scheduler.schedule({ accountId: accountIdForRemind, conversationId, text, fireAt: when.fireAt })
+    const planned = recurrence === undefined
+      ? scheduler.schedule({ accountId: accountIdForRemind, conversationId, text, fireAt: when.fireAt })
+      : scheduler.schedule({
+          accountId: accountIdForRemind,
+          conversationId,
+          text,
+          fireAt: recurrence.fireAt,
+          recurrence: recurrence.recurrence,
+          recurrenceLabel: recurrence.label,
+          hour: recurrence.hour,
+          minute: recurrence.minute,
+        })
     if (planned.error !== undefined) return `没有安排：${planned.error}`
-    return `好的，${when.label} 我会提醒你（编号 ${planned.id}）。\n用 /remindlist 可以查看，/remindcancel ${planned.id} 取消。`
+    const label = recurrence === undefined ? when.label : `${recurrence.label}（重复）`
+    return `好的，${label} 我会提醒你（编号 ${planned.id}）。\n用 /remindlist 可以查看，/remindcancel ${planned.id} 取消。`
   }
   if (command.command === 'remindlist') {
     const scheduler = context?.reminders
     if (scheduler === undefined) return '当前无法查看提醒（调度器不可用）。'
     const items = scheduler.list(context?.accountId ?? accountId ?? '')
     if (items.length === 0) return '这个账号现在没有待发的提醒。'
-    return ['待发的提醒：', ...items.map((item) => `${item.id} · ${new Date(item.fireAt).toLocaleString()} · ${item.text}`)].join('\n')
+    return ['待发的提醒：', ...items.map((item) => {
+      const repeat = item.recurrence === undefined ? '' : `（${item.recurrenceLabel ?? '重复'}）`
+      return `${item.id} · ${new Date(item.fireAt).toLocaleString()}${repeat} · ${item.text}`
+    })].join('\n')
   }
   if (command.command === 'remindcancel') {
     const scheduler = context?.reminders

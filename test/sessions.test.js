@@ -625,4 +625,16 @@ test('a reminder time may contain spaces, and the rest is the text', () => {
   const empty = runSessionCommand([], 'wxid_a', '/remind 明天 9:00', 'acc', { accountId: 'acc', reminders: scheduler })
   assert.match(empty, /没有可提醒的事/)
   assert.equal(scheduled.length, 2)
+
+  // Repeats take the whole prefix (`每天 9:00` must not be read as one-shot
+  // "9:00" with the word 每天 left in the text).
+  const repeat = runSessionCommand([], 'wxid_a', '/remind 每天 9:00 吃药', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(repeat, /每天 09:00（重复）/)
+  assert.equal(scheduled[2].text, '吃药')
+  assert.deepEqual(scheduled[2].recurrence, { kind: 'daily' })
+  assert.equal(scheduled[2].hour, 9)
+
+  const workday = runSessionCommand([], 'wxid_a', '/remind 工作日 8:30 打卡', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(workday, /工作日 08:30（重复）/)
+  assert.deepEqual(scheduled[3].recurrence, { kind: 'weekdays' })
 })

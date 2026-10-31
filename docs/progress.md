@@ -3007,3 +3007,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：新增 `groupBotNames`（逗号分隔）并并入 `botNames`；匹配前把 `Ｕ+2005/Ｕ+00A0/Ｕ+3000` 归一成空格、`＠` 归一成 `@`，名字比较不区分大小写；仍然只认首行、开头或空白之后的名字，宁漏勿扰。
 - **测试**：`test/groups.test.js` 新增 2 条（全角/细空格/大小写/正文深处不误判、`groupBotNames` 走策略）；`config-remote` 表单同步一个字段（表单/schema 双向一致测试仍绿）。
 - **文档**：README 配置表与群聊节、`docs/extras.md`「群里被叫到才回」。
+
+### ⑤ 重复提醒（`src/message/scheduler.js` + `src/sessions.js`）
+
+- **原来的问题**：`/remind` 只有一次性时间；「每天 9:00 吃药」要么每天手动发一遍，要么得用 `/subscribe`（那要调模型、还带人设）。
+- **做成什么**：`parseRecurrence(spec, now)` 解析 `每天/天天/每日`、`工作日/每个工作日`、`每周X` + 钟点（与一次性共用 `9:00`/`9点`/`9点半` 写法），`nextRecurrenceAt` 算严格晚于当前时刻的第一个槽；`ReminderScheduler` 的提醒对象带上 `recurrence/hour/minute/scheduledFor`，到点触发后写回下一个槽并重新 `#arm`，而不是删除。`/remind` 的执行分支先试重复前缀、再试一次性前缀，其余是内容。
+- **不猜**：`每周一`（无钟点）与 `每天 25:00` 都明确报错；`明天 9:00` 仍走一次性，`parseRecurrence` 对它返回 not ok。
+- **测试**：`test/scheduler.test.js` 新增 2 条（三种重复的解析与首个槽、跨周末的工作日、非法写法；触发后条目仍在且槽前进一天）；`test/sessions.test.js` 的命令用例补 `每天 9:00 吃药` 与 `工作日 8:30 打卡` 的切分与计划字段。
+- **文档**：README 命令表与「定时提醒」节、`docs/extras.md`「重复提醒」。

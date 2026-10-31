@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { parseWhen, ReminderScheduler, readReminders, MAX_REMINDER_TEXT_CHARS, MAX_PENDING_PER_ACCOUNT } from '../src/message/scheduler.js'
+import { parseRecurrence, parseWhen, ReminderScheduler, readReminders, MAX_REMINDER_TEXT_CHARS, MAX_PENDING_PER_ACCOUNT } from '../src/message/scheduler.js'
 
 function tmpState() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wx-sched-'))
@@ -173,4 +173,60 @@ test('parseWhen reads natural Chinese times, without guessing', () => {
   assert.equal(parseWhen('下周一', now).ok, false)
   assert.equal(parseWhen('今天 9:00', now).ok, false)
   assert.equal(parseWhen('25点', now).ok, false)
+})
+
+test('repeats parse into a recurrence and the first slot after now', () => {
+  const now = new Date(2026, 9, 31, 11, 0, 0) // Saturday 2026-10-31 11:00 local
+  const daily = parseRecurrence('每天 9:00', now)
+  assert.equal(daily.ok, true)
+  assert.deepEqual(daily.recurrence, { kind: 'daily' })
+  assert.equal(new Date(daily.fireAt).getHours(), 9)
+  assert.equal(daily.fireAt > now.getTime(), true)
+
+  const weekdays = parseRecurrence('工作日 8:30', now)
+  assert.equal(weekdays.ok, true)
+  assert.deepEqual(weekdays.recurrence, { kind: 'weekdays' })
+  // 2026-10-31 is Saturday; the next workday is Monday 2026-11-02.
+  assert.equal(new Date(weekdays.fireAt).getDay(), 1)
+  assert.equal(new Date(weekdays.fireAt).getHours(), 8)
+  assert.equal(new Date(weekdays.fireAt).getMinutes(), 30)
+
+  const weekly = parseRecurrence('每周一 10点', now)
+  assert.equal(weekly.ok, true)
+  assert.deepEqual(weekly.recurrence, { kind: 'weekly', weekday: 1 })
+  assert.equal(new Date(weekly.fireAt).getDay(), 1)
+
+  assert.equal(parseRecurrence('每周一', now).ok, false)
+  assert.equal(parseRecurrence('每天 25:00', now).ok, false)
+  assert.equal(parseRecurrence('明天 9:00', now).ok, false)
+})
+
+test('a repeat re-arms to the next slot instead of vanishing', () => {
+  const root = tmpState()
+  try {
+    const timers = []
+    const scheduler = new ReminderScheduler({
+      stateRoot: root,
+      fire: () => {},
+      setTimeoutRef: (ms, cb) => { timers.push({ ms, cb }); return timers.length },
+      clearTimeoutRef: () => {},
+    })
+    const first = new Date(2026, 9, 31, 9, 0, 0).getTime()
+    const planned = scheduler.schedule({
+      accountId: 'a', conversationId: 'c', text: '吃药', fireAt: first,
+      recurrence: { kind: 'daily' }, recurrenceLabel: '每天 09:00', hour: 9, minute: 0,
+    })
+    assert.equal(planned.recurrence.kind, 'daily')
+    // Fire the armed timer: the item must survive with tomorrow's slot.
+    timers[timers.length - 1].cb()
+    const after = readReminders(root).items
+    assert.equal(after.length, 1, 'a repeat is never removed on fire')
+    assert.equal(after[0].id, planned.id)
+    assert.equal(after[0].hour, 9)
+    assert.equal(after[0].fireAt, new Date(2026, 10, 1, 9, 0, 0).getTime())
+    assert.equal(scheduler.list('a').length, 1)
+    scheduler.stop()
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })

@@ -188,6 +188,70 @@ function formatLabel(date) {
 }
 
 /**
+ * 重复提醒：`每天 9:00`、`工作日 8:30`、`每周一 10点`。
+ *
+ * 重复与一次性分开解析：`parseWhen` 说的是「哪一刻」，这里说的是「每个周期
+ * 的同一刻」。分开之后 `明天 9:00` 这种相对写法不会和重复混在一起，`/remind`
+ * 只需要在候选前缀上先试重复、再试一次性，不需要在正则里穷举组合。
+ *
+ * @param {string} spec
+ * @param {Date} [now]
+ * @returns {{ ok: true, recurrence: { kind: 'daily' | 'weekdays' | 'weekly', weekday?: number }, hour: number, minute: number, fireAt: number, label: string } | { ok: false, reason: string }}
+ */
+export function parseRecurrence(spec, now = new Date()) {
+  const text = String(spec ?? '').replace(/\s+/g, ' ').trim()
+  const head = /^(每天|天天|每日|工作日|每个工作日|每周([一二三四五六日天]))\s*(.+)$/.exec(text)
+  if (head === null) return { ok: false, reason: `「${text}」不是重复写法（每天 9:00 / 工作日 8:30 / 每周一 10点）` }
+  const clock = /^(\d{1,2})\s*(?:[:：点时])\s*(?:(\d{1,2})\s*分?|(半))?$/.exec(head[3].trim())
+  if (clock === null) return { ok: false, reason: `「${head[3].trim()}」不是钟点（例如 9:00、9点、9点半）` }
+  const hour = Number(clock[1])
+  const minute = clock[3] === '半' ? 30 : Number(clock[2] ?? 0)
+  if (hour > 23 || minute > 59) return { ok: false, reason: '钟点超出范围（0–23 点，0–59 分）' }
+  const kind = head[1].startsWith('每周') ? 'weekly' : (head[1].includes('工作日') ? 'weekdays' : 'daily')
+  const recurrence = kind === 'weekly' ? { kind, weekday: CN_WEEKDAY[head[2]] } : { kind }
+  return {
+    ok: true,
+    recurrence,
+    hour,
+    minute,
+    fireAt: nextRecurrenceAt(recurrence, hour, minute, now.getTime()),
+    label: recurrenceLabel(recurrence, hour, minute),
+  }
+}
+
+/**
+ * The first occurrence strictly after `afterMs` (the current slot, so a repeat
+ * never re-fires the same minute).
+ *
+ * @param {{ kind: 'daily' | 'weekdays' | 'weekly', weekday?: number }} recurrence
+ * @param {number} hour
+ * @param {number} minute
+ * @param {number} afterMs
+ * @returns {number}
+ */
+export function nextRecurrenceAt(recurrence, hour, minute, afterMs) {
+  const from = new Date(afterMs)
+  for (let offset = 0; offset <= 14; offset += 1) {
+    const candidate = new Date(from.getFullYear(), from.getMonth(), from.getDate() + offset, hour, minute, 0, 0)
+    if (candidate.getTime() <= afterMs) continue
+    const day = candidate.getDay()
+    if (recurrence.kind === 'weekly' && day !== recurrence.weekday) continue
+    if (recurrence.kind === 'weekdays' && (day === 0 || day === 6)) continue
+    return candidate.getTime()
+  }
+  return new Date(from.getFullYear(), from.getMonth(), from.getDate() + 7, hour, minute, 0, 0).getTime()
+}
+
+function recurrenceLabel(recurrence, hour, minute) {
+  const at = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  if (recurrence.kind === 'weekly') return `每周${CN_WEEKDAY_NAME[recurrence.weekday]} ${at}`
+  if (recurrence.kind === 'weekdays') return `工作日 ${at}`
+  return `每天 ${at}`
+}
+
+const CN_WEEKDAY_NAME = { 0: '日', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六' }
+
+/**
  * Read the persisted reminder list. A missing or mangled file is an empty
  * list, not an error: reminders are conveniences, and a corrupted store must
  * never take the whole account loop down.
@@ -222,7 +286,9 @@ export function writeReminders(stateRoot, store, warn = () => {}) {
 
 /**
  * @typedef {{ id: string, accountId: string, conversationId: string,
- *   text: string, fireAt: number, createdAt: string }} Reminder
+ *   text: string, fireAt: number, createdAt: string,
+ *   recurrence?: { kind: 'daily' | 'weekdays' | 'weekly', weekday?: number },
+ *   recurrenceLabel?: string, hour?: number, minute?: number, scheduledFor?: number }} Reminder
  */
 
 /**
@@ -260,7 +326,9 @@ export class ReminderScheduler {
   /**
    * Store and arm a reminder.
    *
-   * @param {{ accountId: string, conversationId: string, text: string, fireAt: number }} plan
+   * @param {{ accountId: string, conversationId: string, text: string, fireAt: number,
+   *   recurrence?: { kind: 'daily' | 'weekdays' | 'weekly', weekday?: number },
+   *   recurrenceLabel?: string, hour?: number, minute?: number }} plan
    * @returns {Reminder | { error: string }}
    */
   schedule(plan) {
@@ -270,7 +338,23 @@ export class ReminderScheduler {
     const pending = this.store.items.filter((item) => item.accountId === plan.accountId)
     if (pending.length >= MAX_PENDING_PER_ACCOUNT) return { error: `这个账号的待发提醒太多了（最多 ${MAX_PENDING_PER_ACCOUNT} 条），先用 /remindlist 看，/remindcancel 删掉一些` }
     const id = `r${++this.store.seq}`
-    const reminder = { id, accountId: plan.accountId, conversationId: plan.conversationId, text, fireAt: plan.fireAt, createdAt: new Date().toISOString() }
+    const reminder = {
+      id,
+      accountId: plan.accountId,
+      conversationId: plan.conversationId,
+      text,
+      fireAt: plan.fireAt,
+      createdAt: new Date().toISOString(),
+      ...(plan.recurrence === undefined
+        ? {}
+        : {
+            recurrence: plan.recurrence,
+            recurrenceLabel: plan.recurrenceLabel ?? '',
+            hour: plan.hour,
+            minute: plan.minute,
+            scheduledFor: plan.fireAt,
+          }),
+    }
     this.store.items.push(reminder)
     writeReminders(this.stateRoot, this.store, this.warn)
     this.#arm(reminder)
@@ -330,8 +414,21 @@ export class ReminderScheduler {
         this.#arm(reminder)
         return
       }
-      this.store.items = this.store.items.filter((item) => item.id !== reminder.id)
-      writeReminders(this.stateRoot, this.store, this.warn)
+      if (reminder.recurrence !== undefined) {
+        // A repeat is never removed: the slot it just fired is behind us, so the
+        // store moves to the next occurrence and the timer re-arms for it. The
+        // next slot is computed from `scheduledFor` (the intended moment), not
+        // from a quiet-hours push, or a pushed reminder would skip a day.
+        const slot = reminder.scheduledFor ?? reminder.fireAt
+        const next = nextRecurrenceAt(reminder.recurrence, Number(reminder.hour ?? 0), Number(reminder.minute ?? 0), slot)
+        reminder.scheduledFor = next
+        reminder.fireAt = next
+        writeReminders(this.stateRoot, this.store, this.warn)
+        this.#arm(reminder)
+      } else {
+        this.store.items = this.store.items.filter((item) => item.id !== reminder.id)
+        writeReminders(this.stateRoot, this.store, this.warn)
+      }
       // The send must never throw into the timer callback: a transport hiccup
       // would otherwise leave the other timers unstarted for this tick.
       Promise.resolve()
