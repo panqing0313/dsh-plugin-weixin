@@ -714,6 +714,14 @@ export class WeixinLoginController extends TypertRemoteService {
         return { entries: readJournal(stateDir(), { limit, accountId }) };
     }
 
+    /** Recent strangers the allowlist refused, newest first — the card's one-click allow reads this. */
+    async strangers() {
+        const { readStrangers } = await import("./message/strangers.js");
+        const accountId = this.activeAccountId();
+        if (!accountId) return { accountId: "", strangers: [] };
+        return { accountId, strangers: readStrangers(stateDir(), accountId) };
+    }
+
     /**
      * Render the journal (optionally one account, last `days` days) as a
      * Markdown document for the settings card's one-click export. The card

@@ -52,6 +52,7 @@ import { quoteBlock } from './message/quote.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { createSenderDailyLimiter } from './message/sender-daily.js'
+import { recordStranger } from './message/strangers.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -2013,6 +2014,14 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
             `allowedSenders=${JSON.stringify(effectiveConfig.current.allowedSenders ?? [])}`,
         )
         warn(`refused message from ${message.senderId}: ${denialReason(effectiveConfig.current, message.senderId, message.conversationId)}`)
+        // Stranger audit trail: the card reads this list and offers a one-click
+        // allow. Silent refusals were indistinguishable from silence itself.
+        recordStranger(stateRoot, accountId, {
+          senderId: message.senderId,
+          conversationId: message.conversationId,
+          text: message.text,
+          warn,
+        })
         return
       }
     }

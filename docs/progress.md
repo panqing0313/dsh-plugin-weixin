@@ -3224,3 +3224,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **profile**：依赖 `^0.9.20 → ^1.0.0`、`node_modules` = 1.0.0、`pnpm-lock.yaml` 45–46 行已是 `^1.0.0 / 1.0.0`；`doctor` → `installed 1.0.0`、`host 0.2.1-rc.5 (tested)`、`published up to date`。重启 DSH 生效。
 - **CI**：发布提交 run `41216033552` success、docs 提交 run `41214665903` success；tag 触发的 release workflow `41216038744` 失败（版本已存在，预期）。
 - **真机复核（2026-11-01，用户确认「验证了」）**：按兼容表 5 步通过 —— 九个页签都在（新图标/动效/统计图表/聊天时间线渲染正常）、左侧栏「微信BOT」入口在、收发正常、`/status` 正常。`docs/compatibility.md` 已加 `1.0.0 / 0.2.1-rc.5` 行；`TESTED_HOSTS` 不动（宿主版本没变）。0.9.19/0.9.20 的复核被 1.0.0 覆盖（内容都包含在内，一次验证通过）。
+
+## 被拒的陌生人面板（2026-11-01，0.10.0 第 1 项）
+
+用户「都做」批准六项（A 陌生人加白 / B 流水深化 / C 关键词回复 / D 记忆导出 / E packs 索引 / F NPM_TOKEN 检查），goal `goal-4555dff9`。
+
+A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearStranger/clearStrangerEverywhere`，`strangers.json` 按账号、上限 50、lastText 截 120）；`src/index.js` 拒收分支在 `warn` 后调 `recordStranger`；`src/login-remote.js` 加 `strangers()`；`src/config-remote.js` 加 `strangerAllow(senderId)`（写 `allowedSenders` + `clearStrangerEverywhere` 同一调用内完成）；卡片 `StrangerSection` 挂在账号页状态横幅之下（只在已绑定时出现）。测试 `test/strangers.test.js` 4 条 + `client-remote.test.js` 源码形状 1 条；全量 934/934。
+
+坑：给卡片插入组件时少写一个右括号（`visible.map` 的 `)` 与外层列表 div 的 `)` 叠在同行），`check.mjs` 只给行号不给原因，`node --check` 才看到 `missing ) after argument list`；教训是手写 createElement 深嵌套时每层收尾各占一行。

@@ -1329,6 +1329,24 @@ export class ConfigController extends TypertRemoteService {
     writeSavedConfig(next)
     return this.list()
   }
+
+  /** Add a refused sender to allowedSenders and drop the stranger record. */
+  async strangerAllow(senderIdJson) {
+    const senderId = String(senderIdJson ?? "").trim();
+    if (senderId === "") {
+      throw new RemoteError("bad_request", t("缺少发送者 id", "Missing a sender id"), {});
+    }
+    const next = { ...readSavedConfig() };
+    const list = Array.isArray(next.allowedSenders) ? [...next.allowedSenders] : [];
+    if (!list.includes(senderId)) list.push(senderId);
+    next.allowedSenders = list;
+    writeSavedConfig(next);
+    // The record served its purpose once the id is allowlisted — and it is
+    // cleared for every account, because the allowlist itself is global.
+    const { clearStrangerEverywhere } = await import("./message/strangers.js");
+    clearStrangerEverywhere(stateDir(), senderId);
+    return { allowed: true, allowedSenders: list };
+  }
 }
 
 /** Remove `a.b` from an object, pruning a parent left empty by the removal. */

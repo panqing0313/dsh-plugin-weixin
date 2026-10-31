@@ -306,6 +306,78 @@ window.__ModuleLoader__.load({
 			}
 			//#endregion design layer
 
+		/**
+		 * 最近被 allowlist 拒掉的陌生人，一人一行、一键加白。
+		 *
+		 * 拒收是静默的，但这块面板把「静默」和「没人来」分开：同事换了微信号、
+		 * 朋友重新扫码 —— 他们的新 id 都会落在这里，点一下就进白名单，下一条
+		 * 消息直接放行（配置是每条消息实时读的，不需要重启）。
+		 */
+		function StrangerSection({ t }) {
+			const [rows, setRows] = react.useState(null);
+			const [busyId, setBusyId] = react.useState("");
+			const [notice, setNotice] = react.useState("");
+			const load = react.useCallback(async () => {
+				try {
+					const res = await callRemote(() => ctx.remote.weixin.strangers());
+					setRows(Array.isArray(res?.strangers) ? res.strangers : []);
+				} catch {
+					setRows([]);
+				}
+			}, []);
+			react.useEffect(() => { load(); }, [load]);
+			const allow = async (senderId) => {
+				setBusyId(senderId);
+				setNotice("");
+				try {
+					await callRemote(() => ctx.remote.weixin.strangerAllow(senderId));
+					setNotice(t("Added to the allowlist — their next message just works.", "已加入白名单，下一条消息直接放行。"));
+				} catch {
+					setNotice(t("Allow failed, please try again.", "加白失败，请重试。"));
+				} finally {
+					setBusyId("");
+					load();
+				}
+			};
+			const visible = Array.isArray(rows) ? rows.slice(0, 8) : [];
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+				createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+					createElement("span", { style: panelTitleStyle }, t("Strangers the allowlist refused", "被拒的陌生人")),
+					createElement("span", { style: { flex: 1 } }),
+					createElement("button", { onClick: () => load(), style: buttonStyleFor(false) }, t("Refresh", "刷新"))),
+				rows === null
+					? createElement("span", { style: captionStyle }, t("Loading…", "读取中…"))
+					: visible.length === 0
+						? createElement("span", { style: captionStyle }, t("Nobody has been refused yet.", "还没有被拒的发送者。"))
+						: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+							visible.map((row) => createElement("div", {
+									key: row.senderId,
+									className: "weixin-row",
+									style: {
+										display: "flex", flexDirection: "column", gap: 3,
+										padding: "8px 10px",
+										border: `1px solid ${C.border}`,
+										borderRadius: RADIUS.control,
+										background: C.surfaceSunken,
+									},
+								},
+								createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+									createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary } }, row.senderId),
+									createElement("span", { style: { fontSize: 12, color: C.labelTertiary } },
+										t(`refused ${row.count} times · last ${new Date(row.lastAt).toLocaleString()}`,
+											`被拒 ${row.count} 次 · 最近 ${new Date(row.lastAt).toLocaleString()}`)),
+									createElement("span", { style: { flex: 1 } }),
+									createElement("button", {
+										onClick: () => allow(row.senderId),
+										style: buttonStyleFor(true),
+										disabled: busyId === row.senderId,
+									}, busyId === row.senderId ? t("Allowing…", "加白中…") : t("Allow", "加白"))),
+								row.lastText ? createElement("span", {
+									style: { fontSize: 12, color: C.labelSecondary, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+								}, row.lastText) : null))),
+				notice ? createElement("span", { style: captionStyle }, notice) : null);
+			}
+
 		function LoginSection({ ctx, t }) {
 			const [state, setState] = react.useState({ phase: "idle" }); // idle|qr|needcode|confirmed|failed|blocked
 			const [qrUrl, setQrUrl] = react.useState(null);
@@ -769,6 +841,9 @@ window.__ModuleLoader__.load({
 
 				// One row per bound account: identity, liveness, controls.
 				accountRows,
+
+				// Who tried to get in and was turned away — one click to allow.
+				bound ? createElement(StrangerSection, { t }) : null,
 
 				// Who can talk to each account, straight from status(): the
 				// operator asked to see, at a glance under the login state, which

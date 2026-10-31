@@ -878,3 +878,22 @@ test('the card carries its own design layer, and every tab gets an icon', () => 
   assert.ok(!client.includes("C.stateOk"), 'C.stateOk is not a theme token')
   assert.ok(client.includes("borderBottom: `2px solid ${active ? C.brand : \"transparent\"}`"))
 })
+
+test('the refused-stranger panel reads the audit trail and allows in one click', () => {
+  const source = fs.readFileSync(CARD_PATH, 'utf8')
+  // The panel is a real component wired to both remote ends: it reads the
+  // trail, and its button calls the allow method that writes allowedSenders.
+  assert.match(source, /function StrangerSection\(\{ t \}\)/)
+  assert.match(source, /ctx\.remote\.weixin\.strangers\(\)/)
+  assert.match(source, /ctx\.remote\.weixin\.strangerAllow\(senderId\)/)
+  assert.match(source, /bound \? createElement\(StrangerSection, \{ t \}\)/)
+  // The server side of the one click: the allowlist write and the trail clear
+  // live in the same method, so a half-applied allow is not a state.
+  const remote = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'config-remote.js'), 'utf8')
+  assert.match(remote, /async strangerAllow\(senderIdJson\)/)
+  assert.match(remote, /clearStrangerEverywhere\(stateDir\(\), senderId\)/)
+  // And the trail is written by the refusal branch, not by a poll that would
+  // also fire for rate-limit refusals.
+  const index = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'index.js'), 'utf8')
+  assert.match(index, /recordStranger\(stateRoot, accountId, \{/)
+})

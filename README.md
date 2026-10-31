@@ -70,6 +70,7 @@ src/agent-bridge.js     微信会话 ↔ DSH agent 会话（create/resume + foll
 src/session-reader.js   从 session log 读回 assistant 回复与在跑的工具
 src/transport/ilink.js  iLink 长轮询 + send + sendMedia + typing
 src/security/allowlist.js  发信人/会话白名单（默认拒绝所有人）
+src/message/strangers.js  被拒陌生人留痕（设置卡一键加白）
 src/message/{chunker,dedupe,markdown}.js  分段、有界去重、Markdown→纯文本
 src/media/inbound.js    入站媒体：下载、解密、落盘、语音转码
 src/media/outbound.js   出站媒体：路径白名单、附件引用识别、上传
