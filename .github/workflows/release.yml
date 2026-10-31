@@ -38,6 +38,15 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # Fail in 5 seconds with a readable message instead of after the whole
+      # suite (the first tag-triggered run burned minutes on tests and only
+      # then died with ENEEDAUTH, because NPM_TOKEN was an empty secret).
+      - name: an NPM_TOKEN secret must exist before anything runs
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "::error::secret NPM_TOKEN is not set — add an npm Automation token in Repo Settings → Secrets and actions, then re-run"
+            exit 1
+          fi
       - run: npm ci
       - name: fast checks (syntax + packaging rules)
         run: npm run check

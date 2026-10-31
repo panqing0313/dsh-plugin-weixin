@@ -3260,3 +3260,7 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - 配置：schema `packsIndexUrl` + 设置卡「个性化与记忆」组第一个字段。
 - 测试 `test/pack-index.test.js` 3 条 + `client-remote.test.js` 源码形状 1 条；旧断言「remote 方法清单」补两项。
 - 坑：加了新远程方法会同时惊动三处 —— `remoteMethods([...])`、client.js descriptor 表、`client-remote.test.js` 的期望清单；少一处就有测试跳出来，这正是那几条契约测试存在的意义。
+
+## release.yml 的 NPM_TOKEN 快速失败（2026-11-01，0.10.0 第 6 项）
+
+0.9.19 的 tag 发布路径死于一个空 secret：suite 跑完才在 publish 一步报 `ENEEDAUTH`。工作流现在在 setup-node 之后、`npm ci` 之前检查 `secrets.NPM_TOKEN`，为空立刻红并给出「去 Settings → Secrets and actions 加一个 Automation token」的指引。真正的修复是仓库设置（不是代码）：填一个 npm Automation token 进 `NPM_TOKEN`，tag 发布即恢复（带 provenance）。
