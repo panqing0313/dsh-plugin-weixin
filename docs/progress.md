@@ -3079,3 +3079,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：新增 `upcomingDates(memory, now, {leadDays})`，在 0–30 天窗口里返回 `daysAhead`（0 = 今天）；`datesOnThisDay` 保留为 `leadDays: 0` 的兼容入口。日期按「今年这一次，过了就算明年」求下一次，所以窗口不会复活已经过去的日子；`buildDateReminderText` 拆成「📅 今天是重要日子」与「🗓 快到了」两段（`明天` / `N 天后`）。schema 加 `dateReminderLeadDays`（0–30，默认 0），设置卡同步一个字段。
 - **测试**：`test/dates.test.js` 新增 2 条（窗口只指向下一次、文案分段）；原有 7 条不变（`upcomingDates` 与旧行为一致）。
 - **文档**：README 日报节、`docs/extras.md`「重要日子提前提醒」。
+
+## 发布 0.9.18（2026-10-31）
+
+- **内容**：七项扩展 —— `/quiet` 临时静默（`da50556`）、提醒 `/snooze` 与 `/remind skip`（`a03599b`）、`/usage` 用量账单（`1e9f53d`）、`/habit` 习惯打卡（`d273052`）、`/media` 媒体归档（`5a21199`）、群内每人每日配额 `senderDailyLimit`（`2696a42`）、重要日子提前提醒 `dateReminderLeadDays`（`525086c`）；CHANGELOG `92238bf`。全量 **901/901**、`node bin/check.mjs` → `checked 203 files`。
+- **发布**：`e43ec1c chore(release): 0.9.18`；tag `v0.9.18` 指向 `e43ec1c`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v0.9.18 、profile `^0.9.17 → ^0.9.18` 且锁文件刷新。
+- **核验**：本地 tarball `shasum 14768e6ce83c4bba603ded24317d73bf77fbcfb1` = registry `dist.shasum`；`dist.integrity sha512-q5NixjAHILR1G/j1FmEcvr4tS8wvVpdGVMx1zPxOBnX7kg5AGz4oDwifNnkgcja0yK7c8ermCvMMFTNUspUTmw==`；`gitHead e43ec1c16545bbe9a753f42fbaf98a2493cd18ca`；`dist-tags.latest = 0.9.18`；`doctor` → `installed 0.9.18`、`host 0.2.1-rc.3/rc.5 (tested)`、`published up to date`。
+- **两个坑**：
+  1. 第一次 publish 的 web OTP 会话在等待时过期，`GET /-/v1/done?authId=…` 返回 `404`，脚本报 `npm publish failed`——**版本已 bump 但什么都没发出去**。重开一次 publish 拿新链接、授权成功，之后 `--finish` 才跑完（脚本第一次 `--finish` 还因为注册表尚未可见而拒绝，约一分钟后 `npm view` 才显示 0.9.18）。
+  2. CI（Node 24 那条腿）发现 `test/media-archive.test.js` 的真 flake：同一 tick 写入的三个文件 mtime 相同，`listInboundMedia` 只按时间排序时顺序随 `readdir` 变化，Linux 上 `resend 1` 拿到的不是 `report.pdf`。修法：排序加名字作为 tie-breaker，并把测试的 mtime 固定；提交 `abbf3ae`，CI run `41182008158` 绿。
+- **兼容表**：仍以 `0.9.17 / 0.2.1-rc.5` 为最后真机验证行；0.9.18 装好未重启复核。
