@@ -1553,6 +1553,52 @@ window.__ModuleLoader__.load({
 						createElement("button", { onClick: importPack, disabled: busy || packText.trim() === "", style: buttonStyleFor(busy || packText.trim() === "") }, t("Import pack", "导入人设包"))),
 					createElement("textarea", { value: packText, onChange: (e) => setPackText(e.target.value), placeholder: t("Export above, or paste a pack here and press Import.", "先点导出，或把要导入的人设包粘贴到这里再点导入。"), style: { ...textareaStyle, minHeight: 64 } }),
 					createElement("p", { style: captionStyle }, t("A pack carries your custom modes only. Importing adds modes; it never overwrites one you already have.", "人设包只包含自定义模式。导入只新增，不会覆盖已有的模式。"))),
+				// Remote pack index: the operator points packsIndexUrl at a JSON
+				// list; fetching is manual (a button, not on mount) so merely
+				// opening the tab never phones a third-party host.
+				(() => {
+					const [index, setIndex] = react.useState(null);
+					const [indexNotice, setIndexNotice] = react.useState("");
+					const [indexBusy, setIndexBusy] = react.useState(false);
+					const loadIndex = async () => {
+						setIndexBusy(true);
+						setIndexNotice("");
+						try {
+							const res = await callRemote(() => ctx.remote.weixin.packIndex());
+							if (res?.available !== true) { setIndexNotice(t("Set packsIndexUrl in Options first.", "先在「配置项」里填 packsIndexUrl。")); setIndex(null); }
+							else { setIndex(res); }
+						} catch (e) { setIndexNotice(String(e?.message ?? e)); } finally { setIndexBusy(false); }
+					};
+					const installOne = async (pack) => {
+						setIndexBusy(true);
+						setIndexNotice("");
+						try {
+							await callRemote(() => ctx.remote.weixin.packInstallRemote({ url: pack.url }));
+							setIndexNotice(t(`Installed “${pack.name}”.`, `已安装「${pack.name}」。`));
+							await load();
+						} catch (e) { setIndexNotice(String(e?.message ?? e)); } finally { setIndexBusy(false); }
+					};
+					return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
+						createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+							createElement("button", { onClick: loadIndex, disabled: indexBusy, style: buttonStyleFor(indexBusy) },
+								indexBusy ? t("Loading…", "读取中…") : t("Load pack index", "获取模板索引")),
+							indexNotice ? createElement("span", { style: { ...captionStyle, flex: "1 1 auto" } }, indexNotice) : null),
+						index ? (index.packs.length === 0
+							? createElement("p", { style: captionStyle }, t("The index is empty.", "索引是空的。"))
+							: index.packs.map((pack) => createElement("div", {
+								key: pack.url,
+								className: "weixin-row",
+								style: {
+									display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+									padding: "7px 10px", border: `1px solid ${C.border}`,
+									borderRadius: RADIUS.control, background: C.surfaceSunken,
+								},
+							},
+								createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary, flex: "0 0 auto" } }, pack.name),
+								createElement("span", { style: { fontSize: 12, color: C.labelSecondary, flex: "1 1 auto", overflowWrap: "anywhere" } }, pack.description || pack.url),
+								createElement("button", { onClick: () => installOne(pack), disabled: indexBusy, style: buttonStyleFor(indexBusy) },
+									t("Install", "安装"))))) : null);
+				})(),
 				editing !== null || draftName !== "" ? null : createElement("button", { onClick: () => { setEditing({ id: "" }); setDraftName(""); setDraftPrompt(""); }, disabled: busy, style: buttonStyleFor(busy) }, t("Add a mode", "新增模式")),
 				editing === null ? null : createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginTop: 8 } },
 					createElement("input", { value: draftName, onChange: (e) => setDraftName(e.target.value), placeholder: t("Mode name, e.g. 导师", "模式名称，如 导师"), style: inputStyle }),

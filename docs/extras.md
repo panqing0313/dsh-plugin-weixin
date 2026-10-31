@@ -505,3 +505,15 @@ allowlist 拒收是静默的，这是设计（deny-by-default）。但「静默�
 内容短（≤3000 字）就直接以文字回复；长就走 `/export` 同一条附件链路，落成 `exports/memory-<账号>-<会话>-<时间>.md`。空记忆也导 —— 文档里写「用 /remember 教我」，因为「它不知道什么」同样是这份文档要回答的。
 
 跨机迁移请用加密备份（`/memory export` 只是可读快照，不是恢复格式）。
+
+## 模板包远程索引：把 packs.indexUrl 指向一个 JSON（0.10.0）
+
+「个性化」页签的导入/导出下面多了一块**远程模板索引**。配置项里填一个 `packsIndexUrl`（https 的 JSON，形如 `{"packs":[{"name":"温柔女友","url":"https://…/gf.json","description":"…"}]}`），然后点 **获取模板索引** —— 索引里的每个包一行，**安装**按钮拉取该 URL 的包 JSON 并走与「导入人设包」完全相同的校验链路（格式、版本、白名单字段永不进包）。
+
+刻意的边界：
+
+- **手动获取**：打开页签不会自动去拉第三方地址，只有按按钮才会发请求（隐私优先）；
+- 只接受 https、单包上限 256KB、索引最多 50 条；
+- 校验只有一条代码路径 —— 远程安装最终调的是 `packImport`，没有第二套「信任远程」的逻辑。
+
+实现：`src/message/pack-index.js`（`normalizePackIndex` / `fetchPackJson`），远程方法 `packIndex` / `packInstallRemote`（`src/login-remote.js`），卡片面板在 PersonaSection（`src/client.card.js`）。索引文件你可以放在任何静态托管上，分享人设就是分享一个 URL。

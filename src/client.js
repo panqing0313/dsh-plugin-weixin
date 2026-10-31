@@ -280,6 +280,26 @@ window.__ModuleLoader__.load({
 					],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packImport:result`, create: _statusResult },
 				},
+				{
+					id: `${PKG}#weixin/packIndex`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packIndex",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packIndex:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/packInstallRemote`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packInstallRemote",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/packInstallRemote:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packInstallRemote:result`, create: _statusResult },
+				},
 
 				{
 					id: `${PKG}#weixin/personaOverview`,

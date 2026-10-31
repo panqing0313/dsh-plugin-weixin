@@ -303,6 +303,15 @@ export const FIELDS = [
       groupEn: "Persona & memory",
       fields: [
         {
+          path: "packsIndexUrl",
+          type: T.string,
+          default: "",
+          label: "模板包索引地址",
+          labelEn: "Pack index URL",
+          hint: "https 的 JSON：{\"packs\":[{\"name\",\"url\",\"description\"}]}。填了之后「个性化」页签会出现远程模板列表，可一键安装；留空 = 不显示。",
+          hintEn: "An https JSON: {\"packs\":[{\"name\",\"url\",\"description\"}]}. When set, the Persona tab lists the remote packs for one-click install; empty = hidden.",
+        },
+        {
           path: "personaDefaultMode",
           type: T.string,
           default: "default",

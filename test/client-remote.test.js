@@ -266,6 +266,8 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/outboxRetry',
         'weixin/packExport',
         'weixin/packImport',
+        'weixin/packIndex',
+        'weixin/packInstallRemote',
         'weixin/pause',
         'weixin/personaAccountDefaultSet',
         'weixin/personaDefaultSet',
@@ -913,4 +915,17 @@ test('the journal pages, searches and takes a drill-down focus from stats', () =
   assert.match(source, /createElement\(JournalSection, \{ ctx, t, focus: journalFocus, onClearFocus: \(\) => setJournalFocus\(null\) \}\)/)
   assert.match(source, /createElement\(StatsSection, \{ ctx, t, onOpenConversation: openInJournal \}\)/)
   assert.match(source, /setJournalFocus\(conversationId\)/)
+})
+
+test('the remote pack index is wired end to end, manually fetched', () => {
+  const remote = fs.readFileSync(new URL('../src/login-remote.js', import.meta.url), 'utf8')
+  assert.match(remote, /async packIndex\(\)/)
+  assert.match(remote, /async packInstallRemote\(options\)/)
+  // Installing rides the SAME validator as a pasted pack: no second code path.
+  assert.match(remote, /packImport\(\{ json: text \}\)/)
+  assert.match(remote, /"packExport", "packImport", "packIndex", "packInstallRemote"/)
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  assert.match(card, /ctx\.remote\.weixin\.packIndex\(\)/)
+  assert.match(card, /ctx\.remote\.weixin\.packInstallRemote\(\{ url: pack\.url \}\)/)
+  assert.match(card, /t\("Load pack index", "获取模板索引"\)/, 'fetching is a button, never on mount')
 })

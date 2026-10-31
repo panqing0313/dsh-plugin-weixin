@@ -3251,3 +3251,12 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - 新模块 `src/message/memory-export.js`：`renderMemoryMarkdown`（给什么画什么，空段不出章节）+ `writeMemoryExport`（复用 chat-export 的 exports 目录与命名习惯，前缀 `memory-`）。
 - 接线：`/memory` 模式从 `identity` 改为捕获 arg（`src/sessions.js`），`index.js` 的 memory handler 开头分流 `export|导出`；长文走 `resolveOutboundReply` 附件链路（与 /export 相同）。`help.memory` 文案更新（中英）。
 - 测试 `test/memory-export.test.js` 3 条（分层渲染、空记忆、文件命名）；全量 942/942。
+
+## 模板包远程索引（2026-11-01，0.10.0 第 5 项）
+
+- 新模块 `src/message/pack-index.js`：`normalizePackIndex`（只留 name/url/description/version；https-only、上限 50 条、坏条目 warn+跳过）、`fetchPackJson`（10s 超时、单包 256KB 上限、非 200 报状态码）。
+- 远程：`login-remote` 加 `packIndex`（读 `readSavedConfig().packsIndexUrl`，空 = `{available:false}`）与 `packInstallRemote`（拉 URL 后**复用 `packImport` 校验**）；client.js 补两条 descriptor；remoteMethods 注册。
+- 卡片：PersonaSection 导入/导出块下加「获取模板索引」面板 —— 手动按钮触发（挂载不拉第三方），列表行 hover，安装后 `load()` 刷新模式列表。
+- 配置：schema `packsIndexUrl` + 设置卡「个性化与记忆」组第一个字段。
+- 测试 `test/pack-index.test.js` 3 条 + `client-remote.test.js` 源码形状 1 条；旧断言「remote 方法清单」补两项。
+- 坑：加了新远程方法会同时惊动三处 —— `remoteMethods([...])`、client.js descriptor 表、`client-remote.test.js` 的期望清单；少一处就有测试跳出来，这正是那几条契约测试存在的意义。

@@ -804,6 +804,29 @@ export class WeixinLoginController extends TypertRemoteService {
         return result;
     }
 
+    /** The operator's pack index, normalized for the card. Empty url = feature off. */
+    async packIndex() {
+        const { normalizePackIndex, fetchPackJson } = await import("./message/pack-index.js");
+        const url = String(readSavedConfig().packsIndexUrl ?? "").trim();
+        if (url === "") return { available: false, url: "", packs: [] };
+        const text = await fetchPackJson(url, { warn: (line) => this.warn?.(line) }).catch((error) => {
+            throw new RemoteError("bad_index", String(error?.message ?? error), {});
+        });
+        const { packs } = normalizePackIndex(text, { warn: (line) => this.warn?.(line) });
+        return { available: true, url, packs };
+    }
+
+    /** Fetch one pack from its index url and import it through the same validator. */
+    async packInstallRemote(options) {
+        const url = String(options?.url ?? "").trim();
+        if (!/^https:\/\//.test(url)) throw new RemoteError("bad_url", "模板包地址必须是 https", {});
+        const { fetchPackJson } = await import("./message/pack-index.js");
+        const text = await fetchPackJson(url, { warn: (line) => this.warn?.(line) }).catch((error) => {
+            throw new RemoteError("bad_pack", String(error?.message ?? error), {});
+        });
+        return this.packImport({ json: text });
+    }
+
     async journalExport(options) {
         const opts = options ?? {};
         const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
@@ -1110,4 +1133,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
