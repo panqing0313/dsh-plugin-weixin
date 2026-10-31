@@ -837,3 +837,21 @@ test('/usage reports today without opening a session', async () => {
     assert.equal(sessionsOpened.length, 0, 'usage never needs the model')
   })
 })
+
+test('/habit lists and checks without opening a session', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/habit add 早起', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the add reply')
+    assert.match(fake.outbound[0].text, /开始追踪：早起/)
+
+    fake.deliver('/habit done 早起', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the check-in reply')
+    assert.match(fake.outbound[1].text, /打卡成功：早起 · 连续 1 天/)
+
+    fake.deliver('/habit', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the list reply')
+    assert.match(fake.outbound[2].text, /习惯 · 今天 1\/1/)
+
+    assert.equal(sessionsOpened.length, 0, 'habits never need the model')
+  })
+})

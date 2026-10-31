@@ -83,6 +83,7 @@ import { datesOnThisDay, buildDateReminderText, dateReminderDue, markDateReminde
 import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
+import { createHabitCommands, habitDigestLine, habitsList } from './message/habits.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -769,7 +770,8 @@ export function apply(ctx, config) {
             const global = readGlobalMemory(stateRoot, accountId, { warn })
             const events = (global.events ?? []).filter((event) => event.done !== true)
             const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
-            prompt = buildDigestPrompt({ day, total, conversations, events, summary: conv.summary })
+            const habits = habitDigestLine(habitsList(stateRoot, accountId, { warn }))
+            prompt = buildDigestPrompt({ day, total, conversations, events, summary: conv.summary, ...(habits === '' ? {} : { habits }) })
           }
 
           const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute('report') })
@@ -1792,6 +1794,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       },
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
+      ...createHabitCommands({ stateRoot, accountId, warn }),
       ...createReadingCommands({ stateRoot, accountId, warn }),
       ...createSendCommands({
         conversationId,

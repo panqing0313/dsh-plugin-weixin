@@ -53,7 +53,7 @@ export function pickConversation(conversations) {
  * The digest prompt. Numbers first, exactly as measured, and the model's job is
  * only the framing — a report that hallucinates a busy day is worse than none.
  */
-export function buildDigestPrompt({ accountLabel = '', day, total, conversations, events, summary }) {
+export function buildDigestPrompt({ accountLabel = '', day, total, conversations, events, summary, habits = '' }) {
   const lines = []
   lines.push(`现在是 ${day} 的晚上。请给主人写一条当天的简报，语气自然、像助理发的一条微信。`)
   lines.push('')
@@ -68,6 +68,9 @@ export function buildDigestPrompt({ accountLabel = '', day, total, conversations
   }
   if (typeof summary === 'string' && summary !== '') {
     lines.push(`- 这段会话的摘要：${summary}`)
+  }
+  if (typeof habits === 'string' && habits !== '') {
+    lines.push(`- ${habits}`)
   }
   lines.push('')
   lines.push('【要求】')

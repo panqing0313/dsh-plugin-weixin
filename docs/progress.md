@@ -3050,3 +3050,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **明确的口径**：token 是「正文粗估」，不含系统提示词/工具结果/历史；预算为 0 说「未设上限」而不是除零；用完时补一行「停到明天零点重置」。
 - **测试**：`test/usage.test.js` 4 条（完整一天、无预算无开口、预算用完、摘要行）；`test/session-commands.test.js` 端到端 1 条（不开会话）。
 - **文档**：README 命令表、`docs/extras.md`「`/usage`：今天花了什么」。
+
+### ④ 习惯打卡 `/habit`（`src/message/habits.js`）
+
+- **为什么**：提醒只负责喊，做了没有没人记；「连续几天」这种正反馈是坚持的动力。
+- **做成什么**：`addHabit / checkHabit / removeHabit / habitsList`（`habits.json` 按账号、原子写、上限 20、同日重复打卡明确拒绝）；`streakOf` 从今天（或昨天）往回数，`bestStreakOf` 扫历史，`weekCount` 数最近 7 天；`formatHabits` 与 `habitDigestLine`（一行进日报）。
+- **命令**：`/habit`、`/habit add|done|rm <名字或序号>`；不调模型、不开会话。
+- **测试**：`test/habits.test.js` 9 条（新增/重复/空名、20 上限、同日重复、连续与断点、最长连续与本周、本地日期、列表文案、命令分支）；`test/session-commands.test.js` 端到端 1 条。
+- **文档**：README 命令表、`docs/extras.md`「习惯打卡」。
