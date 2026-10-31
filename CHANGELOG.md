@@ -5,6 +5,8 @@
 
 ## 版本
 
+- **0.9.16** —— **一行修正，把 0.9.15 的 OCR 定时器补完整**：`src/media/ocr.js` 的超时定时器不再 `unref()`。`unref()` 的定时器不撑事件循环，一旦子进程没有可观察的句柄（例如异常退出路径或测试替身），事件循环会先空而 promise 永不 settle —— Node 22 直接报 `Promise resolution is still pending but the event loop has already resolved`。定时器本来就由 `finish()` 清除、且有 `timeoutMs` 上限，去掉 `unref` 不会拖住进程。真实 OCR 子进程会撑住事件循环，所以 0.9.15 的实际影响很小；这版只是让代码与测试在 Node 22 上完全一致。测试仍是 848 条。
+
 - **0.9.15** —— **六项扩展：能读到的读到，该设限的设限**：
   - PDF 正文：装了可选依赖 `pdfjs-dist` 就把 PDF 文字抽进这一回合；没装只给路径并在日志说明，不假装支持
   - 引用消息：`refermsg` 解出被引用的原文与发送者，拼进提示；解不出的仍进审计，不阻塞回复
