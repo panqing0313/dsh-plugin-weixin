@@ -53,6 +53,7 @@ import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { recordStranger } from './message/strangers.js'
+import { keywordGate, parseKeywordRules } from './message/keyword-reply.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -259,6 +260,7 @@ export const Config = z.object({
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
+  groupKeywords: z.string().default('').description('群关键词自动回复，每行一条：正则 => 回复。例如「^打卡$ => 打卡成功」。只在群里、只对白名单内的人生效；同一群同一条规则 60 秒内最多应一次；免打扰时段沉默。回复是模板，不走模型。'),
   groupShareMemory: z.boolean().default(false).description('把长期记忆、回忆片段和亲密度行也注入群回复。默认关闭：那些块里是主人自己的私事。'),
   videoFrames: z.boolean().default(true).description('收到视频时用本机 ffmpeg 抽几帧静图交给模型（模型读不了视频，但能看图）。需要的机器上装了 ffmpeg；抽帧失败只影响那一条视频的内容理解，文件照常保存。'),
   richContent: z.boolean().default(true).description('富内容：长代码块作为文件附件发出、Markdown 表格转成对齐文本。微信只有纯文本气泡，这两处是 Markdown 里最容易在纯文本里变形的东西。'),
@@ -521,6 +523,9 @@ export function apply(ctx, config) {
     let senderLimiter
     /** Set in apply(); bringUpLoop() is a different function and grows its own closure. */
     let senderDailyLimiterFor = () => undefined
+    // Same reachability trick: the inbound handler lives where the setup
+    // scope's quietGate is out of reach, so the gate travels through a cell.
+    let quietGateFor = (now, _accountId) => 0
     // C20: declared here (not inside setup) because bringUpAccount, which is a
     // sibling of setup(), hands it to createInboundHandler.
     let sideRoute = () => undefined
@@ -708,6 +713,7 @@ export function apply(ctx, config) {
         quietDelay(now, withSavedConfig(config)),
         tempQuietDelay(now, stateRoot, accountId, { warn }),
       )
+      quietGateFor = quietGate
 
       // Retention: state grows all day; a nightly sweep keeps it bounded. It
       // runs once shortly after start (a laptop is not up at 03:00) and then
@@ -1243,6 +1249,7 @@ export function apply(ctx, config) {
         // C20: side sessions (/\summary, subscriptions, proactive) use the
         // background route; the conversation keeps the chat route.
         sideRoute,
+        quietGate: quietGateFor,
       })
 
       const previous = transports.get(account.accountId)
@@ -1512,7 +1519,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, senderDailyGate, sideRoute }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, senderDailyGate, sideRoute, quietGate }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list.
   // `accountId` is always set here (bringUpAccount passes it), but the
@@ -1895,6 +1902,24 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       ],
     })
     if (groupDecision.reply === false) {
+      // 1a-ter. Group keyword auto-reply: the third group policy. It lives in
+      // the declined branch (mention/all did not fire), still inside the group
+      // gate, only for allowlisted senders, and it sends a template — no model
+      // turn, no memory, no tools. Quiet hours silence it like proactive.
+      const keywordRules = parseKeywordRules(String(effectiveConfig.current.groupKeywords ?? ''), { warn })
+      const quietMs = typeof quietGate === 'function' ? quietGate(Date.now(), accountId) : 0
+      const keyword = isAllowedSender(effectiveConfig.current, message.senderId, message.conversationId) && quietMs === 0
+        ? keywordGate(keywordRules, message.text ?? '', message.conversationId)
+        : null
+      if (keyword !== null) {
+        metrics?.inc('group.keyword', 1)
+        await sendChunked(transport, config, {
+          conversationId: message.conversationId,
+          text: keyword.reply,
+          contextToken: message.contextToken,
+        })
+        return
+      }
       hooks?.emit(HOOK_POINTS.inboundRefused, {
         accountId,
         conversationId: message.conversationId,

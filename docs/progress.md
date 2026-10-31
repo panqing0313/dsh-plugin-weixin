@@ -3238,3 +3238,10 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - 服务端：`readJournal` 加 `before`（严格小于的游标）；`login-remote.journal` 透传 `before` 与 `conversationId`。
 - 卡片：`JournalSection` 增加 `fetchPage(extra)` 统一取数、`loadMore()` 向前翻页（返回不足 200 即封底）、搜索框（客户端过滤已加载窗口）、会话聚焦 chip；`StatsSection` 会话行可点，`WeixinSettingsCard` 持有 `journalFocus` 并在 TABS 之前声明（`openInJournal` 闭包引用 TABS，调用时已初始化，无 TDZ 问题）。
 - 测试：`journal.test.js` 加 before/会话/组合过滤 1 条；`client-remote.test.js` 源码形状 1 条；两条旧断言随签名更新（`journal({limit:200})` → 带 focus/extras 的形状）。全量 936/936。
+
+## 群关键词自动回复（2026-11-01，0.10.0 第 3 项）
+
+- 新模块 `src/message/keyword-reply.js`：`parseKeywordRules`（宽容解析 `正则 => 回复`，坏行 warn+跳过，上限 50 条）、`matchKeywordReply`（行序优先）、`keywordGate`（会话×规则 60 秒冷却，进程内 Map，超 512 键清空）、`resetKeywordCooldowns`（测试）。
+- 接线：`groupDecision.reply === false` 分支（mention/all 都没命中时）先试关键词 —— 闸门：`isAllowedSender` + `quietGate === 0`；命中就 `sendChunked` 发模板并 `return`，`metrics.inc('group.keyword')`，否则照旧走 refused 钩子。`quietGate` 通过模块级 cell `quietGateFor` 传进 handler（与 `senderDailyLimiterFor` 同一招，setup 作用域够不到 handler 构造处）。
+- 配置：schema `groupKeywords`（T.text，设置卡群聊组，`config-remote.test.js` 的表单↔schema 双向覆盖自动生效）。
+- 测试 `test/keyword-reply.test.js` 3 条；全量 939/939。
