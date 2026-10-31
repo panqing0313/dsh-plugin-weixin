@@ -415,15 +415,17 @@ test('the active line is marked, and only it', async () => {
   const { hooks } = await mountCard({ remote })
   await openTab(hooks, '会话')
   const tree = await await hooks.flush()
-  const marks = []
-  walk(tree, (node) => {
-    for (const child of node.children ?? []) {
-      if (child === '▶') marks.push(child)
-    }
-  })
-  // One active line per conversation, and there are two conversations.
-  assert.equal(marks.length, 2, `expected one ▶ per conversation, saw ${marks.length}`)
-  assert.match(textOf(tree), /使用中/)
+  // The active line is marked twice over: a live status dot whose tone is keyed
+  // on `isActive`, and the 「使用中」 badge. One of each per conversation, and
+  // there are two conversations.
+  const source = fs.readFileSync(path.join(HERE, '..', 'src', 'client.card.js'), 'utf8')
+  assert.match(
+    source,
+    /createElement\(PulseDot, \{ tone: isActive \? "ok" : "idle", size: 7 \}\)/,
+    'the active line must be marked by the live dot, not by a text glyph',
+  )
+  const marks = textOf(tree).match(/使用中/g) ?? []
+  assert.equal(marks.length, 2, `expected one 「使用中」 per conversation, saw ${marks.length}`)
 })
 
 test('the active line cannot be switched to (no button), older lines can', async () => {

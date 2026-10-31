@@ -438,3 +438,18 @@ x-weixin-signature: sha256=<hex>        # 配置了 webhookSecret 才有
 配色全部取宿主主题 token：收到的气泡用 `surfaceSunken` + `border`，发出的用 `primaryFill` + `onPrimary`，所以明暗主题都跟着走，没有写死颜色。
 
 实现上只有一处数据变化：`journal` 远程调用从 `limit: 50` 改成 200（返回的仍是 `{at, dir, accountId, senderId, text}` 数组，没有新字段、没有新状态）。测试是源码形状断言（`test/client-remote.test.js`），因为卡片是宿主渲染的，跑不了 DOM。
+
+## 卡片界面：颜色、动效、进度（0.9.21）
+
+设置卡此前只有一块「能用」的界面：九页签是九个纯文字按钮，状态只有一个点，进度只有语音模型下载那一条。这次补的是一层**共用的设计层**，而不是逐处调样式：
+
+- **一块自带的样式表**（`STYLE_ID = "dsh-weixin-card-styles"`）：卡片是懒加载 chunk，宿主不提供 CSS 通道，所以 chunk 首次渲染时注入一次 `<style>`，定义 `wx-fade-in / wx-pulse / wx-spin / wx-sweep` 四组 keyframes 与 `.weixin-tab`（hover/focus-visible）、`.weixin-row`（hover）、`.weixin-card-enter`（切页签入场）、`.weixin-indeterminate`（不确定进度扫光）。`typeof document === "undefined"` 时直接跳过 —— 测试用的 stub 环境没有 DOM，不能因为「美化」把测试弄崩。末尾 `@media (prefers-reduced-motion: reduce)` 关掉所有动画。
+- **一组原语**：`Spinner`（旋转弧，可指定尺寸/颜色）、`PulseDot`（呼吸点，ok/warn/danger/idle 四色）、`Progress`（有数字走宽度过渡、没数字走扫光）、`Badge`（五档色调的小胶囊）、`StatTile`（数字卡）、`EmptyState`（空态）、`TabIcon`（九个页签各一枚 15px 内联 SVG）。
+- **九页签加了图标**，选中态是「浅底 + 品牌色下划线 + 加粗」，hover 有过渡；内容区按页签 id 重新挂载，所以切页签会重放一次 0.22s 的入场动画。
+- **登录页**：状态行从「一个点 + 一行字」变成按状态着色的横幅（成功/待处理/失败各有底色与描边），账号 id 与「需要处理」改成 `Badge`。
+- **会话页**：每行前是 `PulseDot`（使用中为绿色呼吸），「使用中」变成 `Badge`，行有 hover 过渡。
+- **提醒页**：每条提醒是一张小卡，左侧点在一小时内变琥珀色，第二行是「时间 · N 小时后」，空列表用 `EmptyState`。**这里刻意不画进度条** —— 提醒只有到期时刻、没有开始时刻，画百分比就是编数据。
+- **关于页**：「版本」一行变成三张 `StatTile`（已安装 / 包名 / 更新状态），检查更新时按钮前出现 `Spinner`。
+- **修掉一个真 bug**：页签下划线此前用 `C.stateOk`，这个 token 不存在（主题里叫 `success`），所以选中下划线一直是透明的；统一改成 `C.brand`。
+
+所有颜色都来自主题 token，明暗主题自动跟随；没有引入任何依赖，也没有写死颜色值（唯一的例外是二维码白底，那是扫码可靠性要求）。

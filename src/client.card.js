@@ -59,6 +59,253 @@ window.__ModuleLoader__.load({
 				pickDirectory,
 			} = deps;
 
+			//#region design layer
+			/**
+			 * The card's own stylesheet.
+			 *
+			 * Inline styles can express layout but not keyframes, hover or focus;
+			 * the host's tokens stop at colours. Everything here is additive and
+			 * namespaced, and the whole block is guarded because the card is also
+			 * imported by the test stub, which has no `document`.
+			 */
+			const STYLE_ID = "dsh-weixin-card-styles";
+			const STYLE_TEXT = `
+@keyframes wx-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes wx-pulse { 0%, 100% { opacity: .9; transform: scale(1); } 50% { opacity: .35; transform: scale(.72); } }
+@keyframes wx-spin { to { transform: rotate(360deg); } }
+@keyframes wx-sweep { from { background-position: -160% 0; } to { background-position: 260% 0; } }
+@keyframes wx-shimmer { from { opacity: .45; } to { opacity: 1; } }
+.weixin-card-enter { animation: wx-fade-in .22s ease-out both; }
+.weixin-tab { transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .15s ease; }
+.weixin-tab:hover { background: rgba(127, 127, 127, .12); }
+.weixin-tab:active { transform: scale(.97); }
+.weixin-tab:focus-visible { outline: 2px solid ${C.brand}; outline-offset: 2px; }
+.weixin-row { transition: background-color .15s ease, border-color .15s ease; }
+.weixin-row:hover { background: rgba(127, 127, 127, .08); }
+.weixin-lift { transition: box-shadow .18s ease, transform .18s ease; }
+.weixin-lift:hover { box-shadow: 0 8px 22px rgba(0, 0, 0, .12); transform: translateY(-1px); }
+.weixin-indeterminate {
+	background-image: linear-gradient(90deg, transparent, ${C.brand}, transparent);
+	background-size: 220% 100%;
+	animation: wx-sweep 1.25s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.weixin-card-enter, .weixin-indeterminate { animation: none !important; }
+	.weixin-lift, .weixin-tab, .weixin-row { transition: none !important; }
+}
+`;
+			function ensureCardStyles() {
+				if (typeof document === "undefined" || document === null) return;
+				if (typeof document.getElementById === "function" && document.getElementById(STYLE_ID) !== null) return;
+				const host = document.head ?? document.body ?? document.documentElement;
+				if (host === null || host === undefined || typeof host.appendChild !== "function") return;
+				const style = document.createElement("style");
+				style.id = STYLE_ID;
+				style.textContent = STYLE_TEXT;
+				host.appendChild(style);
+			}
+
+			const reducedMotion = () =>
+				typeof window === "object" && window !== null && typeof window.matchMedia === "function"
+					? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+					: false;
+
+			/** A small rotating arc; the only moving part of a busy state. */
+			function Spinner({ size = 14, color = C.brand }) {
+				return createElement("span", {
+					"aria-hidden": "true",
+					style: {
+						display: "inline-block",
+						flex: "0 0 auto",
+						width: size,
+						height: size,
+						borderRadius: "50%",
+						border: `2px solid ${C.border}`,
+						borderTopColor: color,
+						animation: reducedMotion() ? "none" : "wx-spin .8s linear infinite",
+					},
+				});
+			}
+
+			/** A dot that breathes while the thing it describes is live. */
+			function PulseDot({ tone = "ok", size = 8 }) {
+				const color = tone === "ok" ? C.success : tone === "warn" ? C.warn : tone === "danger" ? C.danger : C.idle;
+				return createElement("span", {
+						"aria-hidden": "true",
+						style: { position: "relative", display: "inline-block", flex: "0 0 auto", width: size, height: size },
+					},
+					createElement("span", {
+						style: {
+							position: "absolute",
+							inset: 0,
+							borderRadius: "50%",
+							background: color,
+							opacity: 0.28,
+							animation: reducedMotion() ? "none" : "wx-pulse 1.9s ease-in-out infinite",
+						},
+					}),
+					createElement("span", {
+						style: { position: "absolute", inset: size / 4, borderRadius: "50%", background: color },
+					}));
+			}
+
+			/**
+			 * A determinate bar when the caller knows the fraction, an animated
+			 * sweep when it does not — never a fake percentage.
+			 */
+			function Progress({ value, height = 6, tone = "brand" }) {
+				const color = tone === "ok" ? C.success : tone === "warn" ? C.warn : tone === "danger" ? C.danger : C.brand;
+				// Deliberately not built from the shared track token: its one use
+				// belongs to the ASR download bar, whose guard the client test
+				// pins to the measured percentage.
+				const track = {
+					position: "relative",
+					width: "100%",
+					height,
+					borderRadius: RADIUS.pill,
+					overflow: "hidden",
+					background: C.surfaceSunken,
+				};
+				if (typeof value === "number" && Number.isFinite(value)) {
+					const pct = Math.max(0, Math.min(100, value));
+					return createElement("div", {
+							role: "progressbar",
+							"aria-valuenow": Math.round(pct),
+							"aria-valuemin": 0,
+							"aria-valuemax": 100,
+							style: track,
+						},
+						createElement("div", {
+							style: {
+								...progressFillStyle,
+								height: "100%",
+								width: `${pct}%`,
+								borderRadius: RADIUS.pill,
+								background: color,
+								transition: "width .35s ease",
+							},
+						}));
+				}
+				return createElement("div", { role: "progressbar", style: track },
+					createElement("div", {
+						className: "weixin-indeterminate",
+						style: { height: "100%", width: "45%", borderRadius: RADIUS.pill },
+					}));
+			}
+
+			function Badge({ text, tone = "neutral" }) {
+				const tones = {
+					ok: [C.successSubtle, C.success],
+					warn: [C.warnSubtle, C.warn],
+					danger: [C.surfaceSunken, C.danger],
+					brand: [C.surfaceSunken, C.brand],
+					neutral: [C.surfaceSunken, C.labelSecondary],
+				};
+				const [background, color] = tones[tone] ?? tones.neutral;
+				return createElement("span", {
+					style: {
+						display: "inline-flex",
+						alignItems: "center",
+						gap: 4,
+						padding: "1px 8px",
+						borderRadius: RADIUS.pill,
+						background,
+						color,
+						fontSize: 11,
+						lineHeight: "18px",
+						fontWeight: 500,
+						whiteSpace: "nowrap",
+					},
+				}, text);
+			}
+
+			/** One number with its label: the shape every summary row wants. */
+			function StatTile({ label, value, hint, tone = "neutral" }) {
+				const color = tone === "ok" ? C.success : tone === "warn" ? C.warn : tone === "danger" ? C.danger : C.labelPrimary;
+				return createElement("div", {
+						className: "weixin-lift",
+						style: {
+							display: "flex",
+							flexDirection: "column",
+							gap: 2,
+							padding: "9px 11px",
+							borderRadius: RADIUS.control,
+							border: `1px solid ${C.border}`,
+							background: C.surfaceSunken,
+							minWidth: 84,
+							flex: "1 1 84px",
+						},
+					},
+					createElement("span", { style: { fontSize: 11, lineHeight: "16px", color: C.labelTertiary } }, label),
+					createElement("span", { style: { fontSize: 18, lineHeight: "24px", fontWeight: 650, color } }, value),
+					hint ? createElement("span", { style: { fontSize: 11, lineHeight: "15px", color: C.labelTertiary } }, hint) : null);
+			}
+
+			function EmptyState({ text }) {
+				return createElement("div", {
+					style: {
+						padding: "26px 12px",
+						textAlign: "center",
+						color: C.labelTertiary,
+						fontSize: 12,
+						lineHeight: "20px",
+						border: `1px dashed ${C.border}`,
+						borderRadius: RADIUS.control,
+					},
+				}, text);
+			}
+
+			/** Tab glyphs: 15px strokes, no icon font, no dependency. */
+			function TabIcon({ id, active }) {
+				const stroke = active ? C.brand : C.labelTertiary;
+				const common = {
+					width: 15,
+					height: 15,
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke,
+					strokeWidth: 1.9,
+					strokeLinecap: "round",
+					strokeLinejoin: "round",
+					"aria-hidden": "true",
+					style: { flex: "0 0 auto", display: "block" },
+				};
+				const shapes = {
+					account: [createElement("circle", { key: "h", cx: 12, cy: 8, r: 4 }), createElement("path", { key: "b", d: "M4.5 20a7.5 7.5 0 0 1 15 0" })],
+					sessions: [createElement("path", { key: "b", d: "M21 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 3v-5.2A7.5 7.5 0 0 1 11.5 4h2A7.5 7.5 0 0 1 21 11.5Z" })],
+					options: [
+						createElement("path", { key: "a", d: "M4 7h9M17 7h3" }),
+						createElement("circle", { key: "b", cx: 15, cy: 7, r: 2 }),
+						createElement("path", { key: "c", d: "M4 17h3M11 17h9" }),
+						createElement("circle", { key: "d", cx: 9, cy: 17, r: 2 }),
+					],
+					voice: [
+						createElement("rect", { key: "a", x: 9, y: 3, width: 6, height: 11, rx: 3 }),
+						createElement("path", { key: "b", d: "M5 11a7 7 0 0 0 14 0M12 18v3" }),
+					],
+					journal: [
+						createElement("rect", { key: "a", x: 4, y: 4, width: 16, height: 16, rx: 3 }),
+						createElement("path", { key: "b", d: "M8 9h8M8 13h8M8 17h5" }),
+					],
+					stats: [
+						createElement("path", { key: "a", d: "M5 20V11M12 20V5M19 20v-6" }),
+					],
+					reminders: [
+						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
+						createElement("path", { key: "b", d: "M12 8v4.2l3 1.8" }),
+					],
+					persona: [
+						createElement("path", { key: "a", d: "M12 3.5 13.9 9l5.6 1.9-5.6 1.9L12 18.5l-1.9-5.7L4.5 10.9 10.1 9 12 3.5Z" }),
+					],
+					about: [
+						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
+						createElement("path", { key: "b", d: "M12 11v5M12 8h.01" }),
+					],
+				};
+				return createElement("svg", common, ...(shapes[id] ?? shapes.about));
+			}
+			//#endregion design layer
+
 		function LoginSection({ ctx, t }) {
 			const [state, setState] = react.useState({ phase: "idle" }); // idle|qr|needcode|confirmed|failed|blocked
 			const [qrUrl, setQrUrl] = react.useState(null);
@@ -498,14 +745,26 @@ window.__ModuleLoader__.load({
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 
 				//#region status
-				createElement("div", { style: { display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" } },
-					createElement("span", { style: dotStyle(statusKind) }),
-					createElement("span", { style: { fontSize: 14, fontWeight: 500, color: C.labelPrimary } }, statusText),
+				createElement("div", {
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: 10,
+							flexWrap: "wrap",
+							padding: "10px 12px",
+							borderRadius: RADIUS.control,
+							border: `1px solid ${statusKind === "ok" ? C.success : statusKind === "warn" ? C.warn : statusKind === "bad" ? C.danger : C.border}`,
+							background: statusKind === "ok" ? C.successSubtle : statusKind === "warn" ? C.warnSubtle : C.surfaceSunken,
+						},
+					},
+					createElement(PulseDot, {
+						tone: statusKind === "ok" ? "ok" : statusKind === "warn" ? "warn" : statusKind === "bad" ? "danger" : "idle",
+					}),
+					createElement("span", { style: { fontSize: 14, fontWeight: 600, color: C.labelPrimary } }, statusText),
 					bound
-						? createElement("span", { style: { fontSize: 13, color: C.labelSecondary } },
-								accounts.map((a) => a.accountId).join(", "))
+						? createElement(Badge, { text: accounts.map((a) => a.accountId).join(", "), tone: "neutral" })
 						: null,
-					sessionExpired ? createElement("span", { style: pillStyle("bad") }, t("action needed", "需要处理")) : null),
+					sessionExpired ? createElement(Badge, { text: t("action needed", "需要处理"), tone: "danger" }) : null),
 				//#endregion status
 
 				// One row per bound account: identity, liveness, controls.
@@ -741,11 +1000,25 @@ window.__ModuleLoader__.load({
 						"「会话」页签可给一个微信会话挂多条 DSH 会话（/new、/list、/use）；需要安静时在「微信账号」页签暂停该账号。")),
 				]),
 				row(t("Version", "版本"), [
-					createElement("div", { key: "v", style: { display: "flex", alignItems: "center", gap: 8 } },
-						createElement("span", { style: versionPill }, `v${PLUGIN_VERSION}`),
-						createElement("span", { style: hintStyle }, PKG)),
+					createElement("div", { key: "tiles", style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+						createElement(StatTile, { label: t("Installed", "已安装"), value: `v${PLUGIN_VERSION}` }),
+						createElement(StatTile, { label: t("Package", "包名"), value: PKG }),
+						createElement(StatTile, {
+							label: t("Update", "更新"),
+							value: checkState === "busy"
+								? "…"
+								: checkState === "outdated"
+									? t("newer", "有新版本")
+									: checkState === "latest"
+										? t("latest", "最新")
+										: checkState === "error"
+											? t("unknown", "未知")
+											: "—",
+							tone: checkState === "latest" ? "ok" : checkState === "outdated" ? "warn" : checkState === "error" ? "danger" : "neutral",
+						})),
 					createElement("div", { key: "b", style: { display: "flex", alignItems: "center", gap: 10 } },
 						createElement("button", { onClick: checkUpdate, disabled: checkState === "busy", style: buttonStyleFor(checkState === "busy") },
+							checkState === "busy" ? createElement(Spinner, { size: 12 }) : null,
 							checkState === "busy" ? t("Checking…", "检查中…") : t("Check for updates", "检查更新")),
 						notice ? createElement("span", { style: captionStyle }, notice) : null),
 				]),
@@ -892,15 +1165,16 @@ window.__ModuleLoader__.load({
 							const isActive = line.sessionId === conversation.active;
 							return createElement("div", {
 									key: line.sessionId,
+									className: "weixin-row",
 									style: {
-										display: "flex", alignItems: "center", gap: 8,
-										padding: "7px 10px",
+										display: "flex", alignItems: "center", gap: 9,
+										padding: "8px 11px",
 										border: `1px solid ${isActive ? C.brand : C.border}`,
 										borderRadius: RADIUS.control,
 										background: isActive ? C.surface : C.surfaceSunken,
 									},
 								},
-								createElement("span", { style: { flex: "0 0 auto", color: isActive ? C.brand : C.idle } }, isActive ? "▶" : "·"),
+								createElement(PulseDot, { tone: isActive ? "ok" : "idle", size: 7 }),
 								createElement("span", {
 										style: {
 											flex: "1 1 auto", minWidth: 0,
@@ -910,7 +1184,7 @@ window.__ModuleLoader__.load({
 									},
 									`${index + 1}. ${line.title || t("(no messages yet)", "（尚无对话）")}`),
 								isActive
-									? createElement("span", { style: { flex: "0 0 auto", fontSize: 12, color: C.brand } }, t("in use", "使用中"))
+									? createElement(Badge, { text: t("in use", "使用中"), tone: "brand" })
 									: createElement("span", { style: { flex: "0 0 auto" } },
 										createElement("button", {
 											onClick: () => pick(conversation.conversationId, index),
@@ -1017,20 +1291,53 @@ window.__ModuleLoader__.load({
 						createElement("span", null, error)));
 			}
 
-			const rows = (entries ?? []).map((entry) => createElement("div", {
-				key: entry.id,
-				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
-			},
-				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, timeOf(entry.fireAt)),
-				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, entry.text),
-				createElement("button", { onClick: () => cancelOne(entry.id), disabled: busy, style: buttonStyleFor(busy) },
-					t("Cancel", "取消"))));
+			// How long until a reminder fires, in words. The card never draws a
+			// percentage it cannot place on a timeline: a reminder carries a due
+			// instant, not a start, so a bar here would be invented.
+			const untilText = (fireAt) => {
+				const left = Number(fireAt) - Date.now();
+				if (!Number.isFinite(left)) return "";
+				if (left <= 0) return t("due now", "已到点");
+				const minutes = Math.round(left / 60000);
+				if (minutes < 60) return t(`in ${minutes} min`, `${minutes} 分钟后`);
+				const hours = Math.floor(minutes / 60);
+				const rest = minutes % 60;
+				if (hours < 24) return rest === 0
+					? t(`in ${hours} h`, `${hours} 小时后`)
+					: t(`in ${hours} h ${rest} min`, `${hours} 小时 ${rest} 分后`);
+				return t(`in ${Math.round(hours / 24)} d`, `${Math.round(hours / 24)} 天后`);
+			};
+
+			const rows = (entries ?? []).map((entry) => {
+				const left = Number(entry.fireAt) - Date.now();
+				const soon = Number.isFinite(left) && left > 0 && left <= 3600000;
+				return createElement("div", {
+					key: entry.id,
+					className: "weixin-row",
+					style: {
+						display: "flex",
+						gap: 10,
+						padding: "9px 11px",
+						borderRadius: RADIUS.control,
+						border: `1px solid ${C.border}`,
+						background: C.surfaceSunken,
+						alignItems: "center",
+					},
+				},
+					createElement(PulseDot, { tone: soon ? "warn" : "brand", size: 7 }),
+					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 1, flex: "1 1 auto", minWidth: 0 } },
+						createElement("span", { style: { fontSize: 12.5, lineHeight: "18px", color: C.labelPrimary, overflowWrap: "anywhere" } }, entry.text),
+						createElement("span", { style: { fontSize: 11, lineHeight: "16px", color: C.labelTertiary } }, `${timeOf(entry.fireAt)} · ${untilText(entry.fireAt)}`)),
+					createElement("button", { onClick: () => cancelOne(entry.id), disabled: busy, style: buttonStyleFor(busy) },
+						t("Cancel", "取消")));
+			});
 
 			return createElement("div", { style: panelStyle }, head,
 				notice ? createElement("p", { style: hintStyle }, notice) : null,
 				rows.length === 0 && !notice
-					? createElement("p", { style: hintStyle },
-						t("No pending reminders. Schedule one from WeChat: /remind 10m stand-up", "还没有待发提醒。在微信里安排：/remind 10m 例会"))
+					? createElement(EmptyState, {
+						text: t("No pending reminders. Schedule one from WeChat: /remind 10m stand-up", "还没有待发提醒。在微信里安排：/remind 10m 例会"),
+					})
 					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, rows),
 				rows.length === 0 ? null : createElement("p", { style: captionStyle },
 					t("Scheduled from WeChat with /remind; cancels here take effect at once.",
@@ -2329,7 +2636,7 @@ window.__ModuleLoader__.load({
 										gap: 9,
 										padding: "7px 10px",
 										borderRadius: RADIUS.control,
-										border: `1px solid ${source === choice.id ? C.stateOk : C.border}`,
+										border: `1px solid ${source === choice.id ? C.brand : C.border}`,
 										background: source === choice.id ? C.bgLayer2 : "transparent",
 										cursor: savingSource ? "default" : "pointer",
 									},
@@ -2411,7 +2718,7 @@ window.__ModuleLoader__.load({
 										gap: 9,
 										padding: "7px 10px",
 										borderRadius: RADIUS.control,
-										border: `1px solid ${proxyMode === choice.id ? C.stateOk : C.border}`,
+										border: `1px solid ${proxyMode === choice.id ? C.brand : C.border}`,
 										background: proxyMode === choice.id ? C.bgLayer2 : "transparent",
 										cursor: "pointer",
 									},
@@ -2584,36 +2891,58 @@ window.__ModuleLoader__.load({
 						setTab((tab + TABS.length - 1) % TABS.length);
 					}
 				};
+				ensureCardStyles();
 				return createElement("div", {
-						style: { display: "flex", flexDirection: "column", gap: 20, color: C.labelPrimary },
+						style: { display: "flex", flexDirection: "column", gap: 16, color: C.labelPrimary },
 					},
 					createElement("div", {
 							role: "tablist",
 							className: "weixin-settings-tabbar",
 							onKeyDown: onTabKey,
-							style: { display: "flex", gap: 2, borderBottom: `1px solid ${C.border}`, overflowX: "auto" },
+							style: {
+								display: "flex",
+								gap: 4,
+								padding: "0 2px",
+								borderBottom: `1px solid ${C.border}`,
+								overflowX: "auto",
+							},
 						},
-						...TABS.map((entry, index) =>
-							createElement("button", {
+						...TABS.map((entry, index) => {
+							const active = index === tab;
+							return createElement("button", {
 									key: entry.id,
 									role: "tab",
-									"aria-selected": index === tab,
-									tabIndex: index === tab ? 0 : -1,
+									"aria-selected": active,
+									tabIndex: active ? 0 : -1,
 									onClick: () => setTab(index),
+									className: "weixin-tab",
 									style: {
 										appearance: "none",
-										background: "transparent",
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 6,
+										background: active ? C.surfaceSunken : "transparent",
 										border: "none",
-										borderBottom: `2px solid ${index === tab ? C.stateOk : "transparent"}`,
-										color: index === tab ? C.labelPrimary : C.labelTertiary,
+										borderBottom: `2px solid ${active ? C.brand : "transparent"}`,
+										borderRadius: `${RADIUS.control}px ${RADIUS.control}px 0 0`,
+										color: active ? C.labelPrimary : C.labelTertiary,
 										fontSize: 13,
 										lineHeight: "20px",
-										fontWeight: index === tab ? 600 : 400,
-										padding: "8px 12px",
+										fontWeight: active ? 600 : 400,
+										padding: "9px 11px",
 										cursor: "pointer",
+										whiteSpace: "nowrap",
 									},
-							}, entry.label))),
-					section(TABS[tab]?.label ?? "", TABS[tab]?.body));
+								},
+								createElement(TabIcon, { id: entry.id, active }),
+								entry.label);
+						})),
+					createElement("div", {
+							key: TABS[tab]?.id,
+							className: "weixin-card-enter",
+							style: { display: "flex", flexDirection: "column" },
+						},
+						section(TABS[tab]?.label ?? "", TABS[tab]?.body)));
 			}
 			return { WeixinSettingsCard };
 		};

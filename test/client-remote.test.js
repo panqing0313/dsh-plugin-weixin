@@ -849,3 +849,32 @@ test('the journal renders as a chat timeline: day dividers, side-aligned bubbles
   assert.match(client, /whiteSpace: "pre-wrap"/, 'newlines in a message must survive')
   assert.match(client, /maxHeight: 460/, 'the timeline gets its own scroll area')
 })
+
+test('the card carries its own design layer, and every tab gets an icon', () => {
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
+  // One stylesheet, injected once, guarded for the stub environment (the card
+  // is imported by tests that have no `document`).
+  assert.match(client, /const STYLE_ID = "dsh-weixin-card-styles"/)
+  assert.match(client, /function ensureCardStyles\(\) \{\s*\n\s*if \(typeof document === "undefined"/)
+  for (const name of ["wx-fade-in", "wx-pulse", "wx-spin", "wx-sweep"]) {
+    assert.ok(client.includes(`@keyframes ${name}`), `missing keyframes ${name}`)
+  }
+  assert.ok(client.includes("prefers-reduced-motion"), 'motion must respect the OS setting')
+
+  // The primitives exist and are actually used where they matter.
+  assert.match(client, /function Spinner\(/)
+  assert.match(client, /function PulseDot\(/)
+  assert.match(client, /function Progress\(/)
+  assert.match(client, /function Badge\(/)
+  assert.match(client, /function StatTile\(/)
+  assert.match(client, /function EmptyState\(/)
+  assert.match(client, /function TabIcon\(/)
+  assert.ok(client.includes('createElement(TabIcon, { id: entry.id, active })'))
+  assert.ok(client.includes('className: "weixin-card-enter"'))
+  assert.ok(client.includes('createElement(PulseDot, {') && client.includes('createElement(Badge, {'))
+
+  // A token that never existed used to leave the active-tab underline
+  // transparent; the card must not go back to it.
+  assert.ok(!client.includes("C.stateOk"), 'C.stateOk is not a theme token')
+  assert.ok(client.includes("borderBottom: `2px solid ${active ? C.brand : \"transparent\"}`"))
+})

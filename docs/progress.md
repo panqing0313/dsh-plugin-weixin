@@ -3185,3 +3185,17 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 坑：第一次用 python 改这个文件时，`s.index(end_marker)` 没从 `start_marker` 之后找，`统计页签` 注释在文件里更早出现，`j < i` 把文件拼坏（2542 → 2262 行、`function JournalSection` 消失）；第二次改成按行范围切片，但起点取在注释处，把函数签名一起删了。最终用「先找 `统计页签` 注释 → 往回找最近的 `const head = createElement(...)` → 替换到 `/**` 之前」才干净。教训：整段替换前先 `grep` 确认边界唯一，并检查替换后 `function X` 仍在。
 
 测试：`test/client-remote.test.js` 新增一条源码形状断言（limit 200、三种筛选、`entry.dir === filter`、今天/昨天标签、气泡背景/圆角、`pre-wrap`、`maxHeight: 460`），该文件 18/18；全量与 `check.mjs` 见提交记录。
+
+## 卡片界面全面美化（2026-11-01）
+
+用户：「其他的页签界面也都优化好看，该有颜色的有颜色，该有动画的有动画，该有进度的有进度」。
+
+做法是先补一层共用设计层，再逐页套用，而不是零散改样式：
+
+- `src/client.card.js` 顶部新增 `STYLE_ID`/`STYLE_TEXT` 与 `ensureCardStyles()`：chunk 首次渲染注入一次 `<style>`（`typeof document === "undefined"` 守卫，测试 stub 无 DOM；宿主不提供 CSS 通道），四组 keyframes + `.weixin-tab`/`.weixin-row`/`.weixin-card-enter`/`.weixin-indeterminate`，末尾 `prefers-reduced-motion` 全关。
+- 原语：`Spinner`/`PulseDot`/`Progress`/`Badge`/`StatTile`/`EmptyState`/`TabIcon`。
+- 九页签加图标与选中态（浅底 + `C.brand` 下划线 + 加粗），内容区 `key={TABS[tab].id}` + `weixin-card-enter` 重放入场动画。
+- 登录状态横幅按状态着色 + `PulseDot` + `Badge`；会话行 `PulseDot` + 「使用中」`Badge` + hover；提醒行卡片化 + 相对时间（不画百分比进度，避免编数据）；关于页版本行三张 `StatTile` + 检查更新 `Spinner`。
+- 修 bug：下划线用的 `C.stateOk` 并不存在（主题里叫 `success`），一直透明；统一 `C.brand`。
+- `Progress` 刻意不复用 `progressTrackStyle` token：`test/client-remote.test.js` 把该 token 的第二处出现钉在 ASR 下载条的百分比守卫上，复用会让守卫错位（实测报错后改的）。
+- 测试：`test/client-remote.test.js` 新增一条源码形状用例（样式表 id、四组 keyframes、`prefers-reduced-motion`、七个原语、TabIcon 使用、无 `C.stateOk`），19/19；`check.mjs` 通过。

@@ -22,8 +22,14 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
   const client = readCardSource()
   // The card is hoisted to a named function (the settings.section slot reuses
   // the same component), so anchor on the component's own last statement.
-  const card = client.match(/function WeixinSettingsCard\(\) \{[\s\S]*?\n\t\t\t\t\tsection\(TABS\[tab\]\?\.label \?\? "", TABS\[tab\]\?\.body\)\);/)
-  assert.ok(card, 'WeixinSettingsCard must stay findable')
+  // The tab body's indentation is a detail of the JSX-free tree, not the
+  // contract; anchor on the statement itself.
+  // The component must stay a hoisted function whose tab body ends with the
+  // section call; the exact indentation of that line is not the contract.
+  const start = client.indexOf('function WeixinSettingsCard() {')
+  const end = start === -1 ? -1 : client.indexOf('TABS[tab]?.body)));', start)
+  assert.ok(start !== -1 && end !== -1, 'WeixinSettingsCard must stay findable')
+  const card = { 0: client.slice(start, end) }
 
   // A tablist with role=tab buttons: the structure, not just the look.
   assert.match(card[0], /role: "tablist"/)
@@ -49,7 +55,9 @@ test('the settings card is a real tablist with the two sections as tabs', () => 
   assert.match(card[0], /ArrowRight/)
   assert.match(card[0], /ArrowLeft/)
   // Selection state is announced, not just painted.
-  assert.match(card[0], /"aria-selected": index === tab/)
+  // Selection is announced by the active state, whichever way the tab is
+  // keyed (it moved from `index === tab` to a boolean when icons were added).
+  assert.match(card[0], /"aria-selected": (?:index === tab|active)/)
 })
 
 test('the ASR panels save through one explicit bar, not on every click', () => {
