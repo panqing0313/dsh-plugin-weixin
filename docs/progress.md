@@ -3125,3 +3125,14 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **根因三：假服务端立即回空批**。`getupdates` 返回 `longpolling_timeout_ms: 20` 时传输层把它当忙循环，探针实测 1 秒 7002 次 poll。两个假 iLink 对空批次改为延迟 200ms 再回（有脚本的批次仍立即返回）。
 - **结果**：`test/e2e.test.js` 61s → 24s、`test/session-commands.test.js` 57s → 6s、`test/markdown.test.js` 17s → 4s；全量 **918/918、61s → 38.4s**（目标 <40s）。
 - **为什么不改生产默认值**：`eventPollMs` 与 `sendIntervalMs` 的默认值都是对着真实宿主与微信服务端的；提速只发生在测试配置里，线上仍按原来的节奏。
+
+## 发布 0.9.19（2026-10-31）
+
+- **内容**：P1 启动并行化（`11416f6`）、P2 热路径 JSON 读取缓存（`380431e`）、F1 `/digest`（`src/message/digest.js`）、F2 `/media clean` 与 `mediaMaxBytes`（`dff4ec0`）、P3 测试提速（`dbbc2f6`）；CHANGELOG `13c14fc`、发布提交 `74a6b1e`。
+- **走 CI 发布失败两次，最后回到本机发布**：
+  - 第一次 tag 触发的 `release.yml` 在 full suite 挂了 3 条 links 用例 —— workflow 自己全局设了 `DSH_WEIXIN_LINKS_ALLOW_PRIVATE: '1'`，正好关掉那三条要断言的 SSRF 守卫。修在 `0a4a814`（删掉该 env，e2e 自己会按需设），main 的 CI 转绿（run `41190705566`）。
+  - 重打 tag 后再跑到 publish：`npm error code ENEEDAUTH` —— 仓库 secret `NPM_TOKEN` 是空的。**CI 带 provenance 发布的前提是先配一个 npm automation token 进仓库 secret**，这件事没做，所以 tag 发布这条路暂时走不通。
+- **本机发布**：前两次 web OTP 会话都因等待超时 404 过期；第三次拿到 `https://www.npmjs.com/auth/cli/8125f522-…`，用户点授权后 `+ dsh-plugin-weixin@0.9.19`，90 秒后注册表可读。
+- **核验**：本地 tarball `shasum` = `9c54c595540af46222e242e126541d9b226f0843` = registry `dist.shasum`；`dist.integrity sha512-fL3c3hEAOl5H6Fxxs1W5nEsMT3ka/P5PVgj4JknEgn4stszV7KS8jnGTXU6zosyOSJ+Lxmpu+kozbQ0WUKNJLQ==`；`gitHead 0a4a814cc6b3617f21ddddc1245647cd8396e489`；`dist-tags.latest = 0.9.19`；tag `v0.9.19` 指向 `0a4a814`、GitHub release 已建；profile `^0.9.18 → ^0.9.19`、锁文件刷新；`doctor` → `installed version 0.9.19`、`host 0.2.1-rc.5 (tested)`、`published version up to date (0.9.19)`。
+- **清理**：tag 触发的两次 `release` run（`41190583256`、`41190713293`）都以失败结束且没有发布任何东西；重新打 tag 前删掉了旧的 `v0.9.19`。
+- **兼容表**：仍是 `0.9.18 / 0.2.1-rc.5` 为最后真机验证行；0.9.19 已装进 profile，等重启复核后再加行。
