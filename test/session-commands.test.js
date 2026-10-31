@@ -809,3 +809,18 @@ test('/outbox shows the empty queue instead of pretending a send happened', asyn
     assert.equal(sessionsOpened.length, 0)
   })
 })
+
+test('/quiet sets a deadline, reports the remaining time, and clears it', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/quiet 30m', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the quiet confirmation')
+    assert.match(fake.outbound[0].text, /静默到/)
+    fake.deliver('/quiet', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the quiet status')
+    assert.match(fake.outbound[1].text, /还剩约 30 分钟/)
+    fake.deliver('/quiet off', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the quiet clear')
+    assert.match(fake.outbound[2].text, /已恢复/)
+    assert.equal(sessionsOpened.length, 0, 'quiet never needs the model')
+  })
+})

@@ -22,6 +22,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
+import {
+  MAX_TEMP_QUIET_MS,
+  clearTempQuiet,
+  describeTempQuiet,
+  readTempQuiet,
+  setTempQuiet,
+  tempQuietDelay,
+} from './message/temp-quiet.js'
 import { buildDiagReport } from './message/diag.js'
 import { createRequire } from 'node:module'
 
@@ -670,7 +678,12 @@ export function apply(ctx, config) {
         lockHeartbeat.unref?.()
       }
 
-      const quietGate = (now) => quietDelay(now, withSavedConfig(config))
+      // 固定免打扰与临时静默是同一道闸：取两者中更晚的结束时刻。
+      // accountId 由调度器在触发时传入；老调用点不传时只按固定时段判。
+      const quietGate = (now, accountId) => Math.max(
+        quietDelay(now, withSavedConfig(config)),
+        tempQuietDelay(now, stateRoot, accountId, { warn }),
+      )
 
       // Retention: state grows all day; a nightly sweep keeps it bounded. It
       // runs once shortly after start (a laptop is not up at 03:00) and then
@@ -870,6 +883,8 @@ export function apply(ctx, config) {
           const modes = readPersonaStore(stateRoot, { warn })
           const out = []
           for (const accountId of transports.keys()) {
+            // 临时静默期间不参与候选：连判断都不做，自然不花 token。
+            if (tempQuietDelay(Date.now(), stateRoot, accountId, { warn }) > 0) continue
             for (const conv of listConvMemories(stateRoot, accountId)) {
               if (typeof conv.conversationId !== 'string' || conv.conversationId === '') continue
               const mode = resolveMode(
@@ -1525,6 +1540,21 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       return isCompanionMode(active)
     }
     return {
+      // `/quiet`：有尽头的一段「别出声」。固定免打扰管每天同一时段，
+      // 这里管开会/看电影这种临时两小时；到点自动恢复，不用记得关。
+      quiet: (arg) => {
+        const raw = String(arg ?? '').trim()
+        if (raw === '') return describeTempQuiet(readTempQuiet(stateRoot, accountId, { warn }))
+        if (/^(?:off|取消|关|恢复)$/i.test(raw)) {
+          return clearTempQuiet(stateRoot, accountId, { warn }) ? '已恢复：主动开口、自动回复和提醒都回来了。' : '本来就没有临时静默。'
+        }
+        const plan = parseWhen(raw)
+        if (plan.ok !== true) return `没听懂「${raw}」。用法：/quiet 2h、/quiet 30m、/quiet off。`
+        const span = plan.fireAt - Date.now()
+        if (span < 60_000 || span > MAX_TEMP_QUIET_MS) return '静默时长要在 1 分钟到 24 小时之间。'
+        const quiet = setTempQuiet(stateRoot, accountId, { until: plan.fireAt, warn })
+        return `好，${describeTempQuiet({ ...quiet, setAt: Date.now() })}`
+      },
       // `/outbox`：出站失败的那条消息去哪了、现在能不能补发。只读队列，不重排。
       outbox: async (arg) => {
         if (outbox === undefined) return '重发队列还没准备好（插件还在启动）。'
@@ -1975,7 +2005,8 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         at: Date.now(),
         warn,
       })
-      if (missed.shouldReply) {
+      const awayQuiet = tempQuietDelay(Date.now(), stateRoot, accountId, { warn }) > 0
+      if (missed.shouldReply && !awayQuiet) {
         await sendChunked(transport, effectiveConfig.current, {
           conversationId: message.conversationId,
           text: buildAwayReply(awayNow, { reply: effectiveConfig.current.awayAutoReply }),

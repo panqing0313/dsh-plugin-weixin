@@ -196,7 +196,7 @@ export class SubscriptionScheduler {
         const snapshot = { ...item }
         const current = this.store.items.find((entry) => entry.id === item.id)
         if (current === undefined) return
-        const quietMs = this.quiet === null ? 0 : this.quiet(Date.now())
+        const quietMs = this.quiet === null ? 0 : this.quiet(Date.now(), item.accountId)
         if (quietMs > 0) {
             // 免打扰时段: do not consume the slot — push fireAt to the window's
             // end and re-arm; the normal consume+fire happens then. The item

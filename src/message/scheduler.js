@@ -404,7 +404,7 @@ export class ReminderScheduler {
     const delay = Math.max(0, reminder.fireAt - Date.now())
     const timer = this.setTimeoutRef(delay, () => {
       this.timers.delete(reminder.id)
-      const quietMs = this.quiet === null ? 0 : this.quiet(Date.now())
+      const quietMs = this.quiet === null ? 0 : this.quiet(Date.now(), reminder.accountId)
       if (quietMs > 0) {
         // 免打扰时段: the item was not removed yet — keep it in the store with
         // a pushed fireAt so it survives a restart, then re-arm for the end.

@@ -3026,3 +3026,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **profile**：依赖 `^0.9.16 → ^0.9.17`、`node_modules` 0.9.17；release 脚本的锁文件刷新第一次因 tarball 404（注册表延迟）失败，约两分钟后用宿主自带 `pnpm install --prefer-offline` 手工刷新成功（`- 0.9.16` / `+ 0.9.17`）。
 - **CI**：发布提交 run `41167028800` success；tag 触发的 release workflow `41166913785` 失败（版本已存在，预期）。
 - **兼容表**：用户重启后复核「正常」（设置卡九个页签、左侧栏入口、收发），`docs/compatibility.md` 新增 `0.9.17 / 0.2.1-rc.5` 真机验证行；宿主版本没变，`TESTED_HOSTS` 不动。
+
+### ① 临时静默 `/quiet`（`src/message/temp-quiet.js`）
+
+- **为什么**：固定免打扰只覆盖「每天同一时段」；临时开会/看电影只能改配置再改回来，容易忘。
+- **做成什么**：账号级状态 `quiet.json`（`{schemaVersion, accounts:{id:{until,setAt}}}`，原子写）；`/quiet 30m|2h`、`/quiet` 查剩余、`/quiet off` 立刻恢复；1 分钟–24 小时的边界。
+- **闸门**：`quietGate(now, accountId)` 把固定时段与临时静默取较晚者，`ReminderScheduler` / `SubscriptionScheduler` 触发时把 `accountId` 传进来；主动开口的 `candidates()` 直接跳过静默账号（不判断、不花 token）；离开模式仍记未读但不自动回。入站回复不受影响。
+- **测试**：`test/temp-quiet.test.js` 4 条（存取/清除、过期与账号隔离、边界、文案）；`test/session-commands.test.js` 端到端 1 条（设置/查询/恢复，且不开会话）。
+- **文档**：README 命令表、`docs/extras.md`「临时静默」。
