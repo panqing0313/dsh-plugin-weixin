@@ -305,6 +305,8 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `notifyPort` | `47832` | 通知桥端口（只绑 127.0.0.1） |
 | `notifyToken` | `''` | 通知桥 token；空 = 首次启动生成到 `<stateDir>/notify.json`（0600） |
 | `awayAutoReply` | `''` | 离开模式的自动回复；空 = 内置「我现在不在，看到会回你～（大概 HH:mm 回来）」 |
+| `senderRatePerMinute` | `20` | 每个发送者每分钟最多几条消息；0 不限。超过时回一句「慢一点」，并写审计 |
+| `senderDailyLimit` | `0` | 每个发送者每天最多被回复几次（按账号分开算）；0 不限。到量后当天不再回应，群里也按人算 |
 
 改完配置重载插件即可。
 

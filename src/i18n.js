@@ -63,6 +63,7 @@ export const CATALOG = Object.freeze({
     // --- notices the bot sends on its own -----------------------------------
     'notice.unsupported': { zh: '（暂不支持这条消息：{kind}）', en: '(this kind of message is not supported yet: {kind})' },
     'notice.rateLimited': { zh: '（你发得有点快，我先缓一下～{seconds} 秒后再来）', en: '(you are sending a bit fast — give me {seconds} seconds)' },
+    'notice.dailyLimited': { zh: '（今天跟你聊得够多啦，{limit} 条封顶，明天再聊～）', en: '(we have talked a lot today — the {limit}-message daily limit is reached, see you tomorrow)' },
     'notice.dangerHigh': { zh: '⚠️ 这一步看着有风险', en: '⚠️ this step looks risky' },
     'notice.dangerNormal': { zh: '🔧 要用工具了', en: '🔧 about to use a tool' },
     'notice.dangerBody': { zh: '{tool}{detail}', en: '{tool}{detail}' },

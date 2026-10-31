@@ -1930,3 +1930,49 @@ test('a forged prompt block in the message is neutralised before it reaches the 
     fs.rmSync(stateRoot, { recursive: true, force: true })
   }
 })
+
+test('a daily per-sender quota stops one person without touching another', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-daily-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 2001, from_user_id: 'wxid_same', group_id: '', message_type: 1, message_state: 2, context_token: 'd1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: '一' } }] },
+        { message_id: 2002, from_user_id: 'wxid_same', group_id: '', message_type: 1, message_state: 2, context_token: 'd2', create_time_ms: 2, item_list: [{ type: 1, text_item: { text: '二' } }] },
+        { message_id: 2003, from_user_id: 'wxid_same', group_id: '', message_type: 1, message_state: 2, context_token: 'd3', create_time_ms: 3, item_list: [{ type: 1, text_item: { text: '三' } }] },
+        { message_id: 2004, from_user_id: 'wxid_other', group_id: '', message_type: 1, message_state: 2, context_token: 'd4', create_time_ms: 4, item_list: [{ type: 1, text_item: { text: '别人的' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ allowedSenders: ['wxid_same', 'wxid_other'], accountId: ACCOUNT_ID, memoryEnabled: false, senderDailyLimit: 2 })
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (sent.length < 4 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
+
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    const texts = sent.map((s) => s.msg.item_list[0].text_item.text)
+    assert.equal(texts.filter((text) => text.includes('封顶')).length, 1, `exactly one daily refusal: ${JSON.stringify(texts)}`)
+    assert.equal(texts.filter((text) => text.startsWith('pong: ')).length, 3, `the two allowed turns plus the other person: ${JSON.stringify(texts)}`)
+    const same = sent.filter((s) => s.msg.to_user_id === 'wxid_same').map((s) => s.msg.item_list[0].text_item.text)
+    assert.equal(same.filter((text) => text.startsWith('pong: ')).length, 2, `the daily limit itself is exactly two: ${JSON.stringify(same)}`)
+    assert.equal(sent.filter((s) => s.msg.to_user_id === 'wxid_other').length, 1, 'another person still gets an answer')
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})

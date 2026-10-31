@@ -3065,3 +3065,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：`listInboundMedia(dir, {limit})` 只读目录、跳过子目录、按 mtime 倒序（默认 8、上限 20），`mediaKind` 按扩展名给人话类型，`humanTime`/`humanBytes` 给手机可读的表述；`formatMediaList` 编号；`/media resend <序号>` 经过 `resolveArchivePath`（`realpath` 后必须仍在归档目录内、必须是普通文件）后走调用方给的 `sendMedia`，失败时保留文件并说明。
 - **测试**：`test/media-archive.test.js` 7 条（类型、时间/大小、排序与上限、缺失目录、编号文案、路径约束、命令列表/重发/越界/失败保留）。
 - **文档**：README 命令表、`docs/extras.md`「媒体归档」。
+
+### ⑥ 群内每人每日配额（`src/message/sender-daily.js`）
+
+- **为什么**：`senderRatePerMinute` 是每分钟的，挡不住一天 300 条；`backgroundDailyLimit` 是账号级的，一人能把全家的后台额度用光。缺的是「每人每天」这一层。
+- **做成什么**：`createSenderDailyLimiter({stateRoot, limit, now, warn})` → `{check(accountId, senderId), used, limit}`；状态 `sender-daily.json` 按账号分、按本地日期滚，原子写；拒绝时按 5 分钟冷却只提示一次，并写 `weixin/daily-limit` 审计。接线在 `senderDailyGate`（白名单之后、任何外网请求之前），设置卡加 `senderDailyLimit` 字段。
+- **测试**：`test/sender-daily.test.js` 6 条（0 不限、按人与账号独立、冷却、跨天与持久化、损坏容错、日期键）；`test/e2e.test.js` 端到端 1 条（同一人第 3 条被拒而另一人正常）。
+- **文档**：README 配置表、`docs/extras.md`「群里每人每天聊多少」。

@@ -51,6 +51,7 @@ import { neutralizeTags } from './message/fence.js'
 import { quoteBlock } from './message/quote.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
+import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -270,6 +271,7 @@ export const Config = z.object({
   quietHoursStart: z.string().default('23:00').description('免打扰开始时间，HH:mm（24 小时制）。'),
   quietHoursEnd: z.string().default('07:00').description('免打扰结束时间，HH:mm（24 小时制）；与开始时间相同视为未配置。'),
   senderRatePerMinute: z.number().min(0).default(DEFAULT_PER_MINUTE).description('每个发送者每分钟最多几条消息；0 表示不限。超过时回一句「慢一点」，并写审计。'),
+  senderDailyLimit: z.number().min(0).default(0).description('每个发送者每天最多被回复几次（按账号分开算；0 表示不限）。到量后当天不再回应，并在群里也按人算。'),
   maxQueuedPerConversation: z.number().min(0).default(DEFAULT_MAX_QUEUE).description('单个会话允许排队等回复的消息条数；0 表示不限制。超过的直接拒收，避免越堆越多。'),
   retentionJournalDays: z.number().min(0).default(180).description('消息流水保留天数；0 表示不清理。设置卡「统计」页签显示磁盘占用。'),
   retentionAuditDays: z.number().min(0).default(90).description('工具审计保留天数；0 表示不清理。'),
@@ -510,6 +512,8 @@ export function apply(ctx, config) {
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
     // closure and is a sibling of setup(), not a child of it.
     let senderLimiter
+    /** Set in apply(); bringUpLoop() is a different function and grows its own closure. */
+    let senderDailyLimiterFor = () => undefined
     // C20: declared here (not inside setup) because bringUpAccount, which is a
     // sibling of setup(), hands it to createInboundHandler.
     let sideRoute = () => undefined
@@ -631,6 +635,14 @@ export function apply(ctx, config) {
         return createSenderLimiter({ perMinute: Number(live.senderRatePerMinute ?? DEFAULT_PER_MINUTE) || 1_000_000 })
       }
       senderLimiter = liveLimiter()
+      // 每人每日配额：比「每分钟」更贴群的一层，按账号分开计。它读实时配置，
+      // 所以设置卡改完下一次消息就生效。工厂存在模块级变量里是因为
+      // bringUpLoop() 在另一个函数里，长得够不到这里的 const。
+      senderDailyLimiterFor = (accountId, senderId) => createSenderDailyLimiter({
+        stateRoot,
+        limit: Number(withSavedConfig(config).senderDailyLimit ?? 0),
+        warn,
+      }).check(accountId, senderId)
       // The bus is built once per plugin start. Its first subscriber exists to
       // fix a real gap: refusals used to reach only the host logger, never the
       // log file the operator actually reads.
@@ -1232,6 +1244,8 @@ export function apply(ctx, config) {
         proactiveScheduler,
         journalInbound: (entry) => appendJournal(stateRoot, { dir: 'in', ...entry }, { warn }),
         senderGate: (senderId) => senderLimiter.check(`${account.accountId}|${senderId}`),
+        // 每日配额在账号维度上另算：同一个人在不同账号下各有自己的额度。
+        senderDailyGate: (senderId) => senderDailyLimiterFor(account.accountId, senderId),
         // C20: side sessions (/\summary, subscriptions, proactive) use the
         // background route; the conversation keeps the chat route.
         sideRoute,
@@ -1504,7 +1518,7 @@ export function weixinSourceBlock(message) {
   return `<weixin_source ${fields.join(' ')} />`
 }
 
-function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, sideRoute }) {
+function createInboundHandler({ config, accountId, transport, bridge, memorySummarizer, asrBridge, seen, log, warn, fileLog, stateRoot, mediaDirs, agentCwd, reminderScheduler, subscriptionScheduler, proactiveScheduler, journalInbound, senderGate, senderDailyGate, sideRoute }) {
   // The effective allowlist is per account: an account-level override in the
   // registry narrows (or replaces) the global list.
   // `accountId` is always set here (bringUpAccount passes it), but the
@@ -1897,6 +1911,35 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           tool: 'weixin/rate-limit',
           ok: false,
           summary: `sender ${message.senderId} is over the per-minute message limit (${gate.recent} in the last minute)`,
+        }, { warn })
+      }
+      return
+    }
+
+    // 1b. 每人每日配额：比「每分钟」长一档，且按账号分开。它故意放在白名单
+    //     之后、链接抓取与媒体下载之前 —— 被拒绝的人不该让这台机器再去请求
+    //     任何外部地址。提示按窗口只发一次，拒绝写审计。
+    const dailyGate = typeof senderDailyGate === 'function' ? senderDailyGate(message.senderId) : undefined
+    if (dailyGate !== undefined && dailyGate.allowed === false) {
+      hooks?.emit(HOOK_POINTS.inboundRefused, {
+        accountId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        reason: 'daily-limit',
+      })
+      if (dailyGate.shouldWarn === true) {
+        await sendChunked(transport, config, {
+          conversationId: message.conversationId,
+          text: createTranslator(effectiveConfig.current.locale).t('notice.dailyLimited', {
+            limit: dailyGate.limit,
+          }),
+          contextToken: message.contextToken,
+        }).catch(() => {})
+        appendToolAudit(stateRoot, {
+          at: new Date().toISOString(),
+          tool: 'weixin/daily-limit',
+          ok: false,
+          summary: `sender ${message.senderId} reached the daily reply limit (${dailyGate.used}/${dailyGate.limit} on ${dailyGate.day})`,
         }, { warn })
       }
       return

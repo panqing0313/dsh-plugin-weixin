@@ -669,6 +669,7 @@ export const FIELDS = [
       groupEn: "Pacing",
       fields: [
         { path: "senderRatePerMinute", type: T.number, default: 20, min: 0, max: 600, step: 1, unit: "条/分钟", unitEn: "msgs/min", label: "每人每分钟上限", labelEn: "Per-sender limit", hint: "超过时回一句「慢一点」并写审计；0 表示不限", hintEn: "0 disables the limit" },
+        { path: "senderDailyLimit", type: T.number, default: 0, min: 0, max: 2000, step: 1, unit: "条/天", unitEn: "msgs/day", label: "每人每日上限", labelEn: "Per-sender daily limit", hint: "同一个人每天最多被回复几次（按账号分开）；到量后当天不再回应，0 表示不限", hintEn: "Replies per sender per day, per account; 0 disables it" },
         { path: "maxQueuedPerConversation", type: T.number, default: 6, min: 0, max: 100, step: 1, unit: "条", unitEn: "msgs", label: "单会话排队上限", labelEn: "Per-conversation queue", hint: "超过的新消息直接拒收；0 表示不限", hintEn: "0 means unbounded" },
       ],
     },
