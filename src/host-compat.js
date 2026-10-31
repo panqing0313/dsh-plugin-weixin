@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /** Host releases this tree has actually been run against. Update when verified. */
-export const TESTED_HOSTS = Object.freeze(['0.2.1-rc.3'])
+export const TESTED_HOSTS = Object.freeze(['0.2.1-rc.3', '0.2.1-rc.5'])
 
 /** Where the desktop app records its version on macOS. */
 export const DEFAULT_INFO_PLIST = '/Applications/DeepSeek Harness.app/Contents/Info.plist'
