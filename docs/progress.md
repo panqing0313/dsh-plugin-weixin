@@ -3072,3 +3072,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：`createSenderDailyLimiter({stateRoot, limit, now, warn})` → `{check(accountId, senderId), used, limit}`；状态 `sender-daily.json` 按账号分、按本地日期滚，原子写；拒绝时按 5 分钟冷却只提示一次，并写 `weixin/daily-limit` 审计。接线在 `senderDailyGate`（白名单之后、任何外网请求之前），设置卡加 `senderDailyLimit` 字段。
 - **测试**：`test/sender-daily.test.js` 6 条（0 不限、按人与账号独立、冷却、跨天与持久化、损坏容错、日期键）；`test/e2e.test.js` 端到端 1 条（同一人第 3 条被拒而另一人正常）。
 - **文档**：README 配置表、`docs/extras.md`「群里每人每天聊多少」。
+
+### ⑦ 重要日子提前提醒（`src/message/dates.js` + `dateReminderLeadDays`）
+
+- **为什么**：当天提醒只在当天说，生日当天才看到就晚了 —— 买礼物、订蛋糕都需要提前。
+- **做成什么**：新增 `upcomingDates(memory, now, {leadDays})`，在 0–30 天窗口里返回 `daysAhead`（0 = 今天）；`datesOnThisDay` 保留为 `leadDays: 0` 的兼容入口。日期按「今年这一次，过了就算明年」求下一次，所以窗口不会复活已经过去的日子；`buildDateReminderText` 拆成「📅 今天是重要日子」与「🗓 快到了」两段（`明天` / `N 天后`）。schema 加 `dateReminderLeadDays`（0–30，默认 0），设置卡同步一个字段。
+- **测试**：`test/dates.test.js` 新增 2 条（窗口只指向下一次、文案分段）；原有 7 条不变（`upcomingDates` 与旧行为一致）。
+- **文档**：README 日报节、`docs/extras.md`「重要日子提前提醒」。

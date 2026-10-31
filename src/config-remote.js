@@ -683,6 +683,7 @@ export const FIELDS = [
         { path: "memoryReviewEnabled", type: T.boolean, default: true, label: "每周核对记忆", labelEn: "Weekly memory review", hint: "把记着的事编号列出来问一句「还准吗」，你回 /remember 旧 → 新 或 /forget 编号 纠正", hintEn: "Lists what it remembers and asks if it is still right" },
         { path: "memoryReviewWhen", type: T.text, default: "每周日 20:00", label: "核对时间", labelEn: "Review time", hint: "形如「每周日 20:00」", hintEn: "e.g. 每周日 20:00" },
         { path: "dateReminderEnabled", type: T.boolean, default: true, label: "重要日子当天提醒", labelEn: "Date reminders", hint: "记忆里的生日/纪念日、写死日期的待办，到点发一条短消息；不跑模型", hintEn: "Birthdays, anniversaries and dated to-dos: one short line on the day, no model call" },
+        { path: "dateReminderLeadDays", type: T.number, default: 0, min: 0, max: 30, step: 1, unit: "天", unitEn: "days", label: "提前几天", labelEn: "Lead days", hint: "0 = 只在当天提醒；3 = 生日/纪念日前三天先说一声", hintEn: "0 = only on the day; 3 = warn three days ahead" },
         { path: "dateReminderWhen", type: T.text, default: "09:00", label: "提醒时间", labelEn: "Reminder time", hint: "HH:MM（本地时区），只在这一天第一次到点后发一次", hintEn: "HH:MM local; sent once, on the first check after that time" },
       ],
     },

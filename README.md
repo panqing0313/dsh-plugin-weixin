@@ -564,6 +564,8 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 
 发送目标是「最近说过话的那个会话」；两边都只发一条消息（不是三条气泡），失败只在日志里留一行。时间用 `/subscribe` 那套写法：`每天 21:00`、`每周五 18:30`，写错就在当天不发并在日志里说明。想关掉：`digestEnabled: false` / `memoryReviewEnabled: false`。
 
+**重要日子提醒**（`dateReminderEnabled`，默认开）：每天 `dateReminderWhen`（默认 09:00）检查一次记忆里的生日/纪念日和写死日期的待办，命中就发一条短消息，不跑模型。`dateReminderLeadDays`（默认 0）可以提前几天先说一声 —— 设 3，就在生日前三天发「🗓 快到了」；已经过去的那一次不会因为窗口而被重新提起，它会指向明年的那一天。
+
 `test/reports.test.js` 守着调度（只提前两秒算「到点」、一次只触发该触发的、抛错不影响下一轮）与两个提示词的关键约束。
 
 ### 指标与长稳（metricsExport · npm run metrics · npm run soak）

@@ -50,28 +50,53 @@ function dayOf(now) {
 }
 
 /**
- * 今天命中的日期与待办。
+ * 今天以及接下来 `leadDays` 天内命中的日期与待办。
+ *
+ * `leadDays: 0` 就是「只看今天」。提前提醒要的是**日子还没到就说话**，
+ * 所以窗口内每一条都带 `daysAhead`，0 表示今天。
+ *
+ * @param {{ profile?: { dates?: Array<{ label: string, date: string }> }, events?: Array<{ text: string, when?: string, done?: boolean }> }} memory
+ * @param {Date|number} [now]
+ * @param {{ leadDays?: number }} [options]
+ * @returns {Array<{ kind: 'date'|'event', label?: string, text?: string, years?: number, daysAhead: number, on?: string }>}
+ */
+export function upcomingDates(memory, now = new Date(), { leadDays = 0 } = {}) {
+  const today = dayOf(now)
+  const lead = Math.max(0, Math.min(30, Math.floor(Number(leadDays) || 0)))
+  const startOfToday = new Date(today.year, Number(today.month) - 1, Number(today.day)).getTime()
+  const out = []
+  for (const entry of Array.isArray(memory?.profile?.dates) ? memory.profile.dates : []) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(entry?.date ?? ''))
+    if (match === null) continue
+    // 今年这一次；已经过了就说明年的那一次 —— 提前提醒永远指向「下一次」。
+    let target = new Date(today.year, Number(match[2]) - 1, Number(match[3]))
+    if (target.getTime() < startOfToday) target = new Date(today.year + 1, Number(match[2]) - 1, Number(match[3]))
+    const daysAhead = Math.round((target.getTime() - startOfToday) / 86_400_000)
+    if (daysAhead < 0 || daysAhead > lead) continue
+    const years = target.getFullYear() - Number(match[1])
+    out.push({ kind: 'date', label: entry.label, years: years > 0 ? years : 0, daysAhead, on: `${match[2]}-${match[3]}` })
+  }
+  for (const event of Array.isArray(memory?.events) ? memory.events : []) {
+    if (event?.done === true) continue
+    const when = String(event?.when ?? '')
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(when)
+    if (match === null) continue
+    const daysAhead = Math.round((new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime() - startOfToday) / 86_400_000)
+    if (daysAhead < 0 || daysAhead > lead) continue
+    out.push({ kind: 'event', text: event.text, daysAhead, on: `${match[2]}-${match[3]}` })
+  }
+  return out.sort((a, b) => a.daysAhead - b.daysAhead)
+}
+
+/**
+ * 今天命中的日期与待办（`leadDays: 0` 的兼容入口）。
  *
  * @param {{ profile?: { dates?: Array<{ label: string, date: string }> }, events?: Array<{ text: string, when?: string, done?: boolean }> }} memory
  * @param {Date|number} [now]
  * @returns {Array<{ kind: 'date'|'event', label?: string, text?: string, years?: number }>}
  */
 export function datesOnThisDay(memory, now = new Date()) {
-  const today = dayOf(now)
-  const out = []
-  for (const entry of Array.isArray(memory?.profile?.dates) ? memory.profile.dates : []) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(entry?.date ?? ''))
-    if (match === null) continue
-    if (match[2] !== today.month || match[3] !== today.day) continue
-    const years = today.year - Number(match[1])
-    out.push({ kind: 'date', label: entry.label, years: years > 0 ? years : 0 })
-  }
-  for (const event of Array.isArray(memory?.events) ? memory.events : []) {
-    if (event?.done === true) continue
-    if (String(event?.when ?? '') !== today.key) continue
-    out.push({ kind: 'event', text: event.text })
-  }
-  return out
+  return upcomingDates(memory, now, { leadDays: 0 }).map(({ daysAhead, on, ...item }) => item)
 }
 
 /**
@@ -81,12 +106,29 @@ export function datesOnThisDay(memory, now = new Date()) {
  * @returns {string}
  */
 export function buildDateReminderText(items) {
-  const lines = ['📅 今天是重要日子']
-  for (const item of items) {
-    if (item.kind === 'date') {
-      lines.push(item.years > 0 ? `- ${item.label}（第 ${item.years} 年）` : `- ${item.label}`)
-    } else {
-      lines.push(`- ${item.text}`)
+  const today = items.filter((item) => (item.daysAhead ?? 0) === 0)
+  const soon = items.filter((item) => (item.daysAhead ?? 0) > 0)
+  const lines = []
+  if (today.length > 0) {
+    lines.push('📅 今天是重要日子')
+    for (const item of today) {
+      if (item.kind === 'date') {
+        lines.push(item.years > 0 ? `- ${item.label}（第 ${item.years} 年）` : `- ${item.label}`)
+      } else {
+        lines.push(`- ${item.text}`)
+      }
+    }
+  }
+  if (soon.length > 0) {
+    if (lines.length > 0) lines.push('')
+    lines.push('🗓 快到了')
+    for (const item of soon) {
+      const prefix = item.daysAhead === 1 ? '明天' : `${item.daysAhead} 天后`
+      if (item.kind === 'date') {
+        lines.push(item.years > 0 ? `- ${prefix}：${item.label}（第 ${item.years} 年）` : `- ${prefix}：${item.label}`)
+      } else {
+        lines.push(`- ${prefix}：${item.text}`)
+      }
     }
   }
   return lines.join('\n')

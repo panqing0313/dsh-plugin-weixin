@@ -11,6 +11,7 @@ import {
   dateReminderDue,
   datesOnThisDay,
   markDateReminderSent,
+  upcomingDates,
 } from '../src/message/dates.js'
 
 const at = (iso) => new Date(iso)
@@ -86,4 +87,35 @@ test('the state file is per account and survives a reload', () => {
   assert.equal(store.accounts.bot1.lastSent, '2026-10-31')
   assert.equal(store.accounts.bot2.lastSent, '2026-10-30')
   assert.equal(DEFAULT_DATE_REMINDER_WHEN, '09:00')
+})
+
+test('lead days bring the next occurrence forward, not a past one', () => {
+  const memory = {
+    profile: { dates: [{ label: '生日', date: '1990-11-03' }] },
+    events: [{ text: '交房租', when: '2026-11-01' }, { text: '已经做完的', when: '2026-11-02', done: true }],
+  }
+  const on = at('2026-10-31T09:00:00+08:00')
+  // Today: only the day itself.
+  assert.deepEqual(upcomingDates(memory, on, { leadDays: 0 }).map((item) => item.daysAhead), [])
+  // Three days out: the event tomorrow (1) and the birthday (3).
+  const soon = upcomingDates(memory, on, { leadDays: 3 })
+  assert.deepEqual(soon.map((item) => [item.kind, item.daysAhead]), [['event', 1], ['date', 3]])
+  assert.equal(soon[1].years, 36)
+  // A date that already passed this year points at next year's occurrence, so a
+  // small lead window does not resurrect it.
+  const past = { profile: { dates: [{ label: '去年的', date: '2000-10-01' }] } }
+  assert.deepEqual(upcomingDates(past, on, { leadDays: 3 }), [])
+  assert.equal(upcomingDates(past, on, { leadDays: 0 }).length, 0)
+})
+
+test('the reminder text separates today from what is coming', () => {
+  const text = buildDateReminderText([
+    { kind: 'date', label: '生日', years: 36, daysAhead: 0 },
+    { kind: 'event', text: '交房租', daysAhead: 1 },
+    { kind: 'event', text: '体检', daysAhead: 3 },
+  ])
+  assert.match(text, /^📅 今天是重要日子\n- 生日（第 36 年）/)
+  assert.match(text, /🗓 快到了/)
+  assert.match(text, /- 明天：交房租/)
+  assert.match(text, /- 3 天后：体检/)
 })

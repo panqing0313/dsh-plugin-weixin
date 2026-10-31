@@ -80,7 +80,7 @@ import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
-import { datesOnThisDay, buildDateReminderText, dateReminderDue, markDateReminderSent } from './message/dates.js'
+import { buildDateReminderText, dateReminderDue, markDateReminderSent, upcomingDates } from './message/dates.js'
 import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
@@ -291,6 +291,7 @@ export const Config = z.object({
   awayAutoReply: z.string().default('').description('离开模式的自动回复；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。'),
   dateReminderEnabled: z.boolean().default(true).description('重要日子的当天提醒：记忆里的生日/纪念日、以及写死日期的待办，到点发一条短消息，不跑模型。'),
   dateReminderWhen: z.string().default('09:00').description('当天提醒的发送时间（HH:MM，本地时区）。'),
+  dateReminderLeadDays: z.number().min(0).max(30).default(0).description('提前几天提醒：0 只在当天说；3 就会在三天前先说一声。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
   backgroundDailyLimit: z.number().default(0).description('每天允许的后台模型调用次数上限（记忆折叠、日报、核对、订阅、主动开口都算）；0 表示不限。主对话不受影响。'),
   digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
@@ -1065,7 +1066,9 @@ export function apply(ctx, config) {
           if (!dateReminderDue(stateRoot, id, { now: Date.now(), at: live.dateReminderWhen, enabled: live.dateReminderEnabled, warn })) continue
           let items = []
           try {
-            items = datesOnThisDay(readGlobalMemory(stateRoot, id, { warn }))
+            items = upcomingDates(readGlobalMemory(stateRoot, id, { warn }), new Date(), {
+              leadDays: Number(live.dateReminderLeadDays ?? 0),
+            })
           } catch (error) {
             warn(`date reminder read failed for ${id}: ${String(error)}`)
             continue
