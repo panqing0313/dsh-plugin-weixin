@@ -3015,3 +3015,14 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **不猜**：`每周一`（无钟点）与 `每天 25:00` 都明确报错；`明天 9:00` 仍走一次性，`parseRecurrence` 对它返回 not ok。
 - **测试**：`test/scheduler.test.js` 新增 2 条（三种重复的解析与首个槽、跨周末的工作日、非法写法；触发后条目仍在且槽前进一天）；`test/sessions.test.js` 的命令用例补 `每天 9:00 吃药` 与 `工作日 8:30 打卡` 的切分与计划字段。
 - **文档**：README 命令表与「定时提醒」节、`docs/extras.md`「重复提醒」。
+
+## 发布 0.9.17（2026-10-31）
+
+- **内容**：五项让「没动静」可解释/可修 —— 提醒时间说人话（`/remind 明天 9:00`、`3小时后`、`下周一 10点`）、重复提醒（`每天/工作日/每周X`，触发后自动排下一个槽）、`/diag` 自检、`/outbox` 待重发可见与手动重试、群称呼 `groupBotNames`（全角 ＠、细空格、大小写）。
+- **测试**：`npm test` → **861/861**、0 skipped；`node bin/check.mjs` → 171 files。
+- **发布**：`node bin/release.mjs 0.9.17 --yes`（伪 TTY + `env -u NO_COLOR -u FORCE_COLOR`）一次过：preflight、suite、bump、tarball（171 文件 1700 kB）、publish（web OTP）、tag `v0.9.17`、push、GitHub release、registry 核验 `byte-identical`、profile 安装。
+- **发布提交** `d5ab873 chore(release): 0.9.17`（tag 指向它）；`gitHead d5ab873`。
+- **核验**：本地/registry `shasum 72fe6ca0e0985c66d14a4a28f8373ea84ad8fbf0`、`dist-tags.latest = 0.9.17`、GitHub release 非 draft/prerelease；`node bin/doctor.mjs` → `installed 0.9.17`、`host 0.2.1-rc.5 (tested)`、`published up to date`。
+- **profile**：依赖 `^0.9.16 → ^0.9.17`、`node_modules` 0.9.17；release 脚本的锁文件刷新第一次因 tarball 404（注册表延迟）失败，约两分钟后用宿主自带 `pnpm install --prefer-offline` 手工刷新成功（`- 0.9.16` / `+ 0.9.17`）。
+- **CI**：发布提交 run `41167028800` success；tag 触发的 release workflow `41166913785` 失败（版本已存在，预期）。
+- **兼容表**：真机验证行仍是 `0.9.16 / 0.2.1-rc.5`；0.9.17 已装进 profile，重启复核通过后再加行。
