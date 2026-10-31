@@ -74,7 +74,12 @@ export function extractImageText(filePath, settings, { spawnImpl = spawn } = {})
       }
       finish({ ok: false, reason: `OCR timed out after ${timeoutMs}ms`, code: 'timeout' })
     }, timeoutMs)
-    timer.unref?.()
+    // Deliberately NOT unref'd: the promise below resolves from this timer, so
+    // an unref'd timer lets the event loop empty first and the caller waits
+    // forever ("Promise resolution is still pending but the event loop has
+    // already resolved" — seen on Node 22 when the child never closes).
+    // A real child keeps the loop alive anyway; the timer is bounded by
+    // timeoutMs and cleared as soon as the child finishes.
 
     const out = []
     const err = []
