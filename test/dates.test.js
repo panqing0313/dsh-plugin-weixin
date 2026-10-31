@@ -60,25 +60,28 @@ test('the reminder text is short, and numbers anniversaries', () => {
 
 test('due only after the configured time, once per day, and only when enabled', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-dates-'))
-  const before = at('2026-10-31T08:59:00+08:00')
-  const after = at('2026-10-31T09:00:00+08:00')
+  // The reminder compares the runner's LOCAL clock with "09:00", so build the
+  // instants locally. A fixed +08:00 instant is 01:00 in UTC, where CI runs —
+  // that read as "before nine" and the test failed there while passing here.
+  const before = new Date(2026, 9, 31, 8, 59)
+  const after = new Date(2026, 9, 31, 9, 0)
   assert.equal(dateReminderDue(root, 'bot1', { now: before }), false)
   assert.equal(dateReminderDue(root, 'bot1', { now: after }), true)
   assert.equal(dateReminderDue(root, 'bot1', { now: after, enabled: false }), false)
   assert.equal(dateReminderDue(root, 'bot1', { now: after, at: '25:00' }), false)
 
   markDateReminderSent(root, 'bot1', { now: after })
-  assert.equal(dateReminderDue(root, 'bot1', { now: at('2026-10-31T21:00:00+08:00') }), false)
+  assert.equal(dateReminderDue(root, 'bot1', { now: new Date(2026, 9, 31, 21, 0) }), false)
   // A new day is due again.
-  assert.equal(dateReminderDue(root, 'bot1', { now: at('2026-11-01T09:01:00+08:00') }), true)
+  assert.equal(dateReminderDue(root, 'bot1', { now: new Date(2026, 10, 1, 9, 1) }), true)
   // Accounts do not share the "already sent" flag.
   assert.equal(dateReminderDue(root, 'bot2', { now: after }), true)
 })
 
 test('the state file is per account and survives a reload', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-dates-'))
-  markDateReminderSent(root, 'bot1', { now: at('2026-10-31T09:30:00+08:00') })
-  markDateReminderSent(root, 'bot2', { now: at('2026-10-30T09:30:00+08:00') })
+  markDateReminderSent(root, 'bot1', { now: new Date(2026, 9, 31, 9, 30) })
+  markDateReminderSent(root, 'bot2', { now: new Date(2026, 9, 30, 9, 30) })
   const store = JSON.parse(fs.readFileSync(path.join(root, 'dates.json'), 'utf8'))
   assert.equal(store.accounts.bot1.lastSent, '2026-10-31')
   assert.equal(store.accounts.bot2.lastSent, '2026-10-30')
