@@ -2956,3 +2956,16 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **接线**：`index.js` 构造 bridge 时注入 `allowBackground`（每次读实时配置，卡片改完下一次生效）与 `onBackgroundCall`；schema 加 `backgroundDailyLimit`（默认 0），设置卡加一个字段。
 - **测试**：`test/budget.test.js` 5 条（0 不限、到上限拒绝、跨天归零、损坏文件容错、bridge 被拒时不计数）。
 - **文档**：`docs/extras.md`「后台预算」。
+
+## 发布 0.9.15（2026-10-31）
+
+- **内容**：六项扩展 —— PDF 正文（可选 `pdfjs-dist`）、`refermsg` 引用消息、日期当天提醒、OCR 桥、出站 webhook、后台预算闸门；全量 **848/848**。
+- **npm 认证又过期**：`npm whoami` 401；`NODE_OPTIONS="--require /tmp/fake-tty.cjs" npm login --auth-type=web` 打印 `https://www.npmjs.com/login?next=/login/cli/...`，用户在浏览器授权后恢复（`whoami` → `panqing0313`）。publish 仍要一次 web OTP（`https://www.npmjs.com/auth/cli/5e8d2e79-…`）。
+- **打包权限**：5 个新文件是 `0600`，tarball 校验 `✗ 5 file(s) in the tarball are not world-readable`；`git ls-files -z | xargs -0 chmod go+rX` 后重跑。新文件用编辑器创建时默认 0600，发版前记得这一步。
+- **核验**：`dist-tags.latest = 0.9.15`、`dist.shasum f703e6eb54502dcb26f784ae0731a236b49b57b1`、`dist.integrity sha512-zsPyQusvFdyiqpuHHBcu9TEwQwVZblncKaEynBV4wSzrPSpqwLhrbtuJ6B/W4Ra5unfNJYwi0+OqsIKAlc8poA==`、`gitHead e3a29e0c3c9ad3a32d0d616053e4570cad459cb5`；tag `v0.9.15`（指向 `e3a29e0`）、GitHub release 已建；profile `^0.9.14 → ^0.9.15`、`node_modules` 0.9.15、锁文件刷新。
+- **CI 两处修复**（发布后转绿）：
+  - `19c191b`：`test/dates.test.js` 用 `2026-10-31T09:00+08:00` 断言「已到 9 点」，UTC runner 上那是 01:00 → 改成本地时间构造（`new Date(2026,9,31,9,0)`）。
+  - `8155888`：OCR 超时定时器 `unref()` 后，事件循环可以先空而 promise 永不 settle，Node 22 报 `Promise resolution is still pending but the event loop has already resolved`；去掉 `unref`（定时器由 `finish()` 清除，且有 `timeoutMs` 上限）。
+  - 两条都先在本地 `fnm exec --using=v22.23.4 -- npm test` 全量 848/848 验证；CI run `41161838714` 双绿。
+- **宿主升级**：本机 DSH 已是 `0.2.1-rc.5`，不在测试表（表里是 `0.2.1-rc.3`），`doctor` 会明确标出。按 `docs/compatibility.md` 的 5 步复核通过后再加行，不提前写「已验证」。
+- tag 触发的 release workflow `41161269592` 失败（版本已存在，预期）。
