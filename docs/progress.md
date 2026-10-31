@@ -3025,4 +3025,4 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **核验**：本地/registry `shasum 72fe6ca0e0985c66d14a4a28f8373ea84ad8fbf0`、`dist-tags.latest = 0.9.17`、GitHub release 非 draft/prerelease；`node bin/doctor.mjs` → `installed 0.9.17`、`host 0.2.1-rc.5 (tested)`、`published up to date`。
 - **profile**：依赖 `^0.9.16 → ^0.9.17`、`node_modules` 0.9.17；release 脚本的锁文件刷新第一次因 tarball 404（注册表延迟）失败，约两分钟后用宿主自带 `pnpm install --prefer-offline` 手工刷新成功（`- 0.9.16` / `+ 0.9.17`）。
 - **CI**：发布提交 run `41167028800` success；tag 触发的 release workflow `41166913785` 失败（版本已存在，预期）。
-- **兼容表**：真机验证行仍是 `0.9.16 / 0.2.1-rc.5`；0.9.17 已装进 profile，重启复核通过后再加行。
+- **兼容表**：用户重启后复核「正常」（设置卡九个页签、左侧栏入口、收发），`docs/compatibility.md` 新增 `0.9.17 / 0.2.1-rc.5` 真机验证行；宿主版本没变，`TESTED_HOSTS` 不动。
