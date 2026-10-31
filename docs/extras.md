@@ -139,3 +139,19 @@ node bin/backup.mjs open ~/Desktop/weixin-state.enc
 - 不跑模型、不花 token、不写消息流水。
 - 已完成的待办（`done`）和没写日期的待办不会触发；没有日期的「重要日期」条目本来就不会被记忆接受。
 - 关掉：`dateReminderEnabled: false`，或设置卡「汇报」组里的开关。
+
+## 识别图片文字：OCR 桥（0.9.15）
+
+插件不内置识别引擎，只规定一个最小约定：**一个可执行文件，唯一参数是图片路径，stdout 是文字**。配置 `ocrEnabled: true` + `ocrCommand` 后，每张入站图片都会被它读一遍，结果作为 `<weixin_ocr>` 块拼进这一回合的提示。
+
+接 tesseract 的 wrapper（存成 `/usr/local/bin/ocr-img` 并 `chmod +x`）：
+
+```bash
+#!/bin/sh
+exec tesseract "$1" stdout -l chi_sim+eng 2>/dev/null
+```
+
+- 超时 `ocrTimeoutMs`（默认 20000）到点直接 `SIGKILL`，按「没有文字」处理；退出码非 0、输出为空同样只降级，不让回合失败。
+- 每张图最多保留 `ocrMaxChars`（默认 2000）字。
+- 不配置就完全不走这条路：图片仍按原来的方式保存、把路径交给模型。
+- 识别结果是不可信文本，和文档正文一样先 `neutralizeTags` 再进提示。

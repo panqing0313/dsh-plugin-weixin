@@ -2932,3 +2932,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **状态**：`dates.json` 按账号存 `lastSent`，原子写；没命中的日子不标记，当天补记仍能发。
 - **测试**：`test/dates.test.js` 7 条（时间解析、跨年匹配、当天待办/已完成/其它日期、文案、到点与每日一次、账号隔离、状态文件）。
 - **文档**：`docs/extras.md`「重要日子的当天提醒」；设置卡「汇报」组两个开关。
+
+### ④ OCR 桥：一个可执行文件，一条约定（`src/media/ocr.js`）
+
+- **为什么**：图片里的字（截图、单据、聊天记录）模型看不见；内置识别引擎要么体积不可接受、要么中文效果差，而且每个平台的安装方式都不同。
+- **做成什么**：`resolveOcrSettings(config)` 只在 `ocrEnabled === true` 且 `ocrCommand` 非空时返回设置；`extractImageText(filePath, settings)` 用 `spawn(command, [filePath])` 跑一次，stdout 即文字，超时 `SIGKILL`，退出码/空输出/ spawn 失败全部降级成 `{ ok:false, code }`，**从不抛**。`index.js` 的入站循环对 `kind === 'image'` 的附件逐张调用，成功则把 `<weixin_ocr path=...>` 拼进 `parts`（与文档正文同级、同样 `neutralizeTags`）。
+- **默认关闭**：`ocrEnabled` 默认 false，`ocrCommand` 默认空——没有引擎的部署行为与之前完全一致。
+- **测试**：`test/ocr.test.js` 7 条（设置解析、路径是唯一参数、截断、非零退出、空输出、超时 kill、spawn 失败）。
+- **文档**：`docs/extras.md`「识别图片文字：OCR 桥」含 tesseract wrapper 示例；设置卡新增四个字段。

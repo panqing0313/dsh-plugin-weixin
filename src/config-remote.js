@@ -802,6 +802,10 @@ export const FIELDS = [
       fields: [
         { path: "documentExtract", type: T.boolean, default: true, label: "读取文档正文", labelEn: "Read document text", hint: "docx / txt / md / csv / json 发进来时把正文拼进这一回合的提示，而不是只告诉模型文件存在哪；pdf 需要可选依赖 pdfjs-dist（没装就只给路径）", hintEn: "Put the text of docx/txt/md/csv/json into the turn instead of only its path; PDF needs the optional pdfjs-dist package (without it you only get the path)" },
         { path: "documentTextChars", type: T.number, default: 4000, label: "最多读多少字", labelEn: "Characters per document", hint: "超出的部分截断并注明；一份长合同不必整份塞进上下文", hintEn: "Longer documents are cut with a note; a long contract need not fill the context" },
+        { path: "ocrEnabled", type: T.boolean, default: false, label: "识别图片文字", labelEn: "OCR images", hint: "调用外部命令识别图片；插件不内置识别引擎，默认关闭", hintEn: "Runs an external OCR command; no engine is bundled, off by default" },
+        { path: "ocrCommand", type: T.text, default: "", label: "OCR 命令", labelEn: "OCR command", hint: "可执行文件的绝对路径，参数是图片路径，stdout 是文字；建议写个 wrapper 接 tesseract 或云 OCR", hintEn: "Absolute path to an executable; image path as its only argument, text on stdout" },
+        { path: "ocrTimeoutMs", type: T.number, default: 20000, label: "OCR 超时（毫秒）", labelEn: "OCR timeout (ms)", hint: "超时就杀掉子进程，按「没有文字」处理", hintEn: "Killed after this many ms and treated as no text" },
+        { path: "ocrMaxChars", type: T.number, default: 2000, label: "OCR 最多多少字", labelEn: "OCR characters", hint: "每张图最多保留多少字", hintEn: "Characters kept per image" },
       ],
     },
     {

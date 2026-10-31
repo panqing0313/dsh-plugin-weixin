@@ -72,6 +72,7 @@ import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
 import { DEFAULT_DOCUMENT_CHARS, extractDocumentTextAsync } from './media/document.js'
+import { resolveOcrSettings, extractImageText } from './media/ocr.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
@@ -193,6 +194,10 @@ export const Config = z.object({
   sideProvider: z.string().default('').description('后台任务模型 provider：/summary、/subscribe 到点、主动开口这类侧会话用它；留空则回落到记忆模型，再回落到会话模型。'),
   sideModel: z.string().default('').description('后台任务模型 model：和 sideProvider 一起填才生效。'),
   documentExtract: z.boolean().default(true).description('Extract the text of an inbound document (docx/txt/md/csv/json) into the turn, instead of only telling the model where it was saved. PDF needs the optional pdfjs-dist package; without it a PDF is only described by its path.'),
+  ocrEnabled: z.boolean().default(false).description('Run an external OCR command on inbound images and put the text into the turn. Off by default: the plugin ships no OCR engine.'),
+  ocrCommand: z.string().default('').description('Absolute path to an OCR executable. It is called with the image path as its only argument; stdout must be the text. A small wrapper script is the intended way to adapt tesseract or a cloud CLI.'),
+  ocrTimeoutMs: z.number().default(20000).description('Kill the OCR command after this many milliseconds.'),
+  ocrMaxChars: z.number().default(2000).description('Keep at most this many characters of OCR text per image.'),
   documentTextChars: z.number().min(200).max(20000).default(4000).description('How many characters of an inbound document to put into the prompt; the rest is cut with a note.'),
   proactiveProvider: z.string().default('').description('主动开口 provider：只给「主动开口」用，留空回落到后台任务路由。'),
   proactiveModel: z.string().default('').description('主动开口 model：和 proactiveProvider 一起填才生效。'),
@@ -1974,6 +1979,25 @@ ${neutralizeTags(extracted.text)}
           }
         }
         if (docs.length > 0) parts.push(docs.join('\n\n'))
+      }
+      // ④ 图片里的字：可选的外部 OCR 桥。没配置就完全跳过，图片仍按路径描述；
+      //    识别失败只降级成「没有文字」，不让整个回合失败。
+      if (effectiveConfig.current.ocrEnabled === true) {
+        const ocrSettings = resolveOcrSettings(effectiveConfig.current)
+        if (ocrSettings !== undefined) {
+          for (const file of saved) {
+            if (file.kind !== 'image') continue
+            const ocr = await extractImageText(file.path, ocrSettings)
+            if (ocr.ok) {
+              parts.push(`<weixin_ocr path="${file.path}">
+${neutralizeTags(ocr.text)}
+</weixin_ocr>`)
+              log(`ocr read ${ocr.text.length} chars from ${file.path} (truncated=${ocr.truncated})`)
+            } else if (ocr.code !== 'empty') {
+              warn(`ocr skipped for ${file.path}: ${ocr.reason}`)
+            }
+          }
+        }
       }
       // A failure with no caption and nothing saved is answered here rather
       // than by the agent: there is no content to reason about, only an error
