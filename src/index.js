@@ -66,6 +66,7 @@ import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { datesOnThisDay, buildDateReminderText, dateReminderDue, markDateReminderSent } from './message/dates.js'
 import { createWebhookSender } from './webhook.js'
+import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
@@ -271,6 +272,7 @@ export const Config = z.object({
   dateReminderEnabled: z.boolean().default(true).description('重要日子的当天提醒：记忆里的生日/纪念日、以及写死日期的待办，到点发一条短消息，不跑模型。'),
   dateReminderWhen: z.string().default('09:00').description('当天提醒的发送时间（HH:MM，本地时区）。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
+  backgroundDailyLimit: z.number().default(0).description('每天允许的后台模型调用次数上限（记忆折叠、日报、核对、订阅、主动开口都算）；0 表示不限。主对话不受影响。'),
   digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
   memoryReviewEnabled: z.boolean().default(true).description('每周到点发一条记忆核对：「我记住的这些还准吗」，你回 /remember 或 /forget 纠正。'),
   memoryReviewWhen: z.string().default(DEFAULT_REVIEW_WHEN).description('记忆核对时间，形如「每周日 20:00」。'),
@@ -532,6 +534,14 @@ export function apply(ctx, config) {
         // C20: the conversation's route, re-read per turn so a card edit lands
         // without restarting the plugin.
         chatRoute: () => routeFor('chat', withSavedConfig(config)),
+        // ⑥ 后台预算：0 = 不限；读实时配置，卡片改完下一次调用就生效。
+        allowBackground: () => {
+          const live = withSavedConfig(config)
+          const limit = Number(live.backgroundDailyLimit) || 0
+          if (limit <= 0) return { allowed: true, used: 0, limit: 0 }
+          return backgroundBudget(stateRoot, { limit, warn })
+        },
+        onBackgroundCall: () => recordBackgroundCall(stateRoot, { warn }),
         onToolCall: (entry) => {
           if (withSavedConfig(config).toolNotices === false) return
           const verdict = classifyToolCall({ tool: entry.tool, args: entry.args })

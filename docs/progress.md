@@ -2948,3 +2948,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **接线**：复用已有的 hook bus，不新开调用点 —— `index.js` 在 setup 里订阅 `HOOK_POINTS.inboundAccepted` → `message.received`、`HOOK_POINTS.outboundSettled` → `reply.settled`；dispose 时统一退订。URL 为空/非法就完全不创建 sender。
 - **测试**：`test/webhook.test.js` 5 条（URL 校验、JSON 形状与 ISO 时间、HMAC 签名、非 2xx、网络错误）。
 - **文档**：`docs/extras.md`「出站 webhook」含签名校验片段；设置卡三个字段。
+
+### ⑥ 后台预算闸门：只挡后台，不挡对话（`src/budget.js`）
+
+- **为什么**：后台调用（记忆折叠、日报、核对、订阅、主动开口）没有用户消息触发，一个循环 bug 或话痨日报能在夜里把额度烧光，而没人立刻发现。
+- **做成什么**：`backgroundBudget(stateRoot, { limit, now })` 读 `budget.json`（`{schemaVersion, day, used}`，跨天归零），`limit <= 0` 不限；`recordBackgroundCall()` 在**实际发起后**才 +1。闸门装在 `AgentBridge.summarize()` 入口：`allowBackground()` 返回 `{allowed:false}` 时直接返回 `undefined`，不 attach、不排队、不计数。
+- **接线**：`index.js` 构造 bridge 时注入 `allowBackground`（每次读实时配置，卡片改完下一次生效）与 `onBackgroundCall`；schema 加 `backgroundDailyLimit`（默认 0），设置卡加一个字段。
+- **测试**：`test/budget.test.js` 5 条（0 不限、到上限拒绝、跨天归零、损坏文件容错、bridge 被拒时不计数）。
+- **文档**：`docs/extras.md`「后台预算」。

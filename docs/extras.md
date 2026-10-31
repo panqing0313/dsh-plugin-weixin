@@ -177,3 +177,12 @@ x-weixin-signature: sha256=<hex>        # 配置了 webhookSecret 才有
   ```
 - 超时 `webhookTimeoutMs`（默认 5000）；非 2xx、网络错误、超时都只写日志，不影响回复。
 - 只支持 http(s)；URL 不合法时启动日志会说明并停用，不会悄悄重试。
+
+## 后台预算：给不面向用户的调用设个上限（0.9.15）
+
+记忆折叠、日报、记忆核对、订阅到点、主动开口都会真的调模型，但它们不由某条用户消息触发——出问题时没人立刻发现。`backgroundDailyLimit` 给这些调用一个**按天**的总量：
+
+- 默认 `0` = 不限；配成正数后，当天后台调用达到上限就不再发起，日志写 `background model call skipped: background budget N/N used today`。
+- 跨天自动归零；计数在 `<状态目录>/budget.json`。
+- **主对话永远不受影响**：用户说话不受预算限制，闸门只装在 `AgentBridge.summarize()` 这一条后台入口上。
+- 被挡下的调用不计数、不 attach、不计费。

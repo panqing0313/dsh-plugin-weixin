@@ -676,6 +676,7 @@ export const FIELDS = [
       group: "汇报",
       groupEn: "Reports",
       fields: [
+        { path: "backgroundDailyLimit", type: T.number, default: 0, label: "后台调用每日上限", labelEn: "Daily background calls", hint: "记忆折叠、日报、核对、订阅、主动开口共用这个额度；0 = 不限，主对话不受影响", hintEn: "Shared cap for memory folds, digests, reviews, subscriptions and proactive lines; 0 = unlimited, chat is never blocked" },
         { path: "digestEnabled", type: T.boolean, default: true, label: "每天发日报", labelEn: "Daily digest", hint: "到点发一条当天简报（聊了什么、还有哪些待办）；只报流水里的真实数字，不编内容", hintEn: "One message a day: what was talked about and what is still open, from the journal only" },
         { path: "digestWhen", type: T.text, default: "每天 21:00", label: "日报时间", labelEn: "Digest time", hint: "形如「每天 21:00」或「每周五 18:30」；看不懂就当天不发", hintEn: "e.g. 每天 21:00 / 每周五 18:30" },
         { path: "memoryReviewEnabled", type: T.boolean, default: true, label: "每周核对记忆", labelEn: "Weekly memory review", hint: "把记着的事编号列出来问一句「还准吗」，你回 /remember 旧 → 新 或 /forget 编号 纠正", hintEn: "Lists what it remembers and asks if it is still right" },

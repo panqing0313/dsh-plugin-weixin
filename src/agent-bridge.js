@@ -144,6 +144,12 @@ export class AgentBridge {
     // that polls the session log), so it is the only place that can say which
     // tool ran; where the lines go is the caller's decision.
     this.onToolAudit = options.onToolAudit
+    // ⑥ Background budget: the caller decides whether a background model call
+    // may run right now, and learns when one actually started. `summarize` is
+    // the single door every background job goes through, so the gate lives
+    // here instead of in six call sites.
+    this.allowBackground = options.allowBackground
+    this.onBackgroundCall = options.onBackgroundCall
     // C15: fired for every tool/call the audit scan sees, with the conversation
     // attached, so the caller can warn the owner in WeChat without parsing the
     // audit log. Separate from onToolAudit because it must run even when the
@@ -666,6 +672,13 @@ export class AgentBridge {
    * @returns {Promise<{ text: string, sessionId: string } | undefined>}
    */
   async summarize({ conversationId, accountId, prompt, sessionPrefix = 'wx-mem-', route }) {
+    // ⑥ 预算闸门先于一切：被挡下的调用不 attach、不排队、不计费。
+    const verdict = this.allowBackground?.()
+    if (verdict?.allowed === false) {
+      this.log?.(`background model call skipped: ${verdict.reason ?? 'background budget exhausted'}`)
+      return undefined
+    }
+    this.onBackgroundCall?.()
     const key = scopedLineKey(accountId, conversationId)
     // The route is part of the identity: a session created under one model
     // cannot be re-pointed at another, so changing the memory model has to
