@@ -69,7 +69,7 @@ import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
 import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings } from './media/asr.js'
-import { DEFAULT_DOCUMENT_CHARS, extractDocumentText } from './media/document.js'
+import { DEFAULT_DOCUMENT_CHARS, extractDocumentTextAsync } from './media/document.js'
 import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
@@ -190,7 +190,7 @@ export const Config = z.object({
   chatModel: z.string().default('').description('主对话模型 model：和 chatProvider 一起填才生效。'),
   sideProvider: z.string().default('').description('后台任务模型 provider：/summary、/subscribe 到点、主动开口这类侧会话用它；留空则回落到记忆模型，再回落到会话模型。'),
   sideModel: z.string().default('').description('后台任务模型 model：和 sideProvider 一起填才生效。'),
-  documentExtract: z.boolean().default(true).description('Extract the text of an inbound document (docx/txt/md/csv/json) into the turn, instead of only telling the model where it was saved. PDF is not supported.'),
+  documentExtract: z.boolean().default(true).description('Extract the text of an inbound document (docx/txt/md/csv/json) into the turn, instead of only telling the model where it was saved. PDF needs the optional pdfjs-dist package; without it a PDF is only described by its path.'),
   documentTextChars: z.number().min(200).max(20000).default(4000).description('How many characters of an inbound document to put into the prompt; the rest is cut with a note.'),
   proactiveProvider: z.string().default('').description('主动开口 provider：只给「主动开口」用，留空回落到后台任务路由。'),
   proactiveModel: z.string().default('').description('主动开口 model：和 proactiveProvider 一起填才生效。'),
@@ -1923,7 +1923,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         const docs = []
         for (const file of saved) {
           if (file.kind !== 'file' && file.kind !== 'voice') continue
-          const extracted = extractDocumentText(file.path, {
+          const extracted = await extractDocumentTextAsync(file.path, {
             maxChars: effectiveConfig.current.documentTextChars ?? DEFAULT_DOCUMENT_CHARS,
           })
           if (extracted.ok) {

@@ -2907,3 +2907,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **核验**：`dist-tags.latest = 0.9.14`、`gitHead 15c7c23…`；`doctor` → `installed version 0.9.14`、`host 0.2.1-rc.3 (tested)`、`published version up to date (0.9.14)`。
 - **清理**：tag 触发的 `release` workflow `40731262165` 失败（版本已存在，与 0.9.11–0.9.13 同一预期）；main 的 CI `40731253225` 绿。
 - **兼容表**：仍把 `0.9.10` 列为最后一组真机验证过的组合；0.9.14 已装进 profile 但未重启复核。
+
+### ① PDF 正文：可选依赖、明确降级（`src/media/document.js`）
+
+- **为什么**：`documentExtract` 原来只解 docx/txt，`.pdf` 一律回 `unsupported` —— 用户发一份合同 PDF，模型只拿到一个路径。
+- **做成什么**：`extractPdfText` 用 `pdfjs-dist` 的 legacy build（动态 `import`），`getDocument({ data, isEvalSupported: false, disableFontFace: true, useSystemFonts: false })`，逐页 `getTextContent()`，按 `item.str` 拼、`hasEOL` 补换行，`destroy()` 放在 `finally`；只取文字，不需要 canvas。`extractDocumentTextAsync` 按扩展名分流（pdf 异步、其余仍走同步零依赖路径），`src/index.js` 的入站循环改成 `await`。
+- **降级是明确的**：`pdfjs-dist` 声明成 optional peer（`peerDependencies` + `peerDependenciesMeta.optional`），默认安装不会带；没装时返回 `{ ok: false, reason: PDF_LOAD_HINT }`，解析失败返回具体错误，空文本返回 `empty`。截断与 docx 共用 `truncate()`（前 `documentTextChars` 字 + 注明）。
+- **测试**：`test/document.test.js` 15 条 —— 同步路径仍拒绝 PDF、缺包给 hint、假 pdfjs 验证逐页拼装/换行/截断/空文本/解析错误、异步入口对非 PDF 分流，以及一个**真实最小 PDF** 的集成用例（装了 `pdfjs-dist` 才跑；本机 15/15）。
+- **文档**：`docs/extras.md`「文档理解」补 PDF 与启用方法；schema 与设置卡提示同步改成「PDF 需要可选依赖 pdfjs-dist」；`package.json` 加 optional peer。

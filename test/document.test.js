@@ -5,7 +5,14 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 
-import { DEFAULT_DOCUMENT_CHARS, docxXmlToText, extractDocumentText } from '../src/media/document.js'
+import {
+  DEFAULT_DOCUMENT_CHARS,
+  PDF_LOAD_HINT,
+  docxXmlToText,
+  extractDocumentText,
+  extractDocumentTextAsync,
+  extractPdfText,
+} from '../src/media/document.js'
 
 /** A one-entry, stored (method 0) zip — enough to be a real OOXML package. */
 function zipWith(name, content, { deflate = false } = {}) {
@@ -89,9 +96,17 @@ test('plain text documents are read as-is', () => {
   assert.deepEqual(extractDocumentText(file), { ok: true, text: '# 标题\n\n正文', kind: 'text', truncated: false })
 })
 
-test('pdf is reported as unsupported instead of guessed', () => {
+test('the sync path still refuses pdf; the async path names the missing package', async () => {
   const file = tempFile('contract.pdf', Buffer.from('%PDF-1.7 not really'))
   assert.deepEqual(extractDocumentText(file), { ok: false, reason: 'unsupported' })
+  // The default loader is a dynamic import; in a checkout without the optional
+  // peer it fails and the caller gets one readable line, not a crash.
+  const result = await extractPdfText(file, {
+    loadPdf: async () => {
+      throw new Error('Cannot find package pdfjs-dist')
+    },
+  })
+  assert.deepEqual(result, { ok: false, reason: PDF_LOAD_HINT })
 })
 
 test('an empty document is a miss, not an empty prompt block', () => {
@@ -116,3 +131,105 @@ test('a non-zip file with a .docx name fails cleanly', () => {
 test('the default limit is a constant the caller can rely on', () => {
   assert.equal(DEFAULT_DOCUMENT_CHARS, 4000)
 })
+
+/** A fake pdfjs module: enough of the API `extractPdfText` touches. */
+function fakePdfjs(pages) {
+  return {
+    getDocument: () => ({
+      promise: Promise.resolve({
+        numPages: pages.length,
+        getPage: async (number) => ({
+          getTextContent: async () => ({ items: pages[number - 1] }),
+        }),
+        destroy: async () => {},
+      }),
+    }),
+  }
+}
+
+test('pdf text is assembled page by page, with line breaks kept', async () => {
+  const file = tempFile('lease.pdf', Buffer.from('%PDF-1.7 fake'))
+  const loadPdf = async () =>
+    fakePdfjs([
+      [{ str: '第一页', hasEOL: true }, { str: '租金 3000 元' }],
+      [{ str: '第二页' }],
+    ])
+  const result = await extractPdfText(file, { loadPdf })
+  assert.equal(result.ok, true)
+  assert.equal(result.kind, 'pdf')
+  assert.equal(result.truncated, false)
+  assert.match(result.text, /第一页/)
+  assert.match(result.text, /租金 3000 元/)
+  assert.match(result.text, /第二页/)
+  assert.match(result.text, /第一页[\s\S]*第二页/)
+})
+
+test('a long pdf is cut with the same note as other documents', async () => {
+  const file = tempFile('long.pdf', Buffer.from('%PDF-1.7 fake'))
+  const loadPdf = async () => fakePdfjs([[{ str: '字'.repeat(500) }]])
+  const result = await extractPdfText(file, { loadPdf, maxChars: 100 })
+  assert.equal(result.truncated, true)
+  assert.match(result.text, /只取了前 100 字/)
+})
+
+test('a pdf with no extractable text is a miss, not an empty prompt block', async () => {
+  const file = tempFile('scan.pdf', Buffer.from('%PDF-1.7 fake'))
+  const loadPdf = async () => fakePdfjs([[{ str: '   ' }]])
+  assert.deepEqual(await extractPdfText(file, { loadPdf }), { ok: false, reason: 'empty' })
+})
+
+test('a parser error is reported, not thrown at the inbound loop', async () => {
+  const file = tempFile('broken.pdf', Buffer.from('%PDF-1.7 fake'))
+  const loadPdf = async () => ({
+    getDocument: () => ({ promise: Promise.reject(new Error('Invalid PDF structure')) }),
+  })
+  const result = await extractPdfText(file, { loadPdf })
+  assert.deepEqual(result, { ok: false, reason: 'Invalid PDF structure' })
+})
+
+test('the async entry routes non-pdf documents to the sync extractor', async () => {
+  const file = tempFile('notes.txt', Buffer.from('正文'))
+  assert.deepEqual(await extractDocumentTextAsync(file), extractDocumentText(file))
+})
+
+/** Assemble a minimal, valid single-page PDF with a standard Type1 font. */
+function minimalPdf(text) {
+  const content = `BT /F1 24 Tf 20 100 Td (${text}) Tj ET`
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = []
+  objects.forEach((body, index) => {
+    offsets.push(Buffer.byteLength(pdf))
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`
+  })
+  const xref = Buffer.byteLength(pdf)
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return Buffer.from(pdf, 'latin1')
+}
+
+let pdfjsInstalled = true
+try {
+  await import('pdfjs-dist/legacy/build/pdf.mjs')
+} catch {
+  pdfjsInstalled = false
+}
+
+test(
+  'a real pdf is parsed when pdfjs-dist is installed',
+  { skip: pdfjsInstalled ? false : 'pdfjs-dist is an optional peer and is not installed here' },
+  async () => {
+    const file = tempFile('real.pdf', minimalPdf('Hello PDF'))
+    const result = await extractPdfText(file)
+    assert.equal(result.ok, true, result.ok ? '' : result.reason)
+    assert.equal(result.kind, 'pdf')
+    assert.match(result.text, /Hello PDF/)
+  },
+)
