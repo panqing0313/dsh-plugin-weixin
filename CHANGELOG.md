@@ -5,6 +5,11 @@
 
 ## 版本
 
+- **未发布** —— **改名：插件显示名统一叫「微信BOT」**：
+  - 侧边栏入口与设置页导航（`src/client.js` 的 `sidebar.panellist` / `settings.section`）从「微信 / WeChat」改成「微信BOT / WeChat BOT」
+  - 新增 `locale/en.json`、`locale/zh.json` 的 `meta.title` / `meta.description`，插件管理器与设置分组的标题也跟着改；这两个文件随包发布
+  - 包名、包 id、侧边栏面板 id（`dsh-weixin`）都没动 —— 改 id 会丢掉已部署的 profile 状态
+
 - **0.9.19** —— **五件「更快、更省、更好用」的事**：
   - 启动并行化：多个账号同时起，不再一个等一个；单个账号起不来只影响它自己（`src/startup.js`）
   - 热路径读取缓存：`config.json`、账号注册表、人设/记忆等 JSON 按 `mtime + size` 缓存文本，改文件立刻失效

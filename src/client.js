@@ -1228,7 +1228,7 @@ window.__ModuleLoader__.load({
 						name: "sidebar.panellist",
 						id: PANEL_ID,
 						order: 20,
-						label: () => t("WeChat", "微信"),
+						label: () => t("WeChat BOT", "微信BOT"),
 						locale: NS,
 					},
 					WeixinPanelGlyph));
@@ -1253,7 +1253,7 @@ window.__ModuleLoader__.load({
 						name: "settings.section",
 						id: `${PKG}-settings`,
 						order: 22,
-						label: () => t("WeChat", "微信"),
+						label: () => t("WeChat BOT", "微信BOT"),
 						locale: NS,
 						inject: () => actions,
 					},

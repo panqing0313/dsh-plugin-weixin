@@ -327,7 +327,7 @@ test('apply() registers the settings card and disposes cleanly', async () => {
   assert.equal(panelRow.meta.id, mod.PANEL_ID)
   assert.equal(seat('main').meta.key, mod.PANEL_ID)
   assert.equal(typeof panelRow.meta.label, 'function', 'the row label is a locale thunk')
-  assert.equal(panelRow.meta.label(), '微信')
+  assert.equal(panelRow.meta.label(), '微信BOT')
   assert.equal(seat('sidebar.session.row.leading').meta.id, 'dsh-plugin-weixin-row-mark')
   await dispose()
 })

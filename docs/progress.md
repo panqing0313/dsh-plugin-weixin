@@ -3136,3 +3136,13 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **核验**：本地 tarball `shasum` = `9c54c595540af46222e242e126541d9b226f0843` = registry `dist.shasum`；`dist.integrity sha512-fL3c3hEAOl5H6Fxxs1W5nEsMT3ka/P5PVgj4JknEgn4stszV7KS8jnGTXU6zosyOSJ+Lxmpu+kozbQ0WUKNJLQ==`；`gitHead 0a4a814cc6b3617f21ddddc1245647cd8396e489`；`dist-tags.latest = 0.9.19`；tag `v0.9.19` 指向 `0a4a814`、GitHub release 已建；profile `^0.9.18 → ^0.9.19`、锁文件刷新；`doctor` → `installed version 0.9.19`、`host 0.2.1-rc.5 (tested)`、`published version up to date (0.9.19)`。
 - **清理**：tag 触发的两次 `release` run（`41190583256`、`41190713293`）都以失败结束且没有发布任何东西；重新打 tag 前删掉了旧的 `v0.9.19`。
 - **兼容表**：仍是 `0.9.18 / 0.2.1-rc.5` 为最后真机验证行；0.9.19 已装进 profile，等重启复核后再加行。
+
+## 插件改名「微信BOT」（2026-10-31）
+
+用户说「插件名称重命名叫微信BOT」。显示名在宿主里有两个来源，两处都要改，否则会一半叫「微信BOT」一半还叫「WeChat」：
+
+- **客户端座位**：`src/client.js` 的 `sidebar.panellist`（左侧栏一行）与 `settings.section`（设置页导航）各有一个 `label: () => t(...)` 语言 thunk，改成 `t("WeChat BOT", "微信BOT")`。`PANEL_ID = "dsh-weixin"` 与 `PKG` 都没动 —— 面板 id 同时是 `main` 键控座位的查找键，改名会让已部署的 profile 点不开页面。
+- **插件元数据**：新增 `locale/en.json`、`locale/zh.json`（`meta.title` = `WeChat BOT` / `微信BOT`，`meta.description` 写明能力），`package.json` 加 `exports["./locale/*.json"]` 与 `files` 里的 `locale`。插件管理器与设置页分组的标题读这里；缺了会回退到包名 `dsh-plugin-weixin`。
+- **测试**：`test/client-remote.test.js:330` 的快照断言改成 `微信BOT`；新增 `test/display-name.test.js` 三条，把「侧边栏/设置的 label」「两个 locale 的 meta.title」「locale 必须随包发布」钉在一起 —— 只改一处就红。
+- **文档**：`README.md:44`、`README.en.md:43`、`docs/compatibility.md:30` 的界面描述跟着改；CHANGELOG 记「未发布」。
+- **验证**：全量 `npm test` **921/921**、`node bin/check.mjs` → `checked 211 files`。宿主里的真实渲染（插件管理器行标题、设置分组标题）要重启后才能看，未真机确认。

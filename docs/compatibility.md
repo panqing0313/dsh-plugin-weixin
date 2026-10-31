@@ -27,7 +27,7 @@
 
 1. `npm run doctor` —— 看 `host app` 那一行是不是 `(tested)`。
 2. 打开设置卡：九个页签都在 = 客户端 chunk 加载与座位注册没问题。
-3. 看左侧栏有没有「微信」入口 = `sidebar.panellist` + `main` 两个座位还在。
+3. 看左侧栏有没有「微信BOT」入口 = `sidebar.panellist` + `main` 两个座位还在。
 4. 发一条消息让机器人回一句 = 入站轮询、allowlist、agent 桥都活着。
 5. 都没问题就把宿主版本加进 `src/host-compat.js` 的 `TESTED_HOSTS`（一行），
    `docs/compatibility.md` 的表由 `compatibilityMarkdown()` 生成，不会和代码漂移。
