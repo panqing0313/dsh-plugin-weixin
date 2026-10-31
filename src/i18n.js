@@ -43,7 +43,7 @@ export const CATALOG = Object.freeze({
     'help.mode': { zh: '/mode [名称] 查看或切换对话模式（如 女友/男友/朋友；切换会开一条新会话线）', en: '/mode [name] show or switch the conversation mode (e.g. girlfriend/boyfriend/friend; switching opens a new session line)' },
     'help.remember': { zh: '/remember <内容> 让我长期记住一件事（跨会话、跨重启生效）', en: '/remember <text> remember something for good (across sessions and restarts)' },
     'help.forget': { zh: '/forget [编号或关键词] 忘掉一条长期记忆（编号来自 /memory）', en: '/forget [n or keyword] forget one long-term memory (numbers from /memory)' },
-    'help.memory': { zh: '/memory 查看记住的内容和这段会话的记忆', en: '/memory show what is remembered, and this conversation’s memory' },
+    'help.memory': { zh: '/memory 查看记住的内容；/memory export 导出成 Markdown 文件', en: '/memory show what is remembered; /memory export writes it out as Markdown' },
     'help.recall': { zh: '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token', en: '/recall <keyword> search the local transcript for the original text — no model, no tokens' },
     'help.summary': { zh: '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办', en: '/summary summarise this session: what we discussed, what we decided, what is left' },
     'help.export': { zh: '/export [天数] 导出最近 N 天（默认 30）的聊天记录', en: '/export [days] export the last N days (default 30) of this chat' },

@@ -53,6 +53,7 @@ import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { recordStranger } from './message/strangers.js'
+import { renderMemoryMarkdown, writeMemoryExport } from './message/memory-export.js'
 import { keywordGate, parseKeywordRules } from './message/keyword-reply.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -1797,9 +1798,31 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         }
         return ['好几个都带这个词，用编号指明删哪条：', ...hits.map((h) => `${h.index}. ${h.text}`)].join('\n')
       },
-      memory: () => {
+      memory: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
+        const sub = String(arg ?? '').trim()
         const store = readGlobalMemory(stateRoot, accountId, { warn })
+        // /memory export (导出): the operator's right to carry what it knows.
+        // Same shape as /memory, rendered as a document; a long one lands in
+        // exports/ and rides the attachment path like /export does.
+        if (/^(export|导出)$/i.test(sub)) {
+          const markdown = renderMemoryMarkdown({
+            store,
+            conversations: listConvMemories(stateRoot, accountId),
+            dates: upcomingDates(store, new Date(), { leadDays: Number(modeConfig().dateReminderLeadDays ?? 0) })
+              .map((item) => ({ label: item.label, date: item.on })),
+            accountId,
+            conversationId,
+            formatProfile,
+            formatEvents,
+            bondLine,
+            describeAffinity,
+            affinity: readAffinityHistory(stateRoot, accountId, conversationId, { warn }),
+          })
+          if (markdown.length <= 3000) return markdown
+          const file = writeMemoryExport(stateRoot, accountId, conversationId, markdown)
+          return `记忆已导出成文件：\n${file}\n同一份内容也可以在设置卡「消息流水」页签导出聊天记录。`
+        }
         const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
         const recent = readRecentWindow(stateRoot, accountId, conversationId, { warn })
         const parts = []

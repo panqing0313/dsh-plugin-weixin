@@ -3245,3 +3245,9 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - 接线：`groupDecision.reply === false` 分支（mention/all 都没命中时）先试关键词 —— 闸门：`isAllowedSender` + `quietGate === 0`；命中就 `sendChunked` 发模板并 `return`，`metrics.inc('group.keyword')`，否则照旧走 refused 钩子。`quietGate` 通过模块级 cell `quietGateFor` 传进 handler（与 `senderDailyLimiterFor` 同一招，setup 作用域够不到 handler 构造处）。
 - 配置：schema `groupKeywords`（T.text，设置卡群聊组，`config-remote.test.js` 的表单↔schema 双向覆盖自动生效）。
 - 测试 `test/keyword-reply.test.js` 3 条；全量 939/939。
+
+## /memory export（2026-11-01，0.10.0 第 4 项）
+
+- 新模块 `src/message/memory-export.js`：`renderMemoryMarkdown`（给什么画什么，空段不出章节）+ `writeMemoryExport`（复用 chat-export 的 exports 目录与命名习惯，前缀 `memory-`）。
+- 接线：`/memory` 模式从 `identity` 改为捕获 arg（`src/sessions.js`），`index.js` 的 memory handler 开头分流 `export|导出`；长文走 `resolveOutboundReply` 附件链路（与 /export 相同）。`help.memory` 文案更新（中英）。
+- 测试 `test/memory-export.test.js` 3 条（分层渲染、空记忆、文件命名）；全量 942/942。

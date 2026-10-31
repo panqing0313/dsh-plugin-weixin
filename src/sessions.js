@@ -652,7 +652,7 @@ const COMMANDS = [
   { id: 'mode', pattern: /^\/(?:mode|模式)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 6, helpKey: 'help.mode' },
   { id: 'remember', pattern: /^\/(?:remember|记住)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 7, helpKey: 'help.remember' },
   { id: 'forget', pattern: /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 8, helpKey: 'help.forget' },
-  { id: 'memory', pattern: /^\/(?:memory|记忆)$/i, build: identity, helpRank: 9, helpKey: 'help.memory' },
+  { id: 'memory', pattern: /^\/(?:memory|记忆)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 9, helpKey: 'help.memory' },
   { id: 'recall', pattern: /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 10, helpKey: 'help.recall' },
   { id: 'todo', pattern: /^\/(?:todo|待办)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 11, helpKey: 'help.todo' },
   { id: 'later', pattern: /^\/(?:later|稍后读|稍后)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 12, helpKey: 'help.later' },
