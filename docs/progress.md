@@ -3173,3 +3173,15 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 测试：`test/stats.test.js` 新增 2 条（会话 series 补 0；health 满分/降级/未设预算三种情况），新建 `test/prompt-composition.test.js` 4 条（读取与覆盖、空值与非数字段丢弃、8 账号淘汰、标签双语齐全）。全量 **927/927**、`node bin/check.mjs` → `checked 213 files`。
 
 文档：README 统计页签一节改写成「精确 / 估算 / 故意不显示」三段；`docs/extras.md` 新增本节，附一张数据边界表。
+
+## 消息流水改成聊天时间线（2026-11-01）
+
+用户说「消息流水界面能不能优化好看的界面」。原实现是 `JournalSection` 里一行一条的纯文字（`时间 ↑/↓ 账号 发送者: 文本`，`limit: 50`），能查但不像聊天。
+
+改成按本地日期分组的聊天时间线：日期分隔线（今天/昨天/月-日）、收左发右的气泡（朝发送者那角收小圆角）、气泡下 11px 小字（时间/账号/发送者）、顶部「全部 / 收到 / 发出」筛选、窗口 200 条、卡片内滚动 `maxHeight: 460`、长文本 `pre-wrap` + `overflow-wrap: anywhere`、空态一句提示。颜色只用主题 token（`surfaceSunken`/`border`/`primaryFill`/`onPrimary`），不写死。
+
+数据侧只把 `journal` 远程调用从 50 改成 200，没有新字段与新状态。
+
+坑：第一次用 python 改这个文件时，`s.index(end_marker)` 没从 `start_marker` 之后找，`统计页签` 注释在文件里更早出现，`j < i` 把文件拼坏（2542 → 2262 行、`function JournalSection` 消失）；第二次改成按行范围切片，但起点取在注释处，把函数签名一起删了。最终用「先找 `统计页签` 注释 → 往回找最近的 `const head = createElement(...)` → 替换到 `/**` 之前」才干净。教训：整段替换前先 `grep` 确认边界唯一，并检查替换后 `function X` 仍在。
+
+测试：`test/client-remote.test.js` 新增一条源码形状断言（limit 200、三种筛选、`entry.dir === filter`、今天/昨天标签、气泡背景/圆角、`pre-wrap`、`maxHeight: 460`），该文件 18/18；全量与 `check.mjs` 见提交记录。

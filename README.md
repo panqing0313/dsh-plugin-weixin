@@ -258,7 +258,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `eventPollMs` | 事件轮询间隔（毫秒），默认 1000。回答要等下一次快照才可见；调小更快、更费 CPU，主要给测试用 |
 | `sendCooldownMs` | `30000` | 连续 3 次发送失败后的冷却时长（毫秒），避免把临时拒绝升级成账号封锁 |
 | `readLinks` | `true` | 消息含 http(s) 链接时抓取网页正文给 Agent 参考；打不开的链接只报一行原因，不影响消息 |
-| `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 50 条 |
+| `messageJournal` | `true` | 把最近的收发消息记入本地流水，设置卡「消息流水」页签展示最近 200 条（聊天时间线） |
 | `personaDefaultMode` | `'default'` | 新会话默认的对话模式。设置卡「个性化」页签的「默认模式」选择器会实时覆盖它（存盘即生效，不需要重载） |
 | `memoryEnabled` | `true` | 把长期记忆、会话摘要与最近消息窗口折进提示词。关掉后 /remember、/forget、/memory 一并停用；/mode 是独立功能，不受影响 |
 | `memorySummaryTurns` | `10` | 每多少个已完成的 agent 回合，后台自动把这段会话的摘要更新一次 |
@@ -514,10 +514,13 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 ### 消息流水（messageJournal）
 
 `messageJournal` 开着时（默认开），每条收发的文本消息都会追加到本地流水（`<状态目录>/journal/`，
-按天一个文件，文本截断 200 字符）。设置卡的「消息流水」页签显示最近 50 条（收 ↓ / 发 ↑、账号、时间、
-内容，最新在前），不用翻日志就能确认每个账号都活着。写流水是尽力而为：失败只 warn，绝不影响消息收发。
+按天一个文件，文本截断 200 字符）。设置卡的「消息流水」页签是一段**聊天时间线**：最近 200 条按本地
+日期分组（今天 / 昨天 / 月-日），收到的靠左、机器人发出的靠右，气泡下角小字是时间、账号与发送者；
+顶部可按「全部 / 收到 / 发出」筛选，列表在自己的框里滚动，不用翻日志就能确认每个账号都活着。
+写流水是尽力而为：失败只 warn，绝不影响消息收发。
 页签顶部有 **导出记录** 按钮：把最近 30 天渲染成 Markdown 由卡片直接下载，不经过服务端文件。
-`test/journal.test.js` 与 `test/e2e.test.js` 的 messageJournal 用例守着这些行为。
+`test/journal.test.js`、`test/client-remote.test.js` 的 journal 用例与 `test/e2e.test.js` 的 messageJournal
+用例守着这些行为（含「分块时间线」的源码形状断言）。
 
 ### 本地回忆检索（/recall）
 

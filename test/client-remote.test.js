@@ -819,3 +819,33 @@ test('the account editors are inline rows, never window.prompt', () => {
   assert.match(submit[0], /ctx\.remote\.weixin\.allowlist\(accountId, draft, ""\)/, 'the allowlist path must send the draft and an empty chat list')
   assert.match(submit[0], /setEditing\(null\)/, 'a successful commit must close the editor')
 })
+
+test('the journal renders as a chat timeline: day dividers, side-aligned bubbles, a direction filter', () => {
+  // The journal used to be a flat list of "time ↑ account sender: text" lines —
+  // correct, but unreadable once a day has more than a dozen messages. The
+  // shape that replaced it is what this test pins: bubbles aligned by direction,
+  // one divider per local day, and a client-side filter over the loaded window.
+  const client = fs.readFileSync(CARD_PATH, 'utf8')
+
+  assert.match(client, /ctx\.remote\.weixin\.journal\(\{ limit: 200 \}\)/, 'the window is 200, not 50: a chat view needs more than a screenful')
+  assert.match(client, /filterButton\("all"/, 'the filter offers "all"')
+  assert.match(client, /filterButton\("in"/, 'the filter offers received')
+  assert.match(client, /filterButton\("out"/, 'the filter offers sent')
+  assert.match(client, /entry\.dir === filter/, 'the filter is applied client-side to the loaded window')
+
+  // Day divider: the local date, not UTC, and today/yesterday get words.
+  assert.match(client, /const dayLabelOf = \(at\) => \{/, 'day labels must be computed per entry')
+  assert.match(client, /return t\("Today", "今天"\)/, 'today is a word')
+  assert.match(client, /return t\("Yesterday", "昨天"\)/, 'yesterday is a word')
+
+  // Bubbles: outgoing uses the primary fill with the primary foreground; the
+  // corners differ by side so a glance tells you who spoke.
+  assert.match(client, /background: outgoing \? C\.primaryFill : C\.surfaceSunken/, 'direction decides the fill')
+  assert.match(client, /color: outgoing \? C\.onPrimary : C\.labelPrimary/, 'the foreground follows the fill')
+  assert.match(client, /borderRadius: outgoing \? "12px 12px 3px 12px" : "12px 12px 12px 3px"/, 'the tail corner marks the speaker')
+
+  // Long text wraps and the list scrolls instead of growing the settings card
+  // without bound.
+  assert.match(client, /whiteSpace: "pre-wrap"/, 'newlines in a message must survive')
+  assert.match(client, /maxHeight: 460/, 'the timeline gets its own scroll area')
+})

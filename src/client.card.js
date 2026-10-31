@@ -1331,7 +1331,7 @@ window.__ModuleLoader__.load({
 			const load = async () => {
 				setBusy(true);
 				try {
-					const r = await callRemote(() => ctx.remote.weixin.journal({ limit: 50 }));
+					const r = await callRemote(() => ctx.remote.weixin.journal({ limit: 200 }));
 					setError("");
 					setEntries(Array.isArray(r?.entries) ? r.entries : []);
 				} catch (e) {
@@ -1344,14 +1344,6 @@ window.__ModuleLoader__.load({
 			react.useEffect(() => {
 				load();
 			}, []);
-
-			const timeOf = (at) => {
-				try {
-					return new Date(at).toLocaleTimeString();
-				} catch {
-					return "?";
-				}
-			};
 
 			const [exporting, setExporting] = react.useState(false);
 			const exportChat = async () => {
@@ -1375,8 +1367,54 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
-				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Message journal", "消息流水")),
+			const [filter, setFilter] = react.useState("all");
+
+			const dayKeyOf = (at) => {
+				const d = new Date(at);
+				return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+			};
+			const dayLabelOf = (at) => {
+				const key = dayKeyOf(at);
+				if (key === dayKeyOf(Date.now())) return t("Today", "今天");
+				if (key === dayKeyOf(Date.now() - 86400000)) return t("Yesterday", "昨天");
+				const d = new Date(at);
+				return `${d.getMonth() + 1}/${d.getDate()}`;
+			};
+			const clockOf = (at) => {
+				try {
+					return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+				} catch {
+					return "?";
+				}
+			};
+
+			const all = entries ?? [];
+			const visible = filter === "all" ? all : all.filter((entry) => entry.dir === filter);
+
+			const filterButton = (id, label) => createElement("button", {
+				key: id,
+				onClick: () => setFilter(id),
+				style: {
+					border: `1px solid ${filter === id ? C.brand : C.border}`,
+					background: filter === id ? C.surfaceSunken : "transparent",
+					color: filter === id ? C.labelPrimary : C.labelSecondary,
+					borderRadius: RADIUS.pill,
+					padding: "2px 10px",
+					fontSize: 12,
+					lineHeight: "18px",
+					cursor: "pointer",
+				},
+			}, label);
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } },
+					t("Message journal", "消息流水"),
+					createElement("span", { style: { marginLeft: 8, fontSize: 12, fontWeight: 400, color: C.labelTertiary } },
+						t(`${all.length} recent`, `最近 ${all.length} 条`))),
+				createElement("div", { style: { display: "flex", gap: 4 } },
+					filterButton("all", t("All", "全部")),
+					filterButton("in", `\u2193 ${t("Received", "收到")}`),
+					filterButton("out", `\u2191 ${t("Sent", "发出")}`)),
 				createElement("button", { onClick: () => exportChat(), disabled: exporting, style: buttonStyleFor(exporting) },
 					t("Export chat", "导出记录")),
 				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) },
@@ -1389,25 +1427,67 @@ window.__ModuleLoader__.load({
 						createElement("span", null, error)));
 			}
 
-			const rows = (entries ?? []).map((entry, i) => createElement("div", {
-				key: `${entry.at}-${i}`,
-				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "baseline" },
-			},
-				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, timeOf(entry.at)),
-				createElement("span", { style: { flex: "0 0 auto", fontWeight: 600 } }, entry.dir === "out" ? "\u2191" : "\u2193"),
-				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, entry.accountId),
-				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } },
-					`${entry.senderId ?? ""}${entry.senderId ? ": " : ""}${entry.text ?? ""}`)));
+			const bubble = (entry, i) => {
+				const outgoing = entry.dir === "out";
+				const meta = [clockOf(entry.at), entry.accountId, entry.senderId].filter(Boolean).join(" \u00b7 ");
+				return createElement("div", {
+					key: `${entry.at}-${i}`,
+					style: { display: "flex", flexDirection: "column", alignItems: outgoing ? "flex-end" : "flex-start", gap: 2 },
+				},
+					createElement("div", {
+						style: {
+							maxWidth: "78%",
+							padding: "7px 11px",
+							borderRadius: outgoing ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
+							background: outgoing ? C.primaryFill : C.surfaceSunken,
+							color: outgoing ? C.onPrimary : C.labelPrimary,
+							border: outgoing ? "1px solid transparent" : `1px solid ${C.border}`,
+							fontSize: 12.5,
+							lineHeight: "19px",
+							whiteSpace: "pre-wrap",
+							overflowWrap: "anywhere",
+							boxSizing: "border-box",
+						},
+					}, entry.text ?? ""),
+					createElement("div", { style: { fontSize: 11, lineHeight: "16px", color: C.labelTertiary, padding: "0 4px" } }, meta));
+			};
+
+			const blocks = [];
+			let lastDay = "";
+			visible.forEach((entry, i) => {
+				const day = dayKeyOf(entry.at);
+				if (day !== lastDay) {
+					lastDay = day;
+					blocks.push(createElement("div", {
+						key: `day-${day}`,
+						style: { display: "flex", alignItems: "center", gap: 8, margin: "6px 0 2px" },
+					},
+						createElement("span", { style: { flex: "1 1 auto", height: 1, background: C.border } }),
+						createElement("span", { style: { fontSize: 11, color: C.labelTertiary, padding: "0 4px" } }, dayLabelOf(entry.at)),
+						createElement("span", { style: { flex: "1 1 auto", height: 1, background: C.border } })));
+				}
+				blocks.push(bubble(entry, i));
+			});
 
 			return createElement("div", { style: panelStyle }, head,
-				rows.length === 0
-					? createElement("p", { style: hintStyle }, t("No recorded messages yet.", "还没有记录到的消息。"))
-					: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, rows),
+				visible.length === 0
+					? createElement("div", { style: { padding: "28px 12px", textAlign: "center", color: C.labelTertiary, fontSize: 12, lineHeight: "20px" } },
+						t("No recorded messages yet.", "还没有记录到的消息。"))
+					: createElement("div", {
+						style: {
+							display: "flex",
+							flexDirection: "column",
+							gap: 6,
+							maxHeight: 460,
+							overflowY: "auto",
+							padding: "4px 2px",
+							borderRadius: RADIUS.control,
+						},
+					}, blocks),
 				createElement("p", { style: captionStyle },
-					t("Newest first, last 50. \u2191 sent by the bot, \u2193 received from WeChat.",
-						"最新在前，最近 50 条。\u2191 机器人发出，\u2193 收到。")));
+					t("Newest first, last 200. \u2191 sent by the bot, \u2193 received from WeChat.",
+						"最新在前，最近 200 条。\u2191 机器人发出，\u2193 收到。")));
 			}
-
 		/**
 		 * 统计页签. Reads journal-derived stats: totals, a per-day series, the
 		 * 24-hour distribution and the busiest conversations. Bars are plain
