@@ -20,7 +20,7 @@
 import z from '@deepseek-ai/schemastery'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
-import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
+import { configureWeixinStateDir, accountsDir, ensureSessionsDir, inboxDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
 import {
   MAX_TEMP_QUIET_MS,
@@ -84,6 +84,7 @@ import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
 import { createHabitCommands, habitDigestLine, habitsList } from './message/habits.js'
+import { createMediaCommands } from './message/media-archive.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -1795,6 +1796,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
       ...createHabitCommands({ stateRoot, accountId, warn }),
+      ...createMediaCommands({ dir: inboxDir(), conversationId, sendMedia: (params) => transport.sendMedia(params), warn }),
       ...createReadingCommands({ stateRoot, accountId, warn }),
       ...createSendCommands({
         conversationId,

@@ -3058,3 +3058,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **命令**：`/habit`、`/habit add|done|rm <名字或序号>`；不调模型、不开会话。
 - **测试**：`test/habits.test.js` 9 条（新增/重复/空名、20 上限、同日重复、连续与断点、最长连续与本周、本地日期、列表文案、命令分支）；`test/session-commands.test.js` 端到端 1 条。
 - **文档**：README 命令表、`docs/extras.md`「习惯打卡」。
+
+### ⑤ 媒体归档检索 `/media`（`src/message/media-archive.js`）
+
+- **为什么**：入站媒体存在 `media/inbound/` 下，文件名是 UUID；想找回「上周那张截图」只能去 Finder 里翻，也没法从微信里重发。
+- **做成什么**：`listInboundMedia(dir, {limit})` 只读目录、跳过子目录、按 mtime 倒序（默认 8、上限 20），`mediaKind` 按扩展名给人话类型，`humanTime`/`humanBytes` 给手机可读的表述；`formatMediaList` 编号；`/media resend <序号>` 经过 `resolveArchivePath`（`realpath` 后必须仍在归档目录内、必须是普通文件）后走调用方给的 `sendMedia`，失败时保留文件并说明。
+- **测试**：`test/media-archive.test.js` 7 条（类型、时间/大小、排序与上限、缺失目录、编号文案、路径约束、命令列表/重发/越界/失败保留）。
+- **文档**：README 命令表、`docs/extras.md`「媒体归档」。
