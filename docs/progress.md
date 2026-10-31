@@ -3199,3 +3199,17 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - 修 bug：下划线用的 `C.stateOk` 并不存在（主题里叫 `success`），一直透明；统一 `C.brand`。
 - `Progress` 刻意不复用 `progressTrackStyle` token：`test/client-remote.test.js` 把该 token 的第二处出现钉在 ASR 下载条的百分比守卫上，复用会让守卫错位（实测报错后改的）。
 - 测试：`test/client-remote.test.js` 新增一条源码形状用例（样式表 id、四组 keyframes、`prefers-reduced-motion`、七个原语、TabIcon 使用、无 `C.stateOk`），19/19；`check.mjs` 通过。
+
+## 准备 1.0.0（2026-11-01）
+
+用户：「发布版本 1.0.0」。
+
+`package.json` 与 `src/client.js` 的 `PLUGIN_VERSION` 目前仍是 `0.9.20`，但工作树里已经有三批未发布的改动（都在 main 上）：
+
+- `ca29fd1` 统计页签：每会话迷你折线、提示词构成条、健康度环；token 与缓存命中率明确不画。
+- `6914da3` 消息流水改成聊天时间线（日期分组、收左发右、方向筛选、200 条、卡片内滚动）。
+- `7578aac` 卡片设计层：自带样式表（keyframes/过渡/减少动态）、七个原语、九页签图标与选中态、登录横幅/会话/提醒/关于页逐一美化，并修掉 `C.stateOk` 不存在导致的透明下划线。
+
+所以 1.0.0 = 上面三批 + 版本号跨越到 1.0。语义上这是**功能里程碑**而非 API 稳定承诺：插件的对外面仍是 DSH 宿主、微信服务与本地状态文件，没有对外 SDK，1.0 表示「这批界面与统计口径我们认为可以定下来」。
+
+发版流程沿用既定步骤：`git ls-files | chmod go+rX` 防 tarball 权限坑 → `bin/release.mjs 1.0.0`（preflight/全量/bump/tarball/publish）→ 用户在真实终端点 npm 授权（或直接 `npm publish`）→ 等注册表可读 → `bin/release.mjs --finish 1.0.0`（tag/push/release/profile 安装）→ 核验 shasum/integrity/gitHead → `docs: 1.0.0 is published`。
