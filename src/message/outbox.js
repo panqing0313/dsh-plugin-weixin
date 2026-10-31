@@ -198,6 +198,25 @@ export function createOutbox({ stateRoot, transportFor, warn = () => {}, log = (
  *
  * @param {string} file
  */
+/**
+ * 待重发队列的人话版（`/outbox`）。只读，不触发发送。
+ *
+ * @param {Array<{id:string,createdAt:number,attempts?:number,lastError?:string,text?:string}>} items
+ * @param {{ now?: number, limit?: number }} [options]
+ */
+export function formatOutbox(items, { now = Date.now(), limit = 5 } = {}) {
+  if (!Array.isArray(items) || items.length === 0) return '重发队列是空的。'
+  const shown = items.slice(0, limit)
+  const lines = shown.map((item, index) => {
+    const minutes = Math.max(0, Math.round((now - Number(item.createdAt ?? now)) / 60_000))
+    const preview = String(item.text ?? '').replace(/\s+/g, ' ').slice(0, 40)
+    const failure = item.lastError ? ` · 上次失败：${String(item.lastError).slice(0, 60)}` : ''
+    return `${index + 1}. ${item.id} · ${minutes} 分钟前 · 尝试 ${item.attempts ?? 0} 次${failure}\n   ${preview}${String(item.text ?? '').length > 40 ? '…' : ''}`
+  })
+  const more = items.length > limit ? `\n…还有 ${items.length - limit} 条。` : ''
+  return `待重发 ${items.length} 条：\n${lines.join('\n')}${more}\n\n/outbox retry 立即重试；/outbox drop <id> 丢弃一条。`
+}
+
 export function stillOnDisk(file) {
   try {
     return fs.statSync(file).isFile()

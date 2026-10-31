@@ -31,7 +31,7 @@ import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sw
 import { DEFAULT_KEEP, createBackup } from './backup.js'
 import { DEFAULT_DIGEST_WHEN, DEFAULT_REVIEW_WHEN, ReportScheduler, buildDigestPrompt, buildReviewPrompt, describeReport, pickConversation } from './message/reports.js'
 import { HEARTBEAT_MS, acquireInstanceLock, heartbeatInstanceLock, releaseInstanceLock } from './instance-lock.js'
-import { createOutbox } from './message/outbox.js'
+import { createOutbox, formatOutbox } from './message/outbox.js'
 import { configureOutbound, sendChunked, sendProducedFiles, sleep } from './outbound.js'
 import { channelFor } from './channel.js'
 import { HOOK_POINTS, createHooks } from './hooks.js'
@@ -1524,6 +1524,21 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       return isCompanionMode(active)
     }
     return {
+      // `/outbox`：出站失败的那条消息去哪了、现在能不能补发。只读队列，不重排。
+      outbox: async (arg) => {
+        if (outbox === undefined) return '重发队列还没准备好（插件还在启动）。'
+        const raw = String(arg ?? '').trim()
+        if (raw === '') return formatOutbox(outbox.pending())
+        if (/^(?:retry|重试)$/i.test(raw)) {
+          const result = await outbox.flush({ force: true })
+          return `已重试：发出 ${result.sent} 条，失败 ${result.failed} 条，还剩 ${result.remaining} 条。`
+        }
+        const drop = /^(?:drop|丢弃|删除)\s+(\S+)$/i.exec(raw)
+        if (drop !== null) {
+          return outbox.drop(drop[1]) ? `已丢弃 ${drop[1]}。` : `队列里没有 ${drop[1]}。`
+        }
+        return '用法：/outbox 查看 · /outbox retry 立即重试 · /outbox drop <id> 丢弃。'
+      },
       // `/diag`：不调模型的一条自检。用户问「怎么没反应」时，先看闸门。
       diag: () => {
         const live = effectiveConfig.current

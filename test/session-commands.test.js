@@ -800,3 +800,12 @@ test('/diag answers with the gates, without opening a session', async () => {
     assert.equal(sessionsOpened.length, 0, 'diag never needs the model')
   })
 })
+
+test('/outbox shows the empty queue instead of pretending a send happened', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/outbox', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the outbox reply')
+    assert.match(fake.outbound[0].text, /重发队列是空的。/)
+    assert.equal(sessionsOpened.length, 0)
+  })
+})

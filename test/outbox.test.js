@@ -10,6 +10,7 @@ const {
   MAX_ITEMS,
   MAX_RETRY_MS,
   createOutbox,
+  formatOutbox,
   outboxFile,
   readOutbox,
   retryDelayMs,
@@ -161,4 +162,33 @@ test('one item can be dropped by id', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('the /outbox view says what is waiting, how old, and why it failed', () => {
+  const now = Date.UTC(2026, 9, 31, 3, 0, 0)
+  assert.equal(formatOutbox([], { now }), '重发队列是空的。')
+
+  const text = formatOutbox([
+    {
+      id: 'abc123',
+      createdAt: now - 5 * 60_000,
+      attempts: 2,
+      lastError: 'fetch failed: timeout',
+      text: 'x'.repeat(80),
+    },
+  ], { now })
+  assert.match(text, /待重发 1 条/)
+  assert.match(text, /abc123 · 5 分钟前 · 尝试 2 次 · 上次失败：fetch failed: timeout/)
+  assert.match(text, /xxxx…/)
+  assert.match(text, /\/outbox retry/)
+})
+
+test('the view shows five and counts the rest', () => {
+  const now = Date.UTC(2026, 9, 31, 3, 0, 0)
+  const items = Array.from({ length: 7 }, (_, i) => ({ id: `id${i}`, createdAt: now, attempts: 0, text: `t${i}` }))
+  const text = formatOutbox(items, { now })
+  assert.match(text, /待重发 7 条/)
+  assert.match(text, /id4/)
+  assert.doesNotMatch(text, /id5/)
+  assert.match(text, /还有 2 条/)
 })

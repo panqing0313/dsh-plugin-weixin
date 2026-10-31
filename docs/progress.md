@@ -2993,3 +2993,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **细节**：宿主版本不传就不写「宿主」那行（不编造）；`transport` 为空时明说「连接未就绪，收不到消息」；主动开口没有状态文件时说「今天还没有发过」而不是 0/3。
 - **测试**：`test/diag.test.js` 3 条（全量字段、静默+断连、无宿主版本）；`test/session-commands.test.js` 新增 1 条端到端（回 `自检 · v…`、不打开任何会话）。
 - **文档**：README 命令表、`docs/extras.md`「`/diag`：它为什么没动静」。
+
+### ③ `/outbox`：把「没发出去」变成可见、可重试（`src/message/outbox.js` + `src/sessions.js`）
+
+- **原来的断点**：出站失败已经会入队并自动退避重试，但只有设置卡能看见；用户在聊天里不知道有东西卡着，也没法立刻重试。
+- **做成什么**：`formatOutbox(items,{now,limit})` 纯函数渲染队列（条数、id、多久以前、尝试次数、上次错误、40 字预览）；`/outbox` 查看、`/outbox retry` 强制 `flush({force:true})`、`/outbox drop <id>` 丢弃。复用既有 `pending/flush/drop`，不新增状态，也不改变自动重试。
+- **测试**：`test/outbox.test.js` 新增 2 条（空队列、列表/错误/截断、上限与剩余）；`test/session-commands.test.js` 新增 1 条端到端（空队列文案、不打开会话）。
+- **文档**：README 命令表、`docs/extras.md`「`/outbox`：没发出去的那句话去哪了」。

@@ -590,6 +590,7 @@ const COMMANDS = [
   },
   { id: 'back', pattern: /^\/back$/i, build: identity, helpRank: 21, helpKey: 'help.back' },
   { id: 'diag', pattern: /^\/diag$/i, build: identity, helpRank: 22, helpKey: 'help.diag' },
+  { id: 'outbox', pattern: /^\/outbox(?:\s+([\s\S]+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 23, helpKey: 'help.outbox' },
   // `/remind 明天 9:00 内容`：时间本身可能带空格（`明天 9:00`、`下周一 10点`），
   // 所以整段交给执行分支按前缀尝试解析，第一个能解析的前缀是时间，其余是内容。
   {
@@ -653,7 +654,7 @@ const COMMANDS = [
 ]
 
 /** Commands answered by the inbound handler's persona bundle (state root lives there). */
-const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag'])
+const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag', 'outbox'])
 
 /**
  * The help text in one locale (C33). Command rules carry a `helpKey` into the
