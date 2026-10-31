@@ -2923,3 +2923,12 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **不可信处理**：引用内容先 `redactSecrets` 再 `neutralizeTags`，正文截断 500 字、标题 120 字。
 - **测试**：`test/quote.test.js` 9 条（三种形状、链接卡片回落到 des、无引用、脱敏与截断、块格式、无正文引用、带 caption/媒体、未知 item 仍可达模型）。
 - **文档**：`docs/extras.md`「引用回复」。
+
+### ③ 重要日子的当天提醒（`src/message/dates.js`）
+
+- **原来的问题**：`profile.dates` 与带 `when` 的待办只在提示词里「被看到」，模型得自己意识到今天几号；用户不主动提，生日就过去了。
+- **做成什么**：`datesOnThisDay()` 按**月日**匹配（年份只用来算「第 N 年」），同时取 `when === 今天 && done !== true` 的待办；`buildDateReminderText()` 生成一条不带模型解释的短消息。`index.js` 里一个 60 秒定时器，到 `dateReminderWhen`（默认 09:00）后对每个账号检查一次，命中才发、发完记 `dates.json` 的 `lastSent`；不跑模型、不写 journal。
+- **为什么不用日报**：日报在 21:00，生日提醒应该在早上；两者互不依赖，关掉日报不影响提醒。
+- **状态**：`dates.json` 按账号存 `lastSent`，原子写；没命中的日子不标记，当天补记仍能发。
+- **测试**：`test/dates.test.js` 7 条（时间解析、跨年匹配、当天待办/已完成/其它日期、文案、到点与每日一次、账号隔离、状态文件）。
+- **文档**：`docs/extras.md`「重要日子的当天提醒」；设置卡「汇报」组两个开关。

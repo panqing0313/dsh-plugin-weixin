@@ -64,6 +64,7 @@ import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
+import { datesOnThisDay, buildDateReminderText, dateReminderDue, markDateReminderSent } from './message/dates.js'
 import { createListCommands } from './message/lists.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
@@ -258,6 +259,8 @@ export const Config = z.object({
   notifyPort: z.number().min(1).max(65535).default(DEFAULT_NOTIFY_PORT).description('通知桥监听端口；脚本里的 URL 要跟着改。'),
   notifyToken: z.string().default('').description('通知桥的 token；留空则首次启动自动生成，存在 <状态目录>/notify.json（0600），不要外传。'),
   awayAutoReply: z.string().default('').description('离开模式的自动回复；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。'),
+  dateReminderEnabled: z.boolean().default(true).description('重要日子的当天提醒：记忆里的生日/纪念日、以及写死日期的待办，到点发一条短消息，不跑模型。'),
+  dateReminderWhen: z.string().default('09:00').description('当天提醒的发送时间（HH:MM，本地时区）。'),
   digestEnabled: z.boolean().default(true).description('每天到点发一条当天简报（聊了什么、还有哪些待办）；时间由 digestWhen 决定。'),
   digestWhen: z.string().default(DEFAULT_DIGEST_WHEN).description('日报时间，形如「每天 21:00」或「每周五 18:30」。'),
   memoryReviewEnabled: z.boolean().default(true).description('每周到点发一条记忆核对：「我记住的这些还准吗」，你回 /remember 或 /forget 纠正。'),
@@ -470,6 +473,7 @@ export function apply(ctx, config) {
     let reportScheduler
     let notifyBridge
     let awayTimer
+    let dateTimer
     const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
@@ -975,6 +979,32 @@ export function apply(ctx, config) {
       }, 60_000)
       awayTimer.unref?.()
 
+      // 重要日子的当天提醒：每天到点后检查一次，命中才发；不跑模型。
+      // 和 away 一样用分钟级定时器，不依赖文件 mtime，也不写 journal。
+      dateTimer = setInterval(() => {
+        for (const [id, t] of transports) {
+          const live = withSavedConfig(config)
+          if (!dateReminderDue(stateRoot, id, { now: Date.now(), at: live.dateReminderWhen, enabled: live.dateReminderEnabled, warn })) continue
+          let items = []
+          try {
+            items = datesOnThisDay(readGlobalMemory(stateRoot, id, { warn }))
+          } catch (error) {
+            warn(`date reminder read failed for ${id}: ${String(error)}`)
+            continue
+          }
+          if (items.length === 0) continue
+          const conversationId = pickConversation(listConvMemories(stateRoot, id))
+          if (conversationId === undefined) continue
+          sendChunked(t, live, { conversationId, text: buildDateReminderText(items) })
+            .then(() => {
+              markDateReminderSent(stateRoot, id, { warn })
+              fileLog.info(`date reminder sent to ${conversationId}`)
+            })
+            .catch((error) => warn(`date reminder failed for ${conversationId}: ${String(error)}`))
+        }
+      }, 60_000)
+      dateTimer.unref?.()
+
     })()
 
     // Bring the loop up for one account (or every account on disk), replacing a
@@ -1224,6 +1254,7 @@ export function apply(ctx, config) {
       proactiveScheduler?.stop()
       await notifyBridge?.stop()
       if (awayTimer !== undefined) clearInterval(awayTimer)
+      if (dateTimer !== undefined) clearInterval(dateTimer)
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()

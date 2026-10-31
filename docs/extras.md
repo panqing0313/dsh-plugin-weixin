@@ -124,3 +124,18 @@ node bin/backup.mjs open ~/Desktop/weixin-state.enc
 - 三种常见形状都认：`item.refermsg`、`item.appmsg.refermsg`（引用卡片）、`item.quote.refermsg`。
 - 只引用、不配文的消息也会走模型（以前 text 为空会被当成「没看懂」）；外层是插件不认识的 item 类型时，引用内容仍然能到达模型。
 - 引用文本按不可信内容处理：先 `redactSecrets` 脱敏、截断到 500 字，再由 `neutralizeTags` 转义。
+
+## 重要日子的当天提醒（0.9.15）
+
+记忆里的「重要日期」（生日、纪念日，`/remember` 或设置卡写入）和带日期的待办，到了当天会收到一条短消息：
+
+```
+📅 今天是重要日子
+- 生日（第 36 年）
+- 交房租
+```
+
+- 每天 `dateReminderWhen`（默认 `09:00`，本地时区）之后检查一次，当天只发一条；没命中就不发，也不标记 —— 当天晚些时候补记的日期仍来得及。
+- 不跑模型、不花 token、不写消息流水。
+- 已完成的待办（`done`）和没写日期的待办不会触发；没有日期的「重要日期」条目本来就不会被记忆接受。
+- 关掉：`dateReminderEnabled: false`，或设置卡「汇报」组里的开关。
