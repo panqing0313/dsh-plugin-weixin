@@ -16,6 +16,7 @@
  * @module dsh-weixin/state
  */
 import fs from 'node:fs'
+import { readTextFileCached } from './atomic.js'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -122,7 +123,10 @@ export function readSavedConfig() {
   const file = configFile()
   let text
   try {
-    text = fs.readFileSync(file, 'utf8')
+    // Every inbound message rebuilds the effective config, so this read sits on
+    // the hot path; the cache keys on mtime/size/ino and the card's writes go
+    // through atomicWriteJson, which invalidates the entry.
+    text = readTextFileCached(file)
   } catch {
     return {}
   }

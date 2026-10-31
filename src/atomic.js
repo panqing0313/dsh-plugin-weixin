@@ -24,6 +24,54 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /**
+ * 热路径的文本缓存。
+ *
+ * 每条入站消息都会重读几个小 JSON（config、accounts-registry、persona、
+ * conv memory），而 `readFileSync` 的开销主要在 open/read/close 与 UTF-8 解码，
+ * 不在 `JSON.parse`。缓存**文本**而不是解析后的对象：每次调用仍然 parse 出
+ * 一个新对象，调用方照旧可以随意修改、写回，不存在「改到缓存里的共享对象」
+ * 这种隐蔽 bug。
+ *
+ * 失效靠 `stat`（mtime + size + ino）：原子写的 rename 会换 inode，普通覆盖
+ * 会改 mtime/size，所以下一次读必然拿到新内容。缓存上限 512 条，超出按插入
+ * 顺序淘汰最旧的一条（Map 的迭代顺序就是插入顺序，读命中时重新插入以维持
+ * 近似 LRU）。
+ */
+const TEXT_CACHE_LIMIT = 512
+const textCache = new Map()
+
+/**
+ * Read a file as UTF-8 text, reusing the previous read when the file has not
+ * changed. Throws the same errors `fs.statSync`/`fs.readFileSync` would.
+ *
+ * @param {string} file
+ * @returns {string}
+ */
+export function readTextFileCached(file) {
+  const stat = fs.statSync(file)
+  const hit = textCache.get(file)
+  if (hit !== undefined && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size && hit.ino === stat.ino) {
+    textCache.delete(file)
+    textCache.set(file, hit)
+    return hit.text
+  }
+  const text = fs.readFileSync(file, 'utf8')
+  textCache.delete(file)
+  textCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, text })
+  if (textCache.size > TEXT_CACHE_LIMIT) {
+    const oldest = textCache.keys().next().value
+    textCache.delete(oldest)
+  }
+  return text
+}
+
+/** Drop one file (or everything) from the cache — used after a write and by tests. */
+export function clearTextFileCache(file) {
+  if (file === undefined) textCache.clear()
+  else textCache.delete(file)
+}
+
+/**
  * Write `value` as JSON atomically.
  *
  * @param {string} file absolute path
@@ -48,6 +96,10 @@ export function atomicWriteJson(file, value, options = {}) {
       fs.closeSync(handle)
     }
     fs.renameSync(temp, file)
+    // The rename already changes mtime/ino, so the next read would miss anyway;
+    // dropping the entry keeps a same-millisecond rewrite from ever serving the
+    // previous bytes.
+    clearTextFileCache(file)
     return true
   } catch (error) {
     warn(`could not write ${path.basename(file)}: ${String(error?.message ?? error)}`)
@@ -83,7 +135,7 @@ export function readJsonFile(file, spec) {
   const fallback = spec.fallback
   let raw
   try {
-    raw = fs.readFileSync(file, 'utf8')
+    raw = readTextFileCached(file)
   } catch (error) {
     if (error?.code !== 'ENOENT') warn(`could not read ${path.basename(file)}: ${String(error?.message ?? error)}`)
     return fallback()

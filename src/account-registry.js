@@ -18,6 +18,7 @@
 // losing it must never block messaging.
 // @module dsh-weixin/account-registry
 import fs from 'node:fs'
+import { readTextFileCached } from './atomic.js'
 import path from 'node:path'
 import { atomicWriteJson } from './atomic.js'
 import { stateDir } from './state.js'
@@ -30,7 +31,7 @@ export function registryFile() {
 /** Read the whole registry, tolerating absence and corruption. */
 export function readRegistry() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(registryFile(), 'utf8'))
+    const parsed = JSON.parse(readTextFileCached(registryFile()))
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       // The schema stamp shares the object with the account entries; it is
       // metadata, not an account, so it must not leak into the map.

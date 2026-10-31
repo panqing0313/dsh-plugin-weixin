@@ -3096,3 +3096,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：新增 `startAccounts(accounts, bringUp, warn)` —— `Promise.allSettled` 并行扇出，失败按账号收集成 `{ started, failures }` 并逐条 warn；一个坏凭据（文件损坏/CDN 不可达/ticket 被拒）只让它自己起不来。
 - **测试**：`test/startup.test.js` 4 条 —— 用「三个人都进门才开闸」证明并发（串行会超时失败，不靠 wall-clock）、坏凭据隔离、空列表、非 Error 的 rejection 也能读。
 - **判据**：串行时 N×t → 并行约 t；单账号行为与错误隔离语义不变。
+
+### P2 热路径 JSON 读取缓存（`src/atomic.js`）
+
+- **为什么**：每条入站消息都会重读 `config.json`（`readSavedConfig`）、`accounts-registry.json`（`readRegistry`）和 persona/conv 文件；`readFileSync` 的开销在 open/read/close 与 UTF-8 解码，不在 `JSON.parse`。
+- **做成什么**：新增 `readTextFileCached(file)` —— 按 `mtime + size + ino` 失效，缓存的是**文本**而不是解析后的对象，所以每次调用仍 `JSON.parse` 出一个新对象，调用方照旧可以修改/写回；`atomicWriteJson` 写完显式失效；缓存上限 512 条（读命中重新插入，近似 LRU）。`readJsonFile`、`readSavedConfig`、`readRegistry` 都走它。
+- **实测**（同一份 ~1KB 的 config，5000 次）：`readSavedConfig` 11.2µs → **3.7µs/op（3.0×）**；纯 `read+parse` 基线 11.6µs。
+- **测试**：`test/file-cache.test.js` 6 条 —— 第二次读不碰磁盘（mock `readFileSync` 计数）、原子写后立刻可见、外部改写按 size 失效、每次返回独立对象、单条失效、缺失文件不缓存。
