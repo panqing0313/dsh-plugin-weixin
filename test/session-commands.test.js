@@ -787,3 +787,16 @@ test('locale: en makes the bot speak English where it has a translation', async 
     assert.ok(!help.includes('会话指令'))
   }, { locale: 'en' })
 })
+
+test('/diag answers with the gates, without opening a session', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/diag', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the diag reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /自检 · v\d/)
+    assert.match(reply, /模式：/)
+    assert.match(reply, /待发：提醒 \d+ 条 · 订阅 \d+ 条/)
+    assert.match(reply, /免打扰/)
+    assert.equal(sessionsOpened.length, 0, 'diag never needs the model')
+  })
+})

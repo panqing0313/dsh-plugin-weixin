@@ -22,6 +22,11 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, ensureSessionsDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
+import { buildDiagReport } from './message/diag.js'
+import { createRequire } from 'node:module'
+
+// 服务端也要知道自己的版本（`/diag` 用），但 client.js 是浏览器入口，不能 import。
+const PLUGIN_VERSION = createRequire(import.meta.url)('../package.json').version
 import { DEFAULT_RETENTION, SWEEP_INTERVAL_MS, describeSweep, directoryUsage, sweepRetention } from './message/retention.js'
 import { DEFAULT_KEEP, createBackup } from './backup.js'
 import { DEFAULT_DIGEST_WHEN, DEFAULT_REVIEW_WHEN, ReportScheduler, buildDigestPrompt, buildReviewPrompt, describeReport, pickConversation } from './message/reports.js'
@@ -122,7 +127,7 @@ import { buildDryRunBlock, describeDryRun, isGoAhead } from './message/dry-run.j
 import { describeUnknownItems, firstSighting } from './message/unknown-items.js'
 import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
-import { ProactiveScheduler } from './message/proactive.js'
+import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
@@ -1519,6 +1524,35 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       return isCompanionMode(active)
     }
     return {
+      // `/diag`：不调模型的一条自检。用户问「怎么没反应」时，先看闸门。
+      diag: () => {
+        const live = effectiveConfig.current
+        const store = readPersonaStore(stateRoot, { warn })
+        const currentId = activeModeFor(stateRoot, accountId, conversationId, live.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })
+        const current = resolveMode(store, currentId)
+        let proactive
+        try {
+          const state = readProactiveState(stateRoot, accountId, { warn })
+          proactive = state === undefined ? undefined : { count: state.count, lastAt: state.lastAt, misses: state.misses }
+        } catch {
+          proactive = undefined
+        }
+        return buildDiagReport({
+          version: PLUGIN_VERSION,
+          accountId,
+          transportUp: transport !== undefined,
+          modeName: current?.name ?? currentId,
+          companion: isCompanionMode(current),
+          config: live,
+          reminders: reminderScheduler?.list(accountId)?.length ?? 0,
+          subscriptions: subscriptionScheduler?.list?.(accountId)?.length ?? 0,
+          proactive,
+          journalToday: readJournalRange(stateRoot, { accountId, days: 1 }).length,
+          conversations: listConvMemories(stateRoot, accountId).length,
+          allowlist: Array.isArray(live.allowedSenders) ? live.allowedSenders.length : 0,
+          quietDelayMs: quietDelay(Date.now(), live),
+        })
+      },
       mode: (arg) => {
         const store = readPersonaStore(stateRoot, { warn })
         const currentId = activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })

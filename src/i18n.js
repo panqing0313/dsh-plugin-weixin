@@ -49,6 +49,7 @@ export const CATALOG = Object.freeze({
     'help.export': { zh: '/export [天数] 导出最近 N 天（默认 30）的聊天记录', en: '/export [days] export the last N days (default 30) of this chat' },
     'help.away': { zh: '/away <时间> [说明] 开启离开模式：这段时间不回消息（不花 token），每个会话自动回一句；回来发 /back 看汇总', en: '/away <when> [note] turn on away mode: no agent replies (no tokens), one auto-answer per chat; /back for the summary' },
     'help.back': { zh: '/back 结束离开模式，并看这段时间谁找过你', en: '/back end away mode and see who asked while you were out' },
+    'help.diag': { zh: '/diag 一条不花模型的自检：连接、模式、开关、待发提醒、主动开口额度、今天流水', en: '/diag a model-free self-check: connection, mode, switches, pending reminders, proactive quota, today\'s traffic' },
     'help.todo': { zh: '/todo [add 内容|done 序号|rm 序号] 共享清单：同一个机器人的群和私聊看到同一份', en: '/todo [add text|done n|rm n] a shared list: every chat of this bot sees the same one' },
     'help.later': { zh: '/later https://… 稍后读：存链接并取回标题，/later 随时看，/later done 2 标记读完', en: '/later https://… read-later: store a link with its title; /later to list, /later done 2 when read' },
     'help.send': { zh: '/send 路径 把本机文件发到当前会话（只允许工作目录、状态目录与 mediaDirs 里的文件）', en: '/send path send a local file here (only files under the workspace, state dir or mediaDirs)' },
