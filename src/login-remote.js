@@ -711,7 +711,10 @@ export class WeixinLoginController extends TypertRemoteService {
         const limitRaw = Number(opts.limit);
         const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : DEFAULT_JOURNAL_LIMIT;
         const accountId = typeof opts.accountId === "string" && opts.accountId !== "" ? opts.accountId : undefined;
-        return { entries: readJournal(stateDir(), { limit, accountId }) };
+        const beforeRaw = Number(opts.before);
+        const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? beforeRaw : undefined;
+        const conversationId = typeof opts.conversationId === "string" && opts.conversationId !== "" ? opts.conversationId : undefined;
+        return { entries: readJournal(stateDir(), { limit, accountId, before, conversationId }) };
     }
 
     /** Recent strangers the allowlist refused, newest first — the card's one-click allow reads this. */

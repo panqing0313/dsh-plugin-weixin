@@ -65,3 +65,18 @@ test('torn lines are skipped', async () => {
 	const entries = readJournal(root, { accountId: 'a5' })
 	assert.ok(entries.some((entry) => entry.text === '完好'))
 })
+
+test('readJournal pages backwards with before, and filters by conversation', () => {
+	appendJournal(root, { dir: 'in', accountId: 'a9', conversationId: 'cA', senderId: 's9', text: '旧', at: 100 })
+	appendJournal(root, { dir: 'out', accountId: 'a9', conversationId: 'cA', text: '中', at: 200 })
+	appendJournal(root, { dir: 'in', accountId: 'a9', conversationId: 'cB', senderId: 's9', text: '新', at: 300 })
+
+	// before is strict: "everything older than what I already have", so the
+	// card can page without re-reading the entry on screen.
+	assert.deepEqual(readJournal(root, { before: 200 }).map((entry) => entry.at), [100])
+	assert.deepEqual(readJournal(root, { before: 100 }), [], 'nothing older than the oldest')
+	// Conversation filter is what the stats-row drill-down passes.
+	assert.deepEqual(readJournal(root, { conversationId: 'cB' }).map((entry) => entry.text), ['新'])
+	const both = readJournal(root, { conversationId: 'cA', before: 300 })
+	assert.deepEqual(both.map((entry) => entry.text), ['中', '旧'], 'filters compose')
+})

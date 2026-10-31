@@ -3232,3 +3232,9 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearStranger/clearStrangerEverywhere`，`strangers.json` 按账号、上限 50、lastText 截 120）；`src/index.js` 拒收分支在 `warn` 后调 `recordStranger`；`src/login-remote.js` 加 `strangers()`；`src/config-remote.js` 加 `strangerAllow(senderId)`（写 `allowedSenders` + `clearStrangerEverywhere` 同一调用内完成）；卡片 `StrangerSection` 挂在账号页状态横幅之下（只在已绑定时出现）。测试 `test/strangers.test.js` 4 条 + `client-remote.test.js` 源码形状 1 条；全量 934/934。
 
 坑：给卡片插入组件时少写一个右括号（`visible.map` 的 `)` 与外层列表 div 的 `)` 叠在同行），`check.mjs` 只给行号不给原因，`node --check` 才看到 `missing ) after argument list`；教训是手写 createElement 深嵌套时每层收尾各占一行。
+
+## 消息流水第二批：搜索 / 翻页 / 统计下钻（2026-11-01，0.10.0 第 2 项）
+
+- 服务端：`readJournal` 加 `before`（严格小于的游标）；`login-remote.journal` 透传 `before` 与 `conversationId`。
+- 卡片：`JournalSection` 增加 `fetchPage(extra)` 统一取数、`loadMore()` 向前翻页（返回不足 200 即封底）、搜索框（客户端过滤已加载窗口）、会话聚焦 chip；`StatsSection` 会话行可点，`WeixinSettingsCard` 持有 `journalFocus` 并在 TABS 之前声明（`openInJournal` 闭包引用 TABS，调用时已初始化，无 TDZ 问题）。
+- 测试：`journal.test.js` 加 before/会话/组合过滤 1 条；`client-remote.test.js` 源码形状 1 条；两条旧断言随签名更新（`journal({limit:200})` → 带 focus/extras 的形状）。全量 936/936。

@@ -1705,27 +1705,54 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Message journal: recent in/out traffic across accounts, newest first. */
-		function JournalSection({ ctx, t }) {
+		function JournalSection({ ctx, t, focus, onClearFocus }) {
 			const [entries, setEntries] = react.useState(null);
 			const [error, setError] = react.useState("");
 			const [busy, setBusy] = react.useState(false);
+			const [loadingMore, setLoadingMore] = react.useState(false);
+			const [hasMore, setHasMore] = react.useState(true);
+			const [query, setQuery] = react.useState("");
 
+			const fetchPage = async (extra) => {
+				return callRemote(() => ctx.remote.weixin.journal({ limit: 200, conversationId: focus || undefined, ...extra }));
+			};
 			const load = async () => {
 				setBusy(true);
 				try {
-					const r = await callRemote(() => ctx.remote.weixin.journal({ limit: 200 }));
+					const r = await fetchPage({});
 					setError("");
 					setEntries(Array.isArray(r?.entries) ? r.entries : []);
+					// A short page means the journal has nothing older to give.
+					setHasMore(Array.isArray(r?.entries) && r.entries.length >= 200);
 				} catch (e) {
 					setError(String(e?.message ?? e));
 				} finally {
 					setBusy(false);
 				}
 			};
+			// One page of 200 is a window, not the archive: "load earlier" pages
+			// backwards from the oldest entry already on screen.
+			const loadMore = async () => {
+				const all = entries ?? [];
+				const oldest = all.length > 0 ? all[all.length - 1] : undefined;
+				if (oldest === undefined) return;
+				setLoadingMore(true);
+				try {
+					const r = await fetchPage({ before: oldest.at });
+					const page = Array.isArray(r?.entries) ? r.entries : [];
+					setEntries([...all, ...page]);
+					setHasMore(page.length >= 200);
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setLoadingMore(false);
+				}
+			};
 
+			// Reload when a stats-row drill-down changes the conversation focus.
 			react.useEffect(() => {
 				load();
-			}, []);
+			}, [focus]);
 
 			const [exporting, setExporting] = react.useState(false);
 			const exportChat = async () => {
@@ -1771,7 +1798,15 @@ window.__ModuleLoader__.load({
 			};
 
 			const all = entries ?? [];
-			const visible = filter === "all" ? all : all.filter((entry) => entry.dir === filter);
+			// Search is client-side over everything loaded so far — text or
+			// sender, case-insensitive. It says so on the box: it searches the
+			// loaded window, not the whole archive.
+			const q = query.trim().toLowerCase();
+			const visible = all.filter((entry) =>
+				(filter === "all" || entry.dir === filter)
+				&& (q === ""
+					|| String(entry.text ?? "").toLowerCase().includes(q)
+					|| String(entry.senderId ?? "").toLowerCase().includes(q)));
 
 			const filterButton = (id, label) => createElement("button", {
 				key: id,
@@ -1792,7 +1827,28 @@ window.__ModuleLoader__.load({
 				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } },
 					t("Message journal", "消息流水"),
 					createElement("span", { style: { marginLeft: 8, fontSize: 12, fontWeight: 400, color: C.labelTertiary } },
-						t(`${all.length} recent`, `最近 ${all.length} 条`))),
+						t(`${visible.length} shown of ${all.length} loaded`, `显示 ${visible.length} / 已载 ${all.length} 条`))),
+				focus ? createElement("button", {
+					key: "focus-chip",
+					onClick: () => (onClearFocus ? onClearFocus() : undefined),
+					title: focus,
+					style: {
+						border: `1px solid ${C.brand}`,
+						background: C.surfaceSunken,
+						color: C.labelPrimary,
+						borderRadius: RADIUS.pill,
+						padding: "2px 10px",
+						fontSize: 12,
+						lineHeight: "18px",
+						cursor: "pointer",
+					},
+				}, t(`conversation ${String(focus).slice(0, 16)}… ✕`, `会话 ${String(focus).slice(0, 16)}… ✕`)) : null,
+				createElement("input", {
+					value: query,
+					onChange: (event) => setQuery(event.target.value),
+					placeholder: t("Search loaded text or sender", "搜已加载的文本 / 发送者"),
+					style: { ...inputStyle, flex: "0 1 180px", minWidth: 120, padding: "4px 10px", fontSize: 12 },
+				}),
 				createElement("div", { style: { display: "flex", gap: 4 } },
 					filterButton("all", t("All", "全部")),
 					filterButton("in", `\u2193 ${t("Received", "收到")}`),
@@ -1854,7 +1910,7 @@ window.__ModuleLoader__.load({
 			return createElement("div", { style: panelStyle }, head,
 				visible.length === 0
 					? createElement("div", { style: { padding: "28px 12px", textAlign: "center", color: C.labelTertiary, fontSize: 12, lineHeight: "20px" } },
-						t("No recorded messages yet.", "还没有记录到的消息。"))
+						t(q !== "" ? "Nothing in the loaded window matches." : "No recorded messages yet.", q !== "" ? "已加载的范围内没有匹配。" : "还没有记录到的消息。"))
 					: createElement("div", {
 						style: {
 							display: "flex",
@@ -1866,6 +1922,13 @@ window.__ModuleLoader__.load({
 							borderRadius: RADIUS.control,
 						},
 					}, blocks),
+				hasMore && !q && all.length > 0
+					? createElement("button", {
+						onClick: () => loadMore(),
+						disabled: loadingMore || busy,
+						style: { ...buttonStyleFor(loadingMore || busy), alignSelf: "center" },
+					}, loadingMore ? t("Loading…", "加载中…") : t("Load earlier messages", "加载更早的消息"))
+					: null,
 				createElement("p", { style: captionStyle },
 					t("Newest first, last 200. \u2191 sent by the bot, \u2193 received from WeChat.",
 						"最新在前，最近 200 条。\u2191 机器人发出，\u2193 收到。")));
@@ -1875,7 +1938,7 @@ window.__ModuleLoader__.load({
 		 * 24-hour distribution and the busiest conversations. Bars are plain
 		 * divs — inline styles only, so the card has no charting dependency.
 		 */
-		function StatsSection({ ctx, t }) {
+		function StatsSection({ ctx, t, onOpenConversation }) {
 			const [stats, setStats] = react.useState(null);
 			const [storage, setStorage] = react.useState(null);
 			const [outbox, setOutbox] = react.useState(null);
@@ -2117,9 +2180,17 @@ window.__ModuleLoader__.load({
 					t("These counters live in memory and reset when the plugin restarts.",
 						"这些计数只存在内存里，插件重启就归零。")));
 
+			// A row is a doorway: clicking it opens the journal tab pre-filtered
+			// to this conversation. Optional prop, so tests render it standalone.
 			const convRows = conversations.map((c) => createElement("div", {
 				key: `${c.accountId}|${c.conversationId}`,
-				style: { display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "center" },
+				onClick: () => (onOpenConversation ? onOpenConversation(c.conversationId) : undefined),
+				title: onOpenConversation ? t("Open this conversation in the journal", "在消息流水里只看这个会话") : undefined,
+				style: {
+					display: "flex", gap: 8, fontSize: 12, lineHeight: "18px", color: C.labelSecondary, alignItems: "center",
+					...(onOpenConversation ? { cursor: "pointer", padding: "2px 4px", borderRadius: RADIUS.control } : {}),
+				},
+				className: onOpenConversation ? "weixin-row" : undefined,
 			},
 				createElement("span", { style: { flex: "0 0 auto", color: C.labelTertiary } }, c.accountId),
 				createElement("span", { style: { flex: "1 1 auto", overflowWrap: "anywhere" } }, c.conversationId),
@@ -2943,18 +3014,25 @@ window.__ModuleLoader__.load({
 				// Two tabs instead of one long scroll. State only exists at
 				// runtime; in the stub environment useState keeps the first
 				// tab, which matches what the tests assert.
+				// Tab index lives here so one section can send the operator to
+				// another: a stats row drills into the journal pre-filtered.
+				const [tab, setTab] = react.useState(0);
+				const [journalFocus, setJournalFocus] = react.useState(null);
+				const openInJournal = (conversationId) => {
+					setJournalFocus(conversationId);
+					setTab(TABS.findIndex((entry) => entry.id === "journal"));
+				};
 				const TABS = [
 					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
-										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t }) },
-					{ id: "stats", label: t("Stats", "统计"), body: createElement(StatsSection, { ctx, t }) },
+										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t, focus: journalFocus, onClearFocus: () => setJournalFocus(null) }) },
+					{ id: "stats", label: t("Stats", "统计"), body: createElement(StatsSection, { ctx, t, onOpenConversation: openInJournal }) },
 					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
 					{ id: "persona", label: t("Persona", "个性化"), body: createElement(PersonaSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
-				const [tab, setTab] = react.useState(0);
 				// Arrow keys move between tabs: the bar is a real tablist,
 				// not just two buttons that happen to look like one.
 				const onTabKey = (event) => {

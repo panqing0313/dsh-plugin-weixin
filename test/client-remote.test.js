@@ -827,7 +827,9 @@ test('the journal renders as a chat timeline: day dividers, side-aligned bubbles
   // one divider per local day, and a client-side filter over the loaded window.
   const client = fs.readFileSync(CARD_PATH, 'utf8')
 
-  assert.match(client, /ctx\.remote\.weixin\.journal\(\{ limit: 200 \}\)/, 'the window is 200, not 50: a chat view needs more than a screenful')
+  // The window is 200, not 50 — and since the drill-down landed, the call
+  // also carries the conversation focus and spreads the paging extras.
+  assert.match(client, /journal\(\{ limit: 200, conversationId: focus \|\| undefined, \.\.\.extra \}\)/, 'the window is 200, not 50: a chat view needs more than a screenful')
   assert.match(client, /filterButton\("all"/, 'the filter offers "all"')
   assert.match(client, /filterButton\("in"/, 'the filter offers received')
   assert.match(client, /filterButton\("out"/, 'the filter offers sent')
@@ -896,4 +898,19 @@ test('the refused-stranger panel reads the audit trail and allows in one click',
   // also fire for rate-limit refusals.
   const index = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'index.js'), 'utf8')
   assert.match(index, /recordStranger\(stateRoot, accountId, \{/)
+})
+
+test('the journal pages, searches and takes a drill-down focus from stats', () => {
+  const source = fs.readFileSync(CARD_PATH, 'utf8')
+  // The remote call carries the paging cursor and the conversation focus.
+  assert.match(source, /journal\(\{ limit: 200, conversationId: focus \|\| undefined, \.\.\.extra \}\)/)
+  assert.match(source, /loadMore = async/)
+  assert.match(source, /t\("Load earlier messages", "加载更早的消息"\)/)
+  assert.match(source, /placeholder: t\("Search loaded text or sender"/)
+  assert.match(source, /onClearFocus \? onClearFocus\(\) : undefined/)
+  // The tab host owns the focus: a stats row opens the journal tab pre-filtered.
+  assert.match(source, /const \[journalFocus, setJournalFocus\] = react\.useState\(null\)/)
+  assert.match(source, /createElement\(JournalSection, \{ ctx, t, focus: journalFocus, onClearFocus: \(\) => setJournalFocus\(null\) \}\)/)
+  assert.match(source, /createElement\(StatsSection, \{ ctx, t, onOpenConversation: openInJournal \}\)/)
+  assert.match(source, /setJournalFocus\(conversationId\)/)
 })

@@ -41,7 +41,7 @@ export function appendJournal(stateRoot, entry, { warn } = {}) {
 }
 
 /** Newest last in the file, newest first in the returned array. */
-export function readJournal(stateRoot, { limit = DEFAULT_JOURNAL_LIMIT, accountId, conversationId } = {}) {
+export function readJournal(stateRoot, { limit = DEFAULT_JOURNAL_LIMIT, accountId, conversationId, before } = {}) {
     const dir = join(stateRoot, 'journal')
     let files = []
     try {
@@ -62,6 +62,9 @@ export function readJournal(stateRoot, { limit = DEFAULT_JOURNAL_LIMIT, accountI
                 const entry = JSON.parse(lines[i])
                 if (accountId !== undefined && entry.accountId !== accountId) continue
                 if (conversationId !== undefined && entry.conversationId !== conversationId) continue
+            // `before` pages backwards: the card asks for everything older than
+            // the oldest entry it already has.
+            if (before !== undefined && Number(entry.at) >= Number(before)) continue
                 out.push(entry)
             } catch { /* skip a torn line */ }
             if (out.length >= limit) return out.slice(0, limit)
