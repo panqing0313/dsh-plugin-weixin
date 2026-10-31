@@ -2969,3 +2969,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
   - 两条都先在本地 `fnm exec --using=v22.23.4 -- npm test` 全量 848/848 验证；CI run `41161838714` 双绿。
 - **宿主升级**：本机 DSH 已是 `0.2.1-rc.5`，不在测试表（表里是 `0.2.1-rc.3`），`doctor` 会明确标出。按 `docs/compatibility.md` 的 5 步复核通过后再加行，不提前写「已验证」。
 - tag 触发的 release workflow `41161269592` 失败（版本已存在，预期）。
+
+## 发布 0.9.16（2026-10-31）
+
+- **一行修正**：把 `8155888` 的 OCR 定时器修复发进 npm，让 0.9.15 与 main 对齐（0.9.15 的包里还是带 `unref()` 的版本）。
+- **核验**：`dist-tags.latest = 0.9.16`、`dist.shasum d76a90a6a2693d3017f79ba7e6d13083e65a0c40`、`dist.integrity sha512-wLA2A7BIx/cNHREQ1eybHCLc+PrCnqemVcmbCRenrpB2uc8xi1PJi1tEEy/D3EUP7DLwrWTDMZ/NGqSH0Q+bng==`、`gitHead 6e1096a32d6921a639090e5ae4df43ff5e28ccfd`；tag `v0.9.16`（指向 `6e1096a`）、GitHub release 已建（非 draft/prerelease）；profile `^0.9.15 → ^0.9.16`、`node_modules` 0.9.16、锁文件刷新。
+- **测试**：全量 **848/848**；CI 发布提交 run `41162357569` 与 CHANGELOG 提交 run `41162197055` 均 success；tag 触发的 release workflow `41162361718` 失败（版本已存在，预期）。
+- **doctor**：`installed version 0.9.16`、`published version up to date (0.9.16)`；`host app 0.2.1-rc.5` 仍标「不在测试列表」（兼容表只写了 rc.3）。重启 DSH 后按 5 步复核再改表。
