@@ -824,3 +824,16 @@ test('/quiet sets a deadline, reports the remaining time, and clears it', async 
     assert.equal(sessionsOpened.length, 0, 'quiet never needs the model')
   })
 })
+
+test('/usage reports today without opening a session', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/usage', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the usage reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /用量 · 今天/)
+    assert.match(reply, /后台调用：\d+(?:\/\d+ 次| 次（未设上限）)/)
+    assert.match(reply, /待重发：0 条/)
+    assert.match(reply, /今天流水：/)
+    assert.equal(sessionsOpened.length, 0, 'usage never needs the model')
+  })
+})

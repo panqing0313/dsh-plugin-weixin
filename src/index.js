@@ -31,6 +31,8 @@ import {
   tempQuietDelay,
 } from './message/temp-quiet.js'
 import { buildDiagReport } from './message/diag.js'
+import { buildUsageReport } from './message/usage.js'
+import { readBudget } from './budget.js'
 import { createRequire } from 'node:module'
 
 // 服务端也要知道自己的版本（`/diag` 用），但 client.js 是浏览器入口，不能 import。
@@ -1540,6 +1542,33 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       return isCompanionMode(active)
     }
     return {
+      // `/usage`：今天花了什么。不调模型，数字全部来自已有状态文件。
+      usage: () => {
+        const live = effectiveConfig.current
+        const today = readJournalRange(stateRoot, { accountId, days: 1 })
+        const chars = today.reduce((sum, entry) => sum + String(entry?.text ?? '').length, 0)
+        let backgroundUsed = 0
+        try {
+          backgroundUsed = readBudget(stateRoot, { warn }).used
+        } catch {
+          backgroundUsed = 0
+        }
+        const proactiveState = readProactiveState(stateRoot, accountId, { warn })
+        const proactiveLimit = Number(live.proactiveMaxPerDay ?? 3)
+        return buildUsageReport({
+          backgroundUsed,
+          backgroundLimit: Number(live.backgroundDailyLimit ?? 0),
+          proactiveCount: proactiveState?.count ?? 0,
+          proactiveLimit: Number.isFinite(proactiveLimit) ? proactiveLimit : 3,
+          proactiveLastAt: proactiveState?.lastAt ?? 0,
+          proactiveMisses: proactiveState?.misses ?? 0,
+          outboxPending: typeof outbox?.pending === 'function' ? outbox.pending().length : 0,
+          reminders: reminderScheduler?.list(accountId)?.length ?? 0,
+          subscriptions: subscriptionScheduler?.list?.(accountId)?.length ?? 0,
+          journalEntries: today.length,
+          journalChars: chars,
+        })
+      },
       // `/quiet`：有尽头的一段「别出声」。固定免打扰管每天同一时段，
       // 这里管开会/看电影这种临时两小时；到点自动恢复，不用记得关。
       quiet: (arg) => {

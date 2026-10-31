@@ -3042,3 +3042,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **命令**：`/snooze 10m|1h`（`parseWhen` 解析时长）、`/remind skip|跳过`；两者都不开模型会话。
 - **测试**：`test/scheduler.test.js` 新增 2 条（推后与周期对齐、跳过与一次性拒绝）；`test/sessions.test.js` 新增 1 条（命令到调度器的参数与回执）。
 - **文档**：README 命令表、`docs/extras.md`「提醒的等会儿」。
+
+### ③ 用量账单 `/usage`（`src/message/usage.js`）
+
+- **为什么**：想知道今天花了多少，只能翻三个文件或看日志；而且「后台预算」与「主动开口额度」是两套计数器，没有一处合起来看。
+- **做成什么**：`buildUsageReport(input)` 纯函数（另有 `usageSummary` 供 `/diag` 复用）；`/usage` handler 现场读 `readBudget`、`readProactiveState`、`outbox.pending()`、`reminderScheduler.list()`、`subscriptionScheduler.list()`、`readJournalRange(..., days:1)`，字符用 `estimateTokens` 折算。
+- **明确的口径**：token 是「正文粗估」，不含系统提示词/工具结果/历史；预算为 0 说「未设上限」而不是除零；用完时补一行「停到明天零点重置」。
+- **测试**：`test/usage.test.js` 4 条（完整一天、无预算无开口、预算用完、摘要行）；`test/session-commands.test.js` 端到端 1 条（不开会话）。
+- **文档**：README 命令表、`docs/extras.md`「`/usage`：今天花了什么」。
