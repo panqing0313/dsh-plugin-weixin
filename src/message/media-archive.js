@@ -90,7 +90,12 @@ export function listInboundMedia(dir, { limit = DEFAULT_MEDIA_LIMIT, warn } = {}
     if (!stat.isFile()) continue
     items.push({ name, path: target, bytes: stat.size, at: stat.mtimeMs, kind: mediaKind(name) })
   }
-  items.sort((a, b) => b.at - a.at)
+  // Newest first. The name is a tie-breaker, not decoration: files written in
+  // the same tick share an mtime (CI runners and a burst of downloads both do
+  // this), and without it the order depends on readdir, which differs by
+  // platform. A listing whose numbering changes between machines cannot be
+  // addressed by `/media resend <n>`.
+  items.sort((a, b) => b.at - a.at || a.name.localeCompare(b.name))
   const cap = Math.max(1, Math.min(Number(limit) || DEFAULT_MEDIA_LIMIT, MAX_MEDIA_LIMIT))
   return items.slice(0, cap)
 }

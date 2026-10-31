@@ -21,6 +21,13 @@ function archive() {
   fs.writeFileSync(path.join(dir, 'b-voice.silk'), Buffer.alloc(10))
   fs.writeFileSync(path.join(dir, 'report.pdf'), Buffer.alloc(1024 * 1024 * 2))
   fs.mkdirSync(path.join(dir, 'sub'))
+  // Pin the times instead of trusting the filesystem's clock: a CI runner
+  // writes all three in the same tick, and the listing must be numbered the
+  // same everywhere (the resend test below addresses item 1 by number).
+  const at = (day) => new Date(2026, 9, day, 9, 0)
+  fs.utimesSync(path.join(dir, 'a.png'), at(20), at(20))
+  fs.utimesSync(path.join(dir, 'b-voice.silk'), at(29), at(29))
+  fs.utimesSync(path.join(dir, 'report.pdf'), at(31), at(31))
   return dir
 }
 
@@ -44,9 +51,6 @@ test('time and size read like a phone message list', () => {
 
 test('the archive lists files newest first, skips directories, and caps the count', () => {
   const dir = archive()
-  fs.utimesSync(path.join(dir, 'a.png'), new Date(2026, 9, 20), new Date(2026, 9, 20))
-  fs.utimesSync(path.join(dir, 'b-voice.silk'), new Date(2026, 9, 29), new Date(2026, 9, 29))
-  fs.utimesSync(path.join(dir, 'report.pdf'), new Date(2026, 9, 31), new Date(2026, 9, 31))
   const items = listInboundMedia(dir)
   assert.deepEqual(items.map((item) => item.name), ['report.pdf', 'b-voice.silk', 'a.png'])
   assert.equal(items[0].kind, 'document')
@@ -75,6 +79,16 @@ test('a resend only ever resolves inside the archive directory', () => {
   assert.equal(resolveArchivePath(dir, '0', items), undefined)
   assert.equal(resolveArchivePath(dir, '99', items), undefined)
   assert.equal(resolveArchivePath(dir, 'abc', items), undefined)
+})
+
+test('files written in the same tick are still numbered the same way', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-media-tie-'))
+  for (const name of ['z.png', 'm.png', 'a.png']) fs.writeFileSync(path.join(dir, name), Buffer.alloc(4))
+  const at = new Date(2026, 9, 31, 9, 0).getTime()
+  for (const name of ['z.png', 'm.png', 'a.png']) fs.utimesSync(path.join(dir, name), at, at)
+  const names = () => listInboundMedia(dir).map((item) => item.name)
+  assert.deepEqual(names(), ['a.png', 'm.png', 'z.png'], 'a shared mtime falls back to the name, not readdir order')
+  assert.deepEqual(names(), listInboundMedia(dir).map((item) => item.name), 'and it is stable across calls')
 })
 
 test('the command lists, resends through the given sender, and reports a bad index', async () => {
