@@ -111,3 +111,16 @@ node bin/backup.mjs open ~/Desktop/weixin-state.enc
 - `.docx` 是零依赖解析（zip + `word/document.xml` + 去标签）。
 - `.pdf` 走**可选依赖** `pdfjs-dist`：装了就把正文抽出来（按页取文字，保留换行），没装就只给路径并在日志里说明原因——不假装支持，也不把几十 MB 的解析器塞进默认安装。要启用：在插件所在环境执行 `npm i pdfjs-dist`（DSH profile 里则是 `pnpm add pdfjs-dist`）。只取文字，不需要 canvas。
 - 抽出的正文和用户消息一样按不可信内容转义，不会把文档里的标签变成指令。
+
+## 引用回复：被引用的那句话也进上下文（0.9.15）
+
+别人引用一条消息再回你时，微信不会把原消息重发一遍，只在 item 上挂一个 `refermsg`。插件现在会把里面的发送者、标题和正文读出来，拼成提示开头的：
+
+```
+【引用 小王】
+下午三点开会
+```
+
+- 三种常见形状都认：`item.refermsg`、`item.appmsg.refermsg`（引用卡片）、`item.quote.refermsg`。
+- 只引用、不配文的消息也会走模型（以前 text 为空会被当成「没看懂」）；外层是插件不认识的 item 类型时，引用内容仍然能到达模型。
+- 引用文本按不可信内容处理：先 `redactSecrets` 脱敏、截断到 500 字，再由 `neutralizeTags` 转义。

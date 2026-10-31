@@ -2915,3 +2915,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **降级是明确的**：`pdfjs-dist` 声明成 optional peer（`peerDependencies` + `peerDependenciesMeta.optional`），默认安装不会带；没装时返回 `{ ok: false, reason: PDF_LOAD_HINT }`，解析失败返回具体错误，空文本返回 `empty`。截断与 docx 共用 `truncate()`（前 `documentTextChars` 字 + 注明）。
 - **测试**：`test/document.test.js` 15 条 —— 同步路径仍拒绝 PDF、缺包给 hint、假 pdfjs 验证逐页拼装/换行/截断/空文本/解析错误、异步入口对非 PDF 分流，以及一个**真实最小 PDF** 的集成用例（装了 `pdfjs-dist` 才跑；本机 15/15）。
 - **文档**：`docs/extras.md`「文档理解」补 PDF 与启用方法；schema 与设置卡提示同步改成「PDF 需要可选依赖 pdfjs-dist」；`package.json` 加 optional peer。
+
+### ② 引用回复：refermsg 不再只是日志里的一行（`src/message/quote.js`）
+
+- **原来的断点**：`unknown-items.js` 只把 `refermsg` 记进审计日志，入站解析从不读它 —— 用户引用一句话再问「这句什么意思」，模型看不到被引用的那句。
+- **做成什么**：`parseQuote(items)` 依次找 `item.refermsg` / `item.appmsg.refermsg` / `item.quote.refermsg`，取 `content`（回落到 `des`）、`title`、`displayname`（回落到 `fromusr`）；`quoteBlock()` 拼成 `【引用 小王】` + 标题 + 正文。`normalizeInbound` 把它挂到消息的 `quote` 上（文本、带 caption 的媒体、以及不认识的 item 都带）；`index.js` 在拼提示时把引用块放在用户消息之前，并让「只有引用没有正文」的消息不再走「没看懂」的早退。
+- **不可信处理**：引用内容先 `redactSecrets` 再 `neutralizeTags`，正文截断 500 字、标题 120 字。
+- **测试**：`test/quote.test.js` 9 条（三种形状、链接卡片回落到 des、无引用、脱敏与截断、块格式、无正文引用、带 caption/媒体、未知 item 仍可达模型）。
+- **文档**：`docs/extras.md`「引用回复」。

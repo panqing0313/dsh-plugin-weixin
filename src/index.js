@@ -33,6 +33,7 @@ import { HOOK_POINTS, createHooks } from './hooks.js'
 import { createMetrics, writeMetricsSnapshot } from './metrics.js'
 import { ensureSecretModes, redactSecrets } from './credentials.js'
 import { neutralizeTags } from './message/fence.js'
+import { quoteBlock } from './message/quote.js'
 import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
@@ -1866,7 +1867,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     // Untrusted text first, and only it: any `weixin_` tag a user types is
     // neutralised here, before the plugin starts prepending blocks of its own
     // (src/message/fence.js). Later prepends are trusted and never touched.
-    let prompt = neutralizeTags(message.text)
+    // 引用回复：被引用的那句话是别人写的，和用户消息一样先转义再拼进来。
+    // 只引用不配文的消息（text 为空）也要能走到模型，否则「引用 + 表情」
+    // 这类消息会被当成空消息回一句「没看懂」。
+    const quoted = message.quote === undefined ? '' : neutralizeTags(quoteBlock(message.quote))
+    const userText = neutralizeTags(message.text)
+    const promptParts = () => [quoted, userText].filter((part) => part !== '')
+    let prompt = promptParts().join('\n\n')
     const linkUrls = config.readLinks === true ? extractUrls(message.text) : []
     if (linkUrls.length > 0) {
       log(`fetching ${linkUrls.length} link(s) from inbound message ${message.id}`)
@@ -1882,7 +1889,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       const linkBlock = describeLinkResults(linkResults)
       // Fetched page text is as untrusted as the message itself: a page can
       // contain our tag syntax just as easily as a user can.
-      if (linkBlock !== undefined) prompt = `${neutralizeTags(message.text)}\n\n${neutralizeTags(linkBlock)}`
+      if (linkBlock !== undefined) prompt = [...promptParts(), neutralizeTags(linkBlock)].join('\n\n')
     }
     if (Array.isArray(message.media) && message.media.length > 0) {
       // `transport.cdnBaseUrl` is already normalized at construction, so only
@@ -1944,7 +1951,7 @@ ${neutralizeTags(extracted.text)}
       // With a caption — or with some attachments saved — the failure is folded
       // into the prompt instead, so the agent can answer the question the user
       // actually asked while mentioning what did not arrive.
-      const nothingToReasonAbout = saved.length === 0 && (message.text ?? '') === ''
+      const nothingToReasonAbout = saved.length === 0 && (message.text ?? '') === '' && message.quote === undefined
       if (failures.length > 0 && !nothingToReasonAbout) parts.push(describeMediaFailures(failures))
       if (nothingToReasonAbout) {
         await sendChunked(transport, config, {

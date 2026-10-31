@@ -20,6 +20,7 @@ import { MessageItemType, MessageState, MessageType, TypingStatus } from '../../
 import { getSyncBufFilePath, loadGetUpdatesBuf, saveGetUpdatesBuf } from '../../vendor/openclaw-weixin/storage/sync-buf.js'
 import { CDN_BASE_URL as DEFAULT_CDN_BASE_URL } from '../../vendor/openclaw-weixin/auth/accounts.js'
 import { OutboundPacer } from '../message/rate-limit.js'
+import { parseQuote } from '../message/quote.js'
 
 /** Consecutive failures tolerated before the long backoff kicks in. */
 const MAX_CONSECUTIVE_FAILURES = 3
@@ -202,6 +203,10 @@ export function normalizeInbound(raw) {
     if (shape !== undefined) media.push(normalizeMediaItem(item, shape))
   }
 
+  // A quoted reply carries the quoted message inside the item that quotes it,
+  // not as its own message. Read it once here so every caller downstream sees
+  // the same shape — text, media caption, and even an unsupported item.
+  const quote = parseQuote(items)
   if (media.length > 0) {
     return {
       id,
@@ -211,16 +216,26 @@ export function normalizeInbound(raw) {
       type: media.length === 1 ? media[0].kind : 'media',
       media,
       ...(caption === undefined ? {} : { text: caption }),
+      ...(quote === undefined ? {} : { quote }),
       timestamp,
     }
   }
-  if (caption !== undefined) {
-    return { id, senderId: from, conversationId, type: 'text', text: caption, contextToken, timestamp }
+  if (caption !== undefined || quote !== undefined) {
+    return {
+      id,
+      senderId: from,
+      conversationId,
+      type: 'text',
+      text: caption ?? '',
+      ...(quote === undefined ? {} : { quote }),
+      contextToken,
+      timestamp,
+    }
   }
   // Carry the routing fields anyway, so the caller can send a "not
   // supported" notice back to the conversation that produced it.
   const kind = items.length > 0 ? `item type ${items[0]?.type}` : 'no items'
-  return { id, senderId: from, conversationId, contextToken, unsupported: kind }
+  return { id, senderId: from, conversationId, contextToken, unsupported: kind, ...(quote === undefined ? {} : { quote }) }
 }
 
 /**
