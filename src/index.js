@@ -65,6 +65,7 @@ import { extractUrls, fetchLinkText, describeLinkResults } from './message/links
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { datesOnThisDay, buildDateReminderText, dateReminderDue, markDateReminderSent } from './message/dates.js'
+import { createWebhookSender } from './webhook.js'
 import { createListCommands } from './message/lists.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
@@ -263,6 +264,9 @@ export const Config = z.object({
   notifyEnabled: z.boolean().default(false).description('本地通知桥：开启后向 http://127.0.0.1:47832/notify POST 一句话就能推到你的微信（构建、备份、cron 用）。只绑回环地址、必须带 token、不经过模型。'),
   notifyPort: z.number().min(1).max(65535).default(DEFAULT_NOTIFY_PORT).description('通知桥监听端口；脚本里的 URL 要跟着改。'),
   notifyToken: z.string().default('').description('通知桥的 token；留空则首次启动自动生成，存在 <状态目录>/notify.json（0600），不要外传。'),
+  webhookUrl: z.string().default('').description('出站 webhook：收到消息/回复发出时向这个 http(s) URL POST 一条 JSON。留空关闭。'),
+  webhookSecret: z.string().default('').description('出站 webhook 的 HMAC 密钥；填了就带 X-Weixin-Signature: sha256=<hex>，对原始 body 签名。'),
+  webhookTimeoutMs: z.number().default(5000).description('出站 webhook 的超时毫秒数；失败只记日志，不影响回复。'),
   awayAutoReply: z.string().default('').description('离开模式的自动回复；留空用「我现在不在，看到会回你～（大概 HH:mm 回来）」。'),
   dateReminderEnabled: z.boolean().default(true).description('重要日子的当天提醒：记忆里的生日/纪念日、以及写死日期的待办，到点发一条短消息，不跑模型。'),
   dateReminderWhen: z.string().default('09:00').description('当天提醒的发送时间（HH:MM，本地时区）。'),
@@ -479,6 +483,8 @@ export function apply(ctx, config) {
     let notifyBridge
     let awayTimer
     let dateTimer
+    /** @type {Array<() => void>} */
+    const offWebhook = []
     const backupTimers = []
     let lockHeartbeat
     // Declared in apply() scope on purpose: bringUpLoop() builds the gate
@@ -968,6 +974,25 @@ export function apply(ctx, config) {
         }
       }
 
+      // ⑤ 出站 webhook：订阅两个已经存在的 hook 点，把事件推给外部系统。
+      //    失败只 warn；没有配置就完全不创建 sender。
+      const webhookConfig = withSavedConfig(config)
+      if (String(webhookConfig.webhookUrl ?? '').trim() !== '') {
+        const sender = createWebhookSender({
+          url: webhookConfig.webhookUrl,
+          secret: typeof webhookConfig.webhookSecret === 'string' ? webhookConfig.webhookSecret : '',
+          timeoutMs: webhookConfig.webhookTimeoutMs,
+          warn,
+        })
+        if (sender === undefined) {
+          warn(`webhook URL is not a usable http(s) URL: ${webhookConfig.webhookUrl}`)
+        } else {
+          offWebhook.push(hooks.on(HOOK_POINTS.inboundAccepted, (event) => void sender.send('message.received', event)))
+          offWebhook.push(hooks.on(HOOK_POINTS.outboundSettled, (event) => void sender.send('reply.settled', event)))
+          log('outbound webhook enabled')
+        }
+      }
+
       // 离开模式到点：把最后一个找过你的会话当收件箱，发一条汇总后关窗。
       // 一分钟的粒度对「离开两小时」足够；到点时不会顺带跑一轮模型。
       awayTimer = setInterval(() => {
@@ -1260,6 +1285,7 @@ export function apply(ctx, config) {
       await notifyBridge?.stop()
       if (awayTimer !== undefined) clearInterval(awayTimer)
       if (dateTimer !== undefined) clearInterval(dateTimer)
+      for (const off of offWebhook.splice(0)) off()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()

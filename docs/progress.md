@@ -2940,3 +2940,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **默认关闭**：`ocrEnabled` 默认 false，`ocrCommand` 默认空——没有引擎的部署行为与之前完全一致。
 - **测试**：`test/ocr.test.js` 7 条（设置解析、路径是唯一参数、截断、非零退出、空输出、超时 kill、spawn 失败）。
 - **文档**：`docs/extras.md`「识别图片文字：OCR 桥」含 tesseract wrapper 示例；设置卡新增四个字段。
+
+### ⑤ 出站 webhook：只推事件，不接管回复（`src/webhook.js`）
+
+- **为什么**：插件里发生的事（收到消息、回复发出）只有日志和 journal 两个出口；接 n8n / 自建面板 / 告警系统需要一条 HTTP 出口，而且不能因为对端挂掉拖慢回复。
+- **做成什么**：`createWebhookSender({ url, secret, timeoutMs, fetchImpl, warn })` 返回 `{ send(event, payload) }`；POST JSON `{ event, at, ...payload }`，配了 secret 就带 `X-Weixin-Signature: sha256=<hex>`（对原始 body 的 HMAC-SHA256）；`AbortSignal.timeout` 控制超时；非 2xx / 网络错误 / 超时都只 `warn` 并返回 false，**从不抛**。
+- **接线**：复用已有的 hook bus，不新开调用点 —— `index.js` 在 setup 里订阅 `HOOK_POINTS.inboundAccepted` → `message.received`、`HOOK_POINTS.outboundSettled` → `reply.settled`；dispose 时统一退订。URL 为空/非法就完全不创建 sender。
+- **测试**：`test/webhook.test.js` 5 条（URL 校验、JSON 形状与 ISO 时间、HMAC 签名、非 2xx、网络错误）。
+- **文档**：`docs/extras.md`「出站 webhook」含签名校验片段；设置卡三个字段。

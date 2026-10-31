@@ -155,3 +155,25 @@ exec tesseract "$1" stdout -l chi_sim+eng 2>/dev/null
 - 每张图最多保留 `ocrMaxChars`（默认 2000）字。
 - 不配置就完全不走这条路：图片仍按原来的方式保存、把路径交给模型。
 - 识别结果是不可信文本，和文档正文一样先 `neutralizeTags` 再进提示。
+
+## 出站 webhook：把发生的事推给你自己的系统（0.9.15）
+
+通知桥是入站（外面推一条给微信），webhook 是出站（插件把事件推给 n8n、面板或日志服务）。配置 `webhookUrl` 即开启：
+
+```
+POST https://your-host/hook
+content-type: application/json
+x-weixin-signature: sha256=<hex>        # 配置了 webhookSecret 才有
+
+{"event":"message.received","at":"2026-10-31T02:00:00.000Z","accountId":"…","conversationId":"…","text":"…"}
+{"event":"reply.settled","at":"…","accountId":"…","conversationId":"…","sent":true}
+```
+
+- 两个事件：`message.received`（通过闸门、即将进模型）与 `reply.settled`（发出成功，或因失败进了 outbox 时 `sent:false` + `queued`）。
+- 签名对**原始 body** 做 HMAC-SHA256，密钥是 `webhookSecret`；校验示例（Node）：
+  ```js
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex')
+  crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-weixin-signature']))
+  ```
+- 超时 `webhookTimeoutMs`（默认 5000）；非 2xx、网络错误、超时都只写日志，不影响回复。
+- 只支持 http(s)；URL 不合法时启动日志会说明并停用，不会悄悄重试。
