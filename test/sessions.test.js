@@ -662,3 +662,8 @@ test('snooze and skip reach the scheduler without a model turn', () => {
   const usage = runSessionCommand([], 'wxid_a', '/snooze', 'acc', { accountId: 'acc', reminders: scheduler })
   assert.match(usage, /用法：\/snooze 10m/)
 })
+
+test('/digest is a command with no argument, and never reaches the agent', () => {
+  assert.equal(parseSessionCommand('/digest').command, 'digest')
+  assert.equal(parseSessionCommand('/digest 7'), undefined, 'an argument makes it not a command')
+})

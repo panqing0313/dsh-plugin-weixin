@@ -55,6 +55,7 @@ export const CATALOG = Object.freeze({
     'help.snooze': { zh: '/snooze 10m 把最近一条提醒往后推；/remind skip 跳过重复提醒的下一次', en: '/snooze 10m pushes the next reminder back; /remind skip skips one occurrence of a repeating reminder' },
     'help.habit': { zh: '/habit 看习惯与连续天数，add 新增，done 打卡，rm 删除', en: '/habit shows streaks; add, done and rm manage them' },
     'help.media': { zh: '/media 看最近收到的图片/文件/语音，resend <序号> 重新发回来', en: '/media lists recently received media; resend <n> sends one back' },
+    'help.digest': { zh: '/digest 现在按今天的流水生成一条日报（不等 21:00）', en: '/digest writes today\'s report now instead of waiting for 21:00' },
     'help.usage': { zh: '/usage 今天的用量：后台调用/预算、主动开口、待重发、待发提醒、流水与粗估 token', en: '/usage: what today consumed — background calls/budget, proactive lines, outbox, pending reminders, journal and a rough token estimate' },
     'help.todo': { zh: '/todo [add 内容|done 序号|rm 序号] 共享清单：同一个机器人的群和私聊看到同一份', en: '/todo [add text|done n|rm n] a shared list: every chat of this bot sees the same one' },
     'help.later': { zh: '/later https://… 稍后读：存链接并取回标题，/later 随时看，/later done 2 标记读完', en: '/later https://… read-later: store a link with its title; /later to list, /later done 2 when read' },

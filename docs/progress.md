@@ -3103,3 +3103,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：新增 `readTextFileCached(file)` —— 按 `mtime + size + ino` 失效，缓存的是**文本**而不是解析后的对象，所以每次调用仍 `JSON.parse` 出一个新对象，调用方照旧可以修改/写回；`atomicWriteJson` 写完显式失效；缓存上限 512 条（读命中重新插入，近似 LRU）。`readJsonFile`、`readSavedConfig`、`readRegistry` 都走它。
 - **实测**（同一份 ~1KB 的 config，5000 次）：`readSavedConfig` 11.2µs → **3.7µs/op（3.0×）**；纯 `read+parse` 基线 11.6µs。
 - **测试**：`test/file-cache.test.js` 6 条 —— 第二次读不碰磁盘（mock `readFileSync` 计数）、原子写后立刻可见、外部改写按 size 失效、每次返回独立对象、单条失效、缺失文件不缓存。
+
+### F1 手动日报 `/digest`（`src/message/digest.js`）
+
+- **为什么**：日报只能等 21:00；白天想问「今天干了啥」，没有任何入口，而且定时与手动若各写一遍 prompt，口径迟早漂移。
+- **做成什么**：把「今天长什么样」抽成 `composeDigest({stateRoot, accountId, conversationId, now, warn, day})`（流水统计 + 未完成事件 + 会话摘要 + 习惯打卡行），定时器（`src/index.js` 的 `ReportScheduler.fire`）与新的 `digest` handler 共用；命令走 `sideRoute('report')`，回复即日报，不额外发消息、不写 journal、不动定时器。
+- **测试**：`test/digest.test.js` 3 条（数字/事件/摘要/习惯全在、安静的一天、不追踪习惯时没有那行）；`test/sessions.test.js` 1 条（`/digest` 是命令且带参数就不算）。
+- **文档**：README 命令表、`docs/extras.md`「`/digest`」。

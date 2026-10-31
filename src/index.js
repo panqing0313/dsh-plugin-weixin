@@ -86,6 +86,7 @@ import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
 import { createHabitCommands, habitDigestLine, habitsList } from './message/habits.js'
 import { createMediaCommands } from './message/media-archive.js'
+import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
 import { createSendCommands } from './message/send-file.js'
@@ -772,21 +773,10 @@ export function apply(ctx, config) {
             const global = readGlobalMemory(stateRoot, accountId, { warn })
             prompt = buildReviewPrompt({ day, facts: global.facts, profile: global.profile, digest: global.digest })
           } else {
-            const entries = readJournalRange(stateRoot, { accountId, conversationId, days: 1, now })
-            const total = { in: 0, out: 0, all: entries.length }
-            const perConversation = new Map()
-            for (const entry of entries) {
-              if (entry.dir === 'in') total.in += 1
-              else total.out += 1
-              const id = entry.conversationId ?? conversationId
-              perConversation.set(id, (perConversation.get(id) ?? 0) + 1)
-            }
-            const conversations = [...perConversation].map(([id, all]) => ({ conversationId: id, all })).sort((a, b) => b.all - a.all)
-            const global = readGlobalMemory(stateRoot, accountId, { warn })
-            const events = (global.events ?? []).filter((event) => event.done !== true)
-            const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
-            const habits = habitDigestLine(habitsList(stateRoot, accountId, { warn }))
-            prompt = buildDigestPrompt({ day, total, conversations, events, summary: conv.summary, ...(habits === '' ? {} : { habits }) })
+            // Same builder the manual `/digest` uses: one definition of "what
+            // today looked like", so the scheduled and on-demand reports can
+            // never drift apart.
+            prompt = composeDigest({ stateRoot, accountId, conversationId, now, warn, day }).prompt
           }
 
           const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute('report') })
@@ -1682,6 +1672,19 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         // clean is what makes the switch feel real. Same mechanics as /new.
         bridge.lines.create(conversationId, accountId)
         return `${match.id === DEFAULT_MODE_ID ? '已切回默认助手' : `已切换到「${match.name}」`}模式，并开启了一条新会话线。\n（之前的会话保留，/list 可以切回）`
+      },
+      // /digest: the 21:00 report, on demand. Same builder and same cheap
+      // route as the scheduler, but it sends nothing to WeChat by itself — the
+      // reply is the report, so asking twice does not spam the chat history.
+      digest: async () => {
+        const now = Date.now()
+        const day = formatStamp(now)
+        const { prompt, total } = composeDigest({ stateRoot, accountId, conversationId, now, warn, day })
+        if (total.all === 0) return '今天还没有消息流水，日报没什么可写的。'
+        const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: 'wx-dig-', route: sideRoute?.('report') })
+        if (result === undefined) return '当前有对话在跑，等这轮结束再试 /digest。'
+        const text = String(result.text ?? '').trim()
+        return text === '' ? '日报没有生成出来（侧会话没返回内容），过一会儿再试。' : text
       },
       // /summary: an on-demand look at where the conversation stands. Unlike
       // the background summarizer it replies to the user and never writes the
