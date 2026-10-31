@@ -3000,3 +3000,10 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：`formatOutbox(items,{now,limit})` 纯函数渲染队列（条数、id、多久以前、尝试次数、上次错误、40 字预览）；`/outbox` 查看、`/outbox retry` 强制 `flush({force:true})`、`/outbox drop <id>` 丢弃。复用既有 `pending/flush/drop`，不新增状态，也不改变自动重试。
 - **测试**：`test/outbox.test.js` 新增 2 条（空队列、列表/错误/截断、上限与剩余）；`test/session-commands.test.js` 新增 1 条端到端（空队列文案、不打开会话）。
 - **文档**：README 命令表、`docs/extras.md`「`/outbox`：没发出去的那句话去哪了」。
+
+### ④ 群里被叫到才回：称呼可配、写法更宽（`src/message/groups.js`）
+
+- **原来的问题**：`mentionsBot` 只认 `accountId / accountLabel / botName`，而 iLink 不告诉插件机器人的群昵称 —— 没填备注名的用户，@ 了也不会被认出来；全角 `＠`、微信插的 U+2005、英文大小写也没处理。
+- **做成什么**：新增 `groupBotNames`（逗号分隔）并并入 `botNames`；匹配前把 `Ｕ+2005/Ｕ+00A0/Ｕ+3000` 归一成空格、`＠` 归一成 `@`，名字比较不区分大小写；仍然只认首行、开头或空白之后的名字，宁漏勿扰。
+- **测试**：`test/groups.test.js` 新增 2 条（全角/细空格/大小写/正文深处不误判、`groupBotNames` 走策略）；`config-remote` 表单同步一个字段（表单/schema 双向一致测试仍绿）。
+- **文档**：README 配置表与群聊节、`docs/extras.md`「群里被叫到才回」。

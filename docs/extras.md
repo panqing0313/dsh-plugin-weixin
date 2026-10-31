@@ -235,3 +235,19 @@ x-weixin-signature: sha256=<hex>        # 配置了 webhookSecret 才有
 - `/outbox retry` 调 `flush({force:true})`，忽略退避立刻再试，回报发出/失败/剩余条数。
 - `/outbox drop <id>` 丢弃一条（比如内容已经过时）。
 - 队列按账号隔离，最多保留 200 条；`/diag` 里的「今天流水」不会因为重发而重复计数。
+
+## 群里被叫到才回：把称呼写对（0.9.17）
+
+群聊默认 `groupChatEnabled: false`；打开后默认只答**被叫到**的时候。iLink 不提供 @ 列表，也不告诉插件机器人在群里的昵称，所以匹配只能靠名字：
+
+```jsonc
+{
+  "groupChatEnabled": true,
+  "groupReplyWhen": "mention",
+  "groupBotNames": "小助手, 阿伟"   // 大家实际 @ 的名字，逗号分隔
+}
+```
+
+- 认 `@小助手`、`＠小助手`（全角）、`@小助手` 后面跟微信的 U+2005 细空格、英文大小写；
+- 名字出现在首行开头或空白之后才算，正文深处的同名不算（宁漏勿扰）；
+- `groupReplyWhen: "all"` 仍然逐条都答，适合工作群里的值班机器人。

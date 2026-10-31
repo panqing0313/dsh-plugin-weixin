@@ -241,6 +241,7 @@ export const Config = z.object({
   proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
+  groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
   groupShareMemory: z.boolean().default(false).description('把长期记忆、回忆片段和亲密度行也注入群回复。默认关闭：那些块里是主人自己的私事。'),
   videoFrames: z.boolean().default(true).description('收到视频时用本机 ffmpeg 抽几帧静图交给模型（模型读不了视频，但能看图）。需要的机器上装了 ffmpeg；抽帧失败只影响那一条视频的内容理解，文件照常保存。'),
   richContent: z.boolean().default(true).description('富内容：长代码块作为文件附件发出、Markdown 表格转成对齐文本。微信只有纯文本气泡，这两处是 Markdown 里最容易在纯文本里变形的东西。'),
@@ -1786,7 +1787,12 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     //        in a group chat. Ignored messages are journaled (the turn never
     //        happens) and counted, and they never reach the sender gate.
     const groupDecision = groupReplyPolicy(message, effectiveConfig.current, {
-      botNames: [accountId, config.accountLabel ?? '', config.botName ?? ''],
+      botNames: [
+        accountId,
+        config.accountLabel ?? '',
+        config.botName ?? '',
+        ...String(config.groupBotNames ?? '').split(',').map((name) => name.trim()),
+      ],
     })
     if (groupDecision.reply === false) {
       hooks?.emit(HOOK_POINTS.inboundRefused, {

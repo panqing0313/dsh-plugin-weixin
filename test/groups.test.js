@@ -34,3 +34,21 @@ test('private memory does not follow the bot into a group unless asked', () => {
   assert.equal(groupSharesMemory(group, { ...on, groupShareMemory: true }), true)
   assert.equal(groupSharesMemory(direct, {}), true, 'a direct message always gets its memory')
 })
+
+test('a mention survives full-width @, the thin space WeChat inserts, and case', () => {
+  assert.equal(mentionsBot('＠小助手 帮我看看', { names: ['小助手'] }), true)
+  assert.equal(mentionsBot('@小助手\u2005帮我看下', { names: ['小助手'] }), true)
+  assert.equal(mentionsBot('@Helper please look', { names: ['helper'] }), true)
+  assert.equal(mentionsBot('今天小助手没来', { names: ['小助手'] }), false)
+  assert.equal(mentionsBot('小助手 在吗', { names: ['小助手'] }), true)
+})
+
+test('the names people actually use in a group can be configured separately', () => {
+  const policy = groupReplyPolicy(
+    { ...group, text: '＠阿伟 帮我查一下' },
+    { ...on, groupBotNames: '阿伟, 小助手' },
+    { botNames: ['阿伟', '小助手'] },
+  )
+  assert.equal(policy.reply, true)
+  assert.equal(policy.reason, 'group-mention')
+})

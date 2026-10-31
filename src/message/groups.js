@@ -31,12 +31,19 @@ export function isGroupMessage(message) {
 export function mentionsBot(text, { names = [] } = {}) {
   const source = typeof text === 'string' ? text : ''
   if (source.trim() === '') return false
-  const firstLine = source.split('\n')[0]
+  // 微信会在 @ 后面插一个 U+2005（four-per-em space），也常见全角 ＠；
+  // 统一成普通空格 + @，再匹配。名字比较不区分大小写（英文昵称很常见）。
+  const firstLine = source
+    .split('\n')[0]
+    .replace(/[\u2005\u00a0\u3000]/g, ' ')
+    .replace(/＠/g, '@')
   for (const name of names) {
     const trimmed = typeof name === 'string' ? name.trim() : ''
     if (trimmed === '') continue
     const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (new RegExp(`(^|\\s|@|＠)@?${escaped}`).test(firstLine)) return true
+    // 允许「@名字」「名字」开头，或前面是空白；不要求名字后面是空格（微信
+    // 的 @ 常常紧贴正文），但要求它出现在首行，避免正文深处误判。
+    if (new RegExp(`(^|\\s)@?${escaped}`, 'i').test(firstLine)) return true
   }
   return false
 }
