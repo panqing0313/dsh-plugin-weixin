@@ -151,3 +151,26 @@ test('a fire that throws is contained and does not break other timers', async ()
     fs.rmSync(stateRoot, { recursive: true, force: true })
   }
 })
+
+test('parseWhen reads natural Chinese times, without guessing', () => {
+  const now = new Date(2026, 9, 28, 10, 0, 0) // Wednesday, 10:00 local
+  assert.equal(parseWhen('明天 9:00', now).fireAt, new Date(2026, 9, 29, 9, 0, 0).getTime())
+  assert.equal(parseWhen('后天下午3点半', now).fireAt, new Date(2026, 9, 30, 15, 30, 0).getTime())
+  assert.equal(parseWhen('今晚8点', now).fireAt, new Date(2026, 9, 28, 20, 0, 0).getTime())
+  assert.equal(parseWhen('3小时后', now).fireAt, now.getTime() + 3 * 3_600_000)
+  assert.equal(parseWhen('半小时后', now).fireAt, now.getTime() + 30 * 60_000)
+
+  const nextMonday = parseWhen('下周一 10点', now)
+  assert.equal(nextMonday.ok, true)
+  assert.equal(new Date(nextMonday.fireAt).getDay(), 1)
+  assert.ok(nextMonday.fireAt > now.getTime() + 4 * 86_400_000, '下周一 is next week, not this one')
+
+  // A clock time without a date keeps the HH:mm rule: today if still ahead, else tomorrow.
+  assert.equal(parseWhen('9点', now).fireAt, new Date(2026, 9, 29, 9, 0, 0).getTime())
+
+  // Incomplete or already-past forms are refused, not guessed.
+  assert.equal(parseWhen('明天下午', now).ok, false)
+  assert.equal(parseWhen('下周一', now).ok, false)
+  assert.equal(parseWhen('今天 9:00', now).ok, false)
+  assert.equal(parseWhen('25点', now).ok, false)
+})

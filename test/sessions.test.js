@@ -600,3 +600,29 @@ test('/status is parsed exactly — no arguments, no prefix collisions', () => {
   assert.equal(parseSessionCommand('/status extra'), undefined, 'an argument makes it not a command, so it reaches the agent')
   assert.equal(parseSessionCommand('/statistics'), undefined, 'a longer word sharing the prefix is not /status')
 })
+
+test('a reminder time may contain spaces, and the rest is the text', () => {
+  const scheduled = []
+  const scheduler = {
+    schedule: (plan) => {
+      scheduled.push(plan)
+      return { id: `r${scheduled.length}` }
+    },
+    list: () => [],
+    cancel: () => true,
+  }
+  const reply = runSessionCommand([], 'wxid_a', '/remind 明天 9:00 开会', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(reply, /编号 r1/)
+  assert.equal(scheduled.length, 1)
+  assert.equal(scheduled[0].text, '开会')
+  assert.equal(new Date(scheduled[0].fireAt).getHours(), 9)
+
+  const single = runSessionCommand([], 'wxid_a', '/remind 10m 该喝水了', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(single, /编号 r2/)
+  assert.equal(scheduled[1].text, '该喝水了')
+
+  // Only a time, no content: usage, and nothing scheduled.
+  const empty = runSessionCommand([], 'wxid_a', '/remind 明天 9:00', 'acc', { accountId: 'acc', reminders: scheduler })
+  assert.match(empty, /没有可提醒的事/)
+  assert.equal(scheduled.length, 2)
+})

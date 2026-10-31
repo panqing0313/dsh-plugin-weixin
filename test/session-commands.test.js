@@ -377,7 +377,7 @@ test('/remind refuses a bad time, and /remindcancel removes a pending one', asyn
   await withPlugin(async ({ fake, root }) => {
     fake.deliver('/remind 明天下午 喝水', 'm1')
     await waitFor(() => fake.outbound.length > 0, 'the refusal')
-    assert.match(fake.outbound[0].text, /没有安排：看不懂这个时间/)
+    assert.match(fake.outbound[0].text, /没有安排：还需要一个钟点/)
 
     fake.deliver('/remind 1h 还没发生的事', 'm2')
     await waitFor(() => fake.outbound.length > 1, 'the confirm')

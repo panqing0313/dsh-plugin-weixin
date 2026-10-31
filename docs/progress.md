@@ -2977,3 +2977,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **测试**：全量 **848/848**；CI 发布提交 run `41162357569` 与 CHANGELOG 提交 run `41162197055` 均 success；tag 触发的 release workflow `41162361718` 失败（版本已存在，预期）。
 - **doctor**：`installed version 0.9.16`、`published version up to date (0.9.16)`；`host app 0.2.1-rc.5` 当时还标「不在测试列表」。
 - **真机复核（2026-10-31，用户确认）**：0.9.16 跑在宿主 `0.2.1-rc.5` 上，设置卡九个页签、左侧栏入口、收发、`/status` 均正常 → `src/host-compat.js` 的 `TESTED_HOSTS` 加 `0.2.1-rc.5`，`docs/compatibility.md` 加 `0.9.16 / 0.2.1-rc.5` 行；`doctor` 现在显示 `host 0.2.1-rc.5 (tested)`。
+
+### ① 提醒时间说人话（`src/message/scheduler.js` + `src/sessions.js`）
+
+- **原来的问题**：`/remind` 只认 `10m` / `18:30` / `2026-10-20 09:00`，而且正则把时间限制成一个 `\S+` token —— 说「明天 9:00」会被切成时间「明天」+ 内容「9:00 …」，直接报看不懂。
+- **做成什么**：`parseWhen` 增加第 4 种写法：中文口语日期（今天/今晚/明天/明晚/后天/大后天/下周X/这周X）+ 时段（上午/中午/下午/晚上…）+ 钟点（`9:00`、`9点`、`9点半`、`9点15分`），以及 `3小时后` / `半小时后`。`/remind` 的正则改为整段捕获，执行分支按前缀逐段试解析，第一个能解析的前缀是时间、其余是内容。
+- **不猜**：`明天下午`（没有钟点）与 `下周一`（没有钟点）都明确要求补时间；`今天 9:00` 已过则报错，不会悄悄改成明天；`下周一` 永远指下一周，`周一` 才指本周。
+- **测试**：`test/scheduler.test.js` 新增 1 条（覆盖明天/后天下午/今晚/相对/下周X/裸钟点/拒绝形态）；`test/sessions.test.js` 新增 1 条（带空格的时间切分、单 token 旧写法、只给时间缺内容）。
+- **文档**：README 命令表与「定时提醒」节、`docs/extras.md`「提醒时间说人话」、`/remind` 的 help 文案。

@@ -34,7 +34,7 @@ export const CATALOG = Object.freeze({
     'help.clear': { zh: '/clear 清空当前会话并重新开始（当前这条从列表里移除，不再占地方）', en: '/clear clear this session and start over (it is removed from the list)' },
     'help.cancel': { zh: '/cancel 取消正在跑的那个回合（长任务卡住时用；已经排队的消息仍会继续）', en: '/cancel stop the running turn (for stuck long tasks; queued messages still run)' },
     'help.status': { zh: '/status 查看当前账号和会话的状态（白名单、会话线等）', en: '/status show the account and session state (allowlist, session lines, ...)' },
-    'help.remind': { zh: '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00', en: '/remind <when> <text> timed reminder: 10m / 2h / 1d30m, 14:30, 2026-10-19 09:00' },
+    'help.remind': { zh: '/remind <时间> <内容> 定时提醒：10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、下周一 10点、3小时后', en: '/remind <when> <text> timed reminder: 10m / 2h / 1d30m, 14:30, 2026-10-19 09:00, tomorrow 9:00, next Monday 10:00, in 3 hours' },
     'help.remindlist': { zh: '/remindlist 查看这个账号还没发出的提醒', en: '/remindlist list reminders this account has not sent yet' },
     'help.remindcancel': { zh: '/remindcancel <编号> 取消一条还没发出的提醒（编号来自 /remindlist）', en: '/remindcancel <n> cancel a pending reminder (number from /remindlist)' },
     'help.subscribe': { zh: '/subscribe <时间> <主题> 定时主动消息：每天/每周X HH:mm，或一次性时间；到点我会主动给你发一条', en: '/subscribe <when> <topic> scheduled message from me: daily/weekly HH:mm, or a one-off time' },

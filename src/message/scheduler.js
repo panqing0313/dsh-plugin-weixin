@@ -31,6 +31,7 @@ export const MAX_DELAY_MS = 366 * 24 * 60 * 60 * 1000
  *  - `10m` / `2h` / `1d30m` — a duration from now
  *  - `HH:mm` — today, or tomorrow when the time has already passed
  *  - `YYYY-MM-DD HH:mm` — an explicit local date and time
+ *  - `明天 9:00` / `后天下午3点半` / `下周一 10点` / `3小时后` — 中文口语
  *
  * Times are wall-clock in the host's local zone: the person typing the
  * reminder reads the same clock as the host, and storing UTC instants for a
@@ -75,7 +76,94 @@ export function parseWhen(spec, now = new Date()) {
     return { ok: true, fireAt: target.getTime(), label: formatLabel(target) }
   }
 
-  return { ok: false, reason: '看不懂这个时间：支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00' }
+  // 4. Natural Chinese: `明天 9:00`, `后天下午3点半`, `下周一 10点`, `3小时后`.
+  const natural = parseNaturalWhen(trimmed, now)
+  if (natural !== undefined) return natural
+
+  return { ok: false, reason: '看不懂这个时间：支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、下周一 10:00、3小时后' }
+}
+
+const CN_DAY_OFFSET = { 今天: 0, 今晚: 0, 明天: 1, 明晚: 1, 后天: 2, 大后天: 3 }
+const CN_WEEKDAY = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 }
+const CN_PERIOD_PM = new Set(['下午', '傍晚', '晚上', '夜里'])
+const CN_PERIOD_AM = new Set(['凌晨', '早上', '早晨', '上午'])
+
+/**
+ * 中文口语时间：`明天 9:00`、`后天下午3点半`、`下周一 10点`、`3小时后`。
+ *
+ * 只认「日期词 + 时钟」这一种组合，不做模糊猜测：`明天下午`（没有钟点）
+ * 会明确要求补一个时间，而不是替用户选一个。`下周一` 永远指下一周，
+ * `周一` 指本周（已过则报错），避免同一个词在不同日子有两种解释。
+ *
+ * @param {string} spec
+ * @param {Date} now
+ * @returns {{ ok: true, fireAt: number, label: string } | { ok: false, reason: string } | undefined}
+ *   undefined 表示「不是这种写法」，交给调用方继续尝试其它格式。
+ */
+function parseNaturalWhen(spec, now) {
+  const text = spec.replace(/\s+/g, ' ').trim()
+
+  // `3小时后` / `30分钟后` / `半小时后` / `2天后`
+  const relative = /^(\d+(?:\.\d+)?|半)\s*(分钟|分|小时|钟头|天)\s*后$/.exec(text)
+  if (relative !== null) {
+    const amount = relative[1] === '半' ? 0.5 : Number(relative[1])
+    const unitMs = { 分钟: 60_000, 分: 60_000, 小时: 3_600_000, 钟头: 3_600_000, 天: 86_400_000 }
+    const delay = Math.round(amount * unitMs[relative[2]])
+    if (delay <= 0) return { ok: false, reason: '时间必须是未来的某个时刻' }
+    if (delay > MAX_DELAY_MS) return { ok: false, reason: '定得太远：最多支持一年以内' }
+    return { ok: true, fireAt: now.getTime() + delay, label: formatLabel(new Date(now.getTime() + delay)) }
+  }
+
+  let rest = text
+  let day = null
+  const dayMatch = /^(今天|今晚|明天|明晚|后天|大后天)/.exec(rest)
+  if (dayMatch !== null) {
+    day = { offset: CN_DAY_OFFSET[dayMatch[1]], evening: dayMatch[1].endsWith('晚') }
+    rest = rest.slice(dayMatch[1].length).trim()
+  } else {
+    const week = /^(下|这|本)?(?:周|星期)([一二三四五六日天])/.exec(rest)
+    if (week !== null) {
+      day = { weekday: CN_WEEKDAY[week[2]], next: week[1] === '下' }
+      rest = rest.slice(week[0].length).trim()
+    }
+  }
+
+  let period = null
+  const periodMatch = /^(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里)/.exec(rest)
+  if (periodMatch !== null) {
+    period = periodMatch[1]
+    rest = rest.slice(periodMatch[1].length).trim()
+  }
+
+  const clock = /^(\d{1,2})\s*(?:[:：点时])\s*(?:(\d{1,2})\s*分?|(半))?$/.exec(rest)
+  if (clock === null) {
+    if (day !== null || period !== null) return { ok: false, reason: '还需要一个钟点，例如 明天 9:00 / 下午 3 点半' }
+    return undefined
+  }
+
+  let hour = Number(clock[1])
+  const minute = clock[3] === '半' ? 30 : Number(clock[2] ?? 0)
+  if (hour > 23 || minute > 59) return { ok: false, reason: '时间格式应为 9:00 或 9点半' }
+  if (CN_PERIOD_PM.has(period) && hour < 12) hour += 12
+  if (period === '中午' && hour < 11) hour += 12
+  if (period === '凌晨' && hour === 12) hour = 0
+  if (day?.evening === true && hour < 12) hour += 12
+  if (CN_PERIOD_AM.has(period) && hour === 12) hour = 0
+
+  const target = new Date(now)
+  if (day?.offset !== undefined) {
+    target.setDate(target.getDate() + day.offset)
+  } else if (day?.weekday !== undefined) {
+    let delta = (day.weekday - now.getDay() + 7) % 7
+    if (day.next === true) delta += 7
+    target.setDate(target.getDate() + delta)
+  }
+  target.setHours(hour, minute, 0, 0)
+
+  if (day === null && target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1)
+  if (target.getTime() <= now.getTime()) return { ok: false, reason: '那个时刻已经过去了' }
+  if (target.getTime() - now.getTime() > MAX_DELAY_MS) return { ok: false, reason: '定得太远：最多支持一年以内' }
+  return { ok: true, fireAt: target.getTime(), label: formatLabel(target) }
 }
 
 /**

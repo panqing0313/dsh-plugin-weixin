@@ -589,12 +589,12 @@ const COMMANDS = [
     helpKey: 'help.away',
   },
   { id: 'back', pattern: /^\/back$/i, build: identity, helpRank: 21, helpKey: 'help.back' },
-  // `/remind 10m 内容`：时间与内容之间以第一个空格切分，内容允许为空以便
-  // 单独报「缺内容」而非「看不懂命令」。
+  // `/remind 明天 9:00 内容`：时间本身可能带空格（`明天 9:00`、`下周一 10点`），
+  // 所以整段交给执行分支按前缀尝试解析，第一个能解析的前缀是时间，其余是内容。
   {
     id: 'remind',
-    pattern: /^\/remind\s+(\S+)(?:\s+([\s\S]+))?$/i,
-    build: (match) => ({ when: match[1], text: match[2] ?? '' }),
+    pattern: /^\/remind\s+([\s\S]+)$/i,
+    build: (match) => ({ arg: match[1] }),
     helpRank: 16,
     helpKey: 'help.remind',
   },
@@ -791,13 +791,29 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     // tooling) gets an honest refusal rather than a silently dropped remind.
     const scheduler = context?.reminders
     if (scheduler === undefined) return '当前无法安排提醒（调度器不可用）。'
-    if (String(command.text ?? '').trim() === '') {
-      return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00'
+    const raw = String(command.arg ?? '').trim()
+    if (raw === '') {
+      return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了 或 /remind 明天 9:00 开会\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、下周一 10点、3小时后'
     }
-    const when = parseWhen(command.when)
-    if (when.ok === false) return `没有安排：${when.reason}`
+    // 时间可能自己带空格（`明天 9:00`），按前缀逐段尝试：第一个能解析的前缀
+    // 就是时间，其余是内容。这样不用在正则里穷举所有中文写法。
+    const tokens = raw.split(/\s+/)
+    let when
+    let text = ''
+    for (let take = 1; take <= tokens.length && take <= 4; take += 1) {
+      const parsed = parseWhen(tokens.slice(0, take).join(' '))
+      if (parsed.ok === true) {
+        when = parsed
+        text = tokens.slice(take).join(' ')
+        break
+      }
+    }
+    if (when === undefined) return `没有安排：${parseWhen(tokens[0]).reason}`
+    if (text.trim() === '') {
+      return '用法：/remind <时间> <内容>，例如 /remind 明天 9:00 开会（只给时间没有内容，没有可提醒的事）'
+    }
     const accountIdForRemind = context?.accountId ?? accountId ?? ''
-    const planned = scheduler.schedule({ accountId: accountIdForRemind, conversationId, text: command.text, fireAt: when.fireAt })
+    const planned = scheduler.schedule({ accountId: accountIdForRemind, conversationId, text, fireAt: when.fireAt })
     if (planned.error !== undefined) return `没有安排：${planned.error}`
     return `好的，${when.label} 我会提醒你（编号 ${planned.id}）。\n用 /remindlist 可以查看，/remindcancel ${planned.id} 取消。`
   }
