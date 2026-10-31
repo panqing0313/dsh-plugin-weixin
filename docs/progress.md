@@ -3146,3 +3146,12 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **测试**：`test/client-remote.test.js:330` 的快照断言改成 `微信BOT`；新增 `test/display-name.test.js` 三条，把「侧边栏/设置的 label」「两个 locale 的 meta.title」「locale 必须随包发布」钉在一起 —— 只改一处就红。
 - **文档**：`README.md:44`、`README.en.md:43`、`docs/compatibility.md:30` 的界面描述跟着改；CHANGELOG 记「未发布」。
 - **验证**：全量 `npm test` **921/921**、`node bin/check.mjs` → `checked 211 files`。宿主里的真实渲染（插件管理器行标题、设置分组标题）要重启后才能看，未真机确认。
+
+## 发布 0.9.20（2026-10-31）
+
+- **内容**：插件显示名统一成「微信BOT」（`36c6ffa`）+ `locale/en.json`、`locale/zh.json` 元数据；全量 `npm test` **921/921**、`node bin/check.mjs` → `checked 212 files`。
+- **publish 卡在 web OTP 窗口**：本机伪 TTY 连开两次会话，npm 每 3 秒 `GET /-/v1/done` 拿 **202**（未授权），约 5 分钟后窗口一过变 **404**，脚本直接 `✗ npm publish failed`。最终由用户在真实终端 `npm publish --access public` 完成（`PUT 401` → 授权 → `PUT 202`）。
+- **核验**：本地 tarball `shasum 9527ea298e1ff6c79b65d4888ed65dffd0c7dd56` = registry `dist.shasum`；`dist.integrity sha512-505fD0ug8FsRWF8pn795AmWReUYWgzaxdmvRSdhcaUyce5OaEQNp1Ar91HmY/eQHkjVAYoElfXK7G6o2JdKh8A==`；`gitHead 1554f27bdbb01a76e9468f8d70dba9c0869bb868`；tag `v0.9.20` 指向 `1554f27`；`dist-tags.latest = 0.9.20`。
+- **profile**：`^0.9.19 → ^0.9.20`、`node_modules/dsh-plugin-weixin` = 0.9.20、锁文件刷新；`doctor` → `installed version 0.9.20`、`host 0.2.1-rc.5 (tested)`、`published up to date (0.9.20)`。重启 DSH 后生效。
+- **清理**：tag 触发的 release workflow `41206878317` 已取消（否则会重复 publish）；发布提交的 CI run `41206872998` 随后确认。
+- **未验证**：插件管理器行标题 / 设置分组标题在宿主里的真实渲染，要重启后看；若仍显示包名，需按宿主实际读取的字段再调。
