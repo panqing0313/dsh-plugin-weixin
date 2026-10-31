@@ -317,6 +317,7 @@ export const Config = z.object({
   progressToolAfterMs: z.number().min(0).default(8_000).description('Send the first progress note sooner - after this many milliseconds - when a tool is actually running. 0 disables the early note.'),
   progressEveryMs: z.number().default(60_000).description('Re-send a changed progress note at most this often, so tool changes stay visible without repeating an unchanged state.'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
+  eventPollMs: z.number().min(0).max(60_000).default(1_000).description('会话事件轮询间隔（毫秒）：越小回答出现得越快，越大越省 CPU。'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
   mediaEnabled: z.boolean().default(true).description('Send local files the agent references in its reply as Weixin images/videos/file attachments.'),
   autoSendFiles: z.boolean().default(true).description('Also deliver files the agent wrote into its working directory during a turn, even when the reply text never references them.'),
@@ -544,6 +545,7 @@ export function apply(ctx, config) {
         progressToolAfterMs: config.progressToolAfterMs,
         progressEveryMs: config.progressEveryMs,
         maxWaitMs: config.maxTurnWaitMs,
+        eventPollMs: config.eventPollMs,
         log,
         errLog: warn,
         // Tool audit lands on disk, not in the log: the log rotates away, and

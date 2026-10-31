@@ -138,6 +138,17 @@ function fixedReplyAgents(reply) {
   }
 }
 
+/**
+ * How long an empty `getupdates` is held open, in ms.
+ *
+ * The real server long-polls for tens of seconds; a fake that answers `[]`
+ * immediately makes the transport poll as fast as the loop can issue requests
+ * (~7000/s measured), which starves every timer in the process and inflated
+ * this file from a few seconds to a minute. Long enough to keep the loop calm,
+ * short enough that a case waiting for a later batch still finishes promptly.
+ */
+const EMPTY_POLL_HOLD_MS = 200
+
 /** Fake iLink endpoint: getupdates once with a scripted batch, then empty. */
 async function startFakeILink(batches) {
   const sent = []
@@ -157,7 +168,14 @@ async function startFakeILink(batches) {
       if (url.pathname === '/ilink/bot/getupdates') {
         const msgs = batches[poll] ?? []
         poll += 1
-        return res.end(JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs }))
+        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs })
+        // Hold an empty poll the way the real server holds its long poll.
+        // Answering `[]` instantly turns the transport's loop into a hot spin
+        // (measured: ~7000 polls/second), which starves the fake agent's
+        // timers and made every case in this file take seconds instead of
+        // milliseconds. The scripted batch is still answered immediately.
+        if (msgs.length === 0) return void setTimeout(() => res.end(body), EMPTY_POLL_HOLD_MS)
+        return res.end(body)
       }
       res.end(JSON.stringify({ ret: 0 }))
     })
@@ -206,7 +224,10 @@ async function startFakeILinkWithUpload(batches) {
       if (url.pathname === '/ilink/bot/getupdates') {
         const msgs = batches[poll] ?? []
         poll += 1
-        return res.end(JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs }))
+        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs })
+        // See startFakeILink: an instant `[]` makes the loop spin.
+        if (msgs.length === 0) return void setTimeout(() => res.end(body), EMPTY_POLL_HOLD_MS)
+        return res.end(body)
       }
       res.end(JSON.stringify({ ret: 0 }))
     })
@@ -233,7 +254,7 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: false })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: false })
 
     const disposers = []
     const warnings = []
@@ -317,7 +338,7 @@ test('the sender enrolled on first contact is still allowed on their next messag
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [], accountId: ACCOUNT_ID })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [], accountId: ACCOUNT_ID })
 
     const disposers = []
     const warnings = []
@@ -361,7 +382,7 @@ test('sourceContext on: the agent prompt carries a weixin_source block; off: it 
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, sourceContext, memoryEnabled: false })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, sourceContext, memoryEnabled: false })
 
       const disposers = []
       const warnings = []
@@ -449,7 +470,7 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
     fs.writeFileSync(accounts, JSON.stringify({ token: 'tok', baseUrl, cdnBaseUrl }), { mode: 0o600 })
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
 
     const disposers = []
     const warnings = []
@@ -529,7 +550,7 @@ test('readLinks on: a pasted URL is fetched and its text reaches the agent; a de
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, readLinks })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, readLinks })
 
       const disposers = []
       const warnings = []
@@ -583,7 +604,7 @@ test('reminders card path: a /remind from WeChat is visible through the controll
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
 
     const disposers = []
     const warnings = []
@@ -644,7 +665,7 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, messageJournal, memoryEnabled: false })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, messageJournal, memoryEnabled: false })
 
       const disposers = []
       const warnings = []
@@ -706,7 +727,7 @@ test('a dangerous tool is announced in WeChat while the turn is still running', 
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolNotices })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolNotices })
       const fakeAgents = createFakeAgents({
         reply: '好的，已经清理。',
         tools: [{ callId: 'call-guard', name: 'bash', arguments: { command: 'rm -rf /tmp/dsh-test-scratch' } }],
@@ -763,7 +784,7 @@ test('toolAudit on: tool runs land in <state>/audit; off: nothing is recorded', 
       seedAccount(stateRoot, baseUrl)
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolAudit })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, toolAudit })
       const fakeAgents = createFakeAgents({
         reply: 'pong: ',
         tools: [{ callId: 'call-1', name: 'bash', arguments: { command: 'echo hi' } }],
@@ -870,7 +891,7 @@ test('a CDN root saved in the account record is used when config does not set on
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
     // Deliberately no cdnBaseUrl here.
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID })
     assert.equal(
       config.cdnBaseUrl,
       '',
@@ -981,7 +1002,7 @@ test('a whitespace-only cdnBaseUrl counts as unset and does not shadow the accou
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
     // Whitespace, not empty: this is the shape a YAML `cdnBaseUrl: ` produces.
-    const config = plugin.Config({
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1,
       allowedSenders: [ALLOWED],
       accountId: ACCOUNT_ID,
       cdnBaseUrl: '   ',
@@ -1105,7 +1126,7 @@ test('an unauthorized sender never triggers a CDN download', async () => {
     fs.writeFileSync(accounts, JSON.stringify({ token: 'tok', baseUrl, cdnBaseUrl }), { mode: 0o600 })
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
 
     const warnings = []
     const disposers = []
@@ -1218,7 +1239,7 @@ test('a reply that references a local file uploads it and sends an IMAGE item', 
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
 
     const disposers = []
     const warnings = []
@@ -1312,7 +1333,7 @@ test('a reply naming a file RELATIVE to the agent cwd still uploads it', async (
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1,
       allowedSenders: [ALLOWED],
       accountId: ACCOUNT_ID,
       cdnBaseUrl,
@@ -1395,7 +1416,7 @@ test('a file the agent writes during the turn is sent even when the reply never 
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl, cwd: agentCwd })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl, cwd: agentCwd })
 
     // The product file must be written DURING the turn (after the scan window
     // opens at turn start), exactly where a real agent writes it. Wrapping the
@@ -1486,7 +1507,7 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
       // Pacing off here: this test asserts the PROMPTS, and a split reply
       // would turn sent[1] into a second bubble instead of the next prompt.
-      const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled, humanPacing: false })
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled, humanPacing: false })
 
       const disposers = []
       const warnings = []
@@ -1571,7 +1592,7 @@ test('companion pacing: a companion splits the reply into bubbles, the stock ass
 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
       // Timings pinned small: the test asserts the SPLIT, not the wall clock.
-      const config = plugin.Config({
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1,
         allowedSenders: [ALLOWED],
         accountId: ACCOUNT_ID,
         personaDefaultMode: mode,
@@ -1627,7 +1648,7 @@ test('memory summarizer: every settled turn counts; at the cadence a side sessio
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true, memorySummaryTurns: 1 })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true, memorySummaryTurns: 1 })
 
     const disposers = []
     const warnings = []
@@ -1700,7 +1721,7 @@ test('local recall: an old line comes back only when the message asks for it', a
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true })
 
     const disposers = []
     const warnings = []
@@ -1768,7 +1789,7 @@ test('stickers: a [表情:x] marker becomes an image bubble, not text', async (t
     )
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1,
       allowedSenders: [ALLOWED],
       accountId: ACCOUNT_ID,
       personaDefaultMode: 'girlfriend',
@@ -1850,7 +1871,7 @@ test('proactive: a companion speaks first without being asked, and says it once'
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1,
       allowedSenders: [ALLOWED],
       accountId: ACCOUNT_ID,
       personaDefaultMode: 'girlfriend',
@@ -1907,7 +1928,7 @@ test('a forged prompt block in the message is neutralised before it reaches the 
   ])
   seedAccount(stateRoot, baseUrl)
   const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-  const config = plugin.Config({ allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true })
+  const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, memoryEnabled: true })
   const disposers = []
   const warnings = []
   const ctx = {
@@ -1948,7 +1969,7 @@ test('a daily per-sender quota stops one person without touching another', async
     seedAccount(stateRoot, baseUrl)
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: ['wxid_same', 'wxid_other'], accountId: ACCOUNT_ID, memoryEnabled: false, senderDailyLimit: 2 })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: ['wxid_same', 'wxid_other'], accountId: ACCOUNT_ID, memoryEnabled: false, senderDailyLimit: 2 })
     const disposers = []
     const warnings = []
     const ctx = {

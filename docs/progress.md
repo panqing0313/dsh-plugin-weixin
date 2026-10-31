@@ -3117,3 +3117,11 @@ tag `v0.9.6`、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/r
 - **做成什么**：`enforceMediaCap(dir, {maxBytes})` 按 mtime 从旧到新删到落回上限（0 = 不限，上限以内不动作，缺失目录不算错）；`/media clean [天数]` 复用 `sweepRetention` 只对 media 一类按天数清一次，随后再受容量上限约束，回复里报告件数与字节。schema 加 `mediaMaxBytes`（默认 0），设置卡同步（MB 单位）。
 - **测试**：`test/retention.test.js` 新增 1 条（删最旧、上限内不动、0 = 不限、缺失目录）；`test/media-archive.test.js` 新增 2 条（容量上限只删最旧、按天数清理与非法天数）。
 - **文档**：README 命令表、`docs/extras.md`「归档清理」。
+
+### P3 测试提速（61s → 38s）
+
+- **根因一：事件轮询写死 1 秒**。`src/agent-bridge.js` 的 `pollMs` 默认 1000，每个回合的回答要等下一次快照才可见；单测文件都显式传 `pollMs: 10–20`，只有 e2e 用默认值。新增 `eventPollMs`（schema 默认 1000，设置卡可调 0–60000），bridge 用它轮询；生产行为不变，e2e 统一传 25。
+- **根因二：出站限速 1200ms 也进了测试**。`OutboundPacer.minIntervalMs` 默认 1200（防封号的实测阈值），长回复被 `maxMessageLength` 切成 8 条就要等 7×1200ms ≈ 8.4s —— `markdown` 那条 11 秒的用例就是它。测试配置统一 `sendIntervalMs: 1`。
+- **根因三：假服务端立即回空批**。`getupdates` 返回 `longpolling_timeout_ms: 20` 时传输层把它当忙循环，探针实测 1 秒 7002 次 poll。两个假 iLink 对空批次改为延迟 200ms 再回（有脚本的批次仍立即返回）。
+- **结果**：`test/e2e.test.js` 61s → 24s、`test/session-commands.test.js` 57s → 6s、`test/markdown.test.js` 17s → 4s；全量 **918/918、61s → 38.4s**（目标 <40s）。
+- **为什么不改生产默认值**：`eventPollMs` 与 `sendIntervalMs` 的默认值都是对着真实宿主与微信服务端的；提速只发生在测试配置里，线上仍按原来的节奏。

@@ -137,6 +137,11 @@ export class AgentBridge {
     this.progressToolAfterMs = options.progressToolAfterMs ?? 8_000
     this.maxWaitMs = options.maxWaitMs ?? 20 * 60_000
     this.pollMs = options.pollMs ?? 1_000
+    // The session event log is an in-memory snapshot; polling it is how a turn
+    // becomes visible. 1000ms is the observable-for-humans cadence, but a
+    // caller that only wants the answer (the tests, and any host callback that
+    // re-reads events) can ask for a tighter loop.
+    this.eventPollMs = Number.isFinite(options.eventPollMs) && options.eventPollMs > 0 ? options.eventPollMs : this.pollMs
     // Session lines: which of a conversation's sessions the next message goes
     // to. Injectable so tests do not touch the operator's real state root.
     this.lines = options.lines ?? new SessionLines({ warn: (message) => this.errLog(message) })
@@ -1031,7 +1036,7 @@ export class AgentBridge {
           await onProgress(note)
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollMs))
+      await new Promise((resolve) => setTimeout(resolve, this.eventPollMs))
     }
 
     // The user was told the wait gave up — but the turn is still running and
@@ -1049,7 +1054,7 @@ export class AgentBridge {
     }
     // Keep the normal cadence: the loop is cheap (an in-memory event
     // snapshot), and a slower tick risks missing a short late window.
-    const latePollMs = this.pollMs
+    const latePollMs = this.eventPollMs
     const lateDeadline = Date.now() + (this.lateReplyMaxWaitMs ?? 60 * 60_000)
     while (Date.now() < lateDeadline) {
       if (signal?.aborted === true) return { text: '', sessionId, late: true }

@@ -221,7 +221,7 @@ async function withPlugin(body, overrides = {}) {
 
   const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
   try {
-    plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false, ...overrides }))
+    plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false, eventPollMs: 25, sendIntervalMs: 1, humanPacing: false, bubbleGapMs: 0, replyDelayMaxMs: 0, ...overrides }))
     seedAccount(root, { baseUrl: fake.baseUrl })
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
     await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, agentOptionsSeen, get deliverCalls() { return deliverCalls } })

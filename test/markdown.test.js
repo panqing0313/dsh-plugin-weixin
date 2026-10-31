@@ -231,7 +231,11 @@ async function startFakeILink(msgs) {
       if (url.pathname === '/ilink/bot/getupdates') {
         const batch = poll === 0 ? msgs : []
         poll += 1
-        return res.end(JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs: batch }))
+        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs: batch })
+        // Hold an empty poll: answering `[]` instantly makes the transport spin
+        // (thousands of polls a second), which starves the fake agent's timers.
+        if (batch.length === 0) return void setTimeout(() => res.end(body), 200)
+        return res.end(body)
       }
       res.end(JSON.stringify({ ret: 0 }))
     })
@@ -262,7 +266,7 @@ async function roundTrip({ reply, config: extraConfig = {} }) {
     fs.writeFileSync(accounts2, JSON.stringify({ token: 'tok', baseUrl }), { mode: 0o600 })
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ allowedSenders: [allowed], accountId, ...extraConfig })
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, humanPacing: false, bubbleGapMs: 0, replyDelayMaxMs: 0, allowedSenders: [allowed], accountId, ...extraConfig })
 
     const agents = {
       get: () => undefined,
