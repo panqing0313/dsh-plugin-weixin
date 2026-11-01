@@ -597,7 +597,7 @@ const COMMANDS = [
     helpKey: 'help.away',
   },
   { id: 'back', pattern: /^\/back$/i, build: identity, helpRank: 21, helpKey: 'help.back' },
-  { id: 'diag', pattern: /^\/diag$/i, build: identity, helpRank: 22, helpKey: 'help.diag' },
+  { id: 'diag', pattern: /^\/diag(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 22, helpKey: 'help.diag' },
   { id: 'outbox', pattern: /^\/outbox(?:\s+([\s\S]+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 23, helpKey: 'help.outbox' },
   { id: 'quiet', pattern: /^\/quiet(?:\s+([\s\S]+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 24, helpKey: 'help.quiet' },
   { id: 'snooze', pattern: /^\/snooze(?:\s+(\S+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 25, helpKey: 'help.snooze' },

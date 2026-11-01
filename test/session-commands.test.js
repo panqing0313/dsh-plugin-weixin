@@ -997,6 +997,29 @@ test('/diag answers with the gates, without opening a session', async () => {
   })
 })
 
+test('/diag export writes a masked bundle and never names the account', async () => {
+  await withPlugin(async ({ fake, sessionsOpened, root }) => {
+    fake.deliver('/diag export', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the export reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /已导出体检包/)
+    assert.match(reply, /\/diag\/diag-/)
+
+    const file = /(\S+diag-[\w-]+\.md)/.exec(reply)?.[1]
+    assert.ok(file !== undefined, 'the reply carries the path')
+    const text = fs.readFileSync(file, 'utf8')
+    assert.match(text, /# 微信BOT 体检包/)
+    assert.match(text, /## 开关/)
+    assert.match(text, /## 最近报错/)
+    assert.match(text, /## 自检结论/)
+    // The whole point: the raw account id must not survive anywhere.
+    assert.equal(text.includes(ACCOUNT_ID), false, 'the account id is replaced by an alias')
+    assert.equal(text.includes(ALLOWED), false, 'the allowlisted sender id is never printed')
+    assert.match(text, /- 账号 id-/)
+    assert.equal(sessionsOpened.length, 0)
+  })
+})
+
 test('/outbox shows the empty queue instead of pretending a send happened', async () => {
   await withPlugin(async ({ fake, sessionsOpened }) => {
     fake.deliver('/outbox', 'm1')

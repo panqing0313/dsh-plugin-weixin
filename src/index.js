@@ -19,8 +19,9 @@
  */
 import z from '@deepseek-ai/schemastery'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve as resolvePath } from 'node:path'
-import { configureWeixinStateDir, accountsDir, ensureSessionsDir, inboxDir, withSavedConfig } from './state.js'
+import fs from 'node:fs'
+import { dirname, join, resolve as resolvePath } from 'node:path'
+import { configureWeixinStateDir, accountsDir, ensureSessionsDir, inboxDir, stateDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
 import {
   MAX_TEMP_QUIET_MS,
@@ -31,6 +32,8 @@ import {
   tempQuietDelay,
 } from './message/temp-quiet.js'
 import { buildDiagReport } from './message/diag.js'
+import { MAX_RECENT_ERRORS, buildDiagExport } from './message/diag-export.js'
+import { detectHostVersion, hostStatus } from './host-compat.js'
 import { buildUsageReport } from './message/usage.js'
 import { readBudget } from './budget.js'
 import { createRequire } from 'node:module'
@@ -60,7 +63,7 @@ import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
 import { chunkText } from './message/chunker.js'
 import { appendJournal } from './message/journal.js'
-import { appendToolAudit } from './message/audit.js'
+import { appendToolAudit, readToolAudit } from './message/audit.js'
 import { DEFAULT_SEND_INTERVAL_MS, DEFAULT_COOLDOWN_MS } from './message/rate-limit.js'
 
 /**
@@ -1572,6 +1575,65 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
   let pendingImport
   // ④ Shared by /import and the 「是」 that follows it: one place decides what a
   // written import reports, so the preview and the outcome cannot disagree.
+  // ⑦ `/diag export`：体检包要能发出去。所有 id 换别名、地址与凭据整段抹掉，
+  // 然后写成 stateRoot 下的一个文件 —— 命令回复会走一遍出站附件管线，文件
+  // 跟着文字一起发到当前会话，用户手边就有一份能直接转发的。
+  // 体检包是「账号现在什么样」，不是「这个会话什么样」：它没有 conversationId
+  // 可用（导出是在 bundle 外跑的），所以模式一栏取账号的默认模式，不取会话覆盖。
+  const exportDiag = () => {
+    const live = effectiveConfig.current
+    const store = readPersonaStore(stateRoot, { warn })
+    const currentId = live.personaDefaultMode ?? DEFAULT_MODE_ID
+    const current = resolveMode(store, currentId)
+    let proactive
+    try {
+      const state = readProactiveState(stateRoot, accountId, { warn })
+      proactive = state === undefined ? undefined : { count: state.count, lastAt: state.lastAt, misses: state.misses }
+    } catch {
+      proactive = undefined
+    }
+    // 只带失败的审计行：成功的那些对「为什么出问题」没有解释力，只会占篇幅。
+    let recentErrors = []
+    try {
+      recentErrors = readToolAudit(stateRoot, { limit: 200 })
+        .filter((entry) => entry.ok !== true)
+        .slice(0, MAX_RECENT_ERRORS)
+    } catch {
+      recentErrors = []
+    }
+    const bundle = buildDiagExport({
+      version: PLUGIN_VERSION,
+      nodeVersion: process.version,
+      hostVersion: detectHostVersion(),
+      hostTested: hostStatus(detectHostVersion()).status === 'tested',
+      accountId,
+      accountLabel: effectiveConfig.current.accountLabel ?? undefined,
+      transportUp: transport !== undefined,
+      modeName: current?.name ?? currentId,
+      companion: isCompanionMode(current),
+      config: live,
+      reminders: reminderScheduler?.list(accountId)?.length ?? 0,
+      subscriptions: subscriptionScheduler?.list?.(accountId)?.length ?? 0,
+      proactive,
+      journalToday: readJournalRange(stateRoot, { accountId, days: 1 }).length,
+      conversations: listConvMemories(stateRoot, accountId).length,
+      allowlist: Array.isArray(live.allowedSenders) ? live.allowedSenders.length : 0,
+      quietDelayMs: quietDelay(Date.now(), live),
+      recentErrors,
+    })
+    const dir = join(stateDir(), 'diag')
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const file = join(dir, `diag-${stamp}.md`)
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(file, bundle.text, 'utf8')
+    } catch (error) {
+      warn(`diag export failed: ${String(error)}`)
+      return `体检包写入失败：${String(error)}`
+    }
+    return `已导出体检包（${bundle.sections.length} 节，id 已换成短哈希、地址与凭据已抹掉）：\n${file}\n转发出去之前建议自己扫一眼。`
+  }
+
   const applyImport = (plan) => {
     const written = applyMemoryImport({
       stateRoot,
@@ -1665,7 +1727,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         return '用法：/outbox 查看 · /outbox retry 立即重试 · /outbox drop <id> 丢弃。'
       },
       // `/diag`：不调模型的一条自检。用户问「怎么没反应」时，先看闸门。
-      diag: () => {
+      diag: (arg) => {
+        const action = String(arg ?? '').trim()
+        if (/^(export|导出|打包)$/i.test(action)) return exportDiag()
         const live = effectiveConfig.current
         const store = readPersonaStore(stateRoot, { warn })
         const currentId = activeModeFor(stateRoot, accountId, conversationId, live.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })

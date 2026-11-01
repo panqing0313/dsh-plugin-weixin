@@ -3380,3 +3380,18 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 **顺手修掉的一个潜伏 bug**：`keywordGate` 用 `recent.get(key) ?? 0` 判断冷却，把「从未响过」当成时间戳 0。真实时钟下无害（`Date.now()` 远大于一分钟），但任何传入小数值时钟的调用方都会发现**第一次命中被冷却吃掉**。改成 `const last = recent.get(key); if (last !== undefined && now - last < cooldownMs)`。
 
 **验证**：`test/keyword-reply.test.js` 新增 3 条（按规则计数与冷却计数分开、跨群累计、后加的规则从 0 开始）、`test/session-commands.test.js` 端到端 1 条（列表 → 群里打卡触发 → 计数变 1 → 用法提示）；全量 **985/985**。
+
+### ⑦ `/diag export` 脱敏体检包（2026-11-01）
+
+**问题**：`/diag` 能回答「为什么没动静」，但它只在聊天里刷一屏，用户想问问题就得手抄或者截图；直接让用户把状态目录打包出来又会把账号 id、白名单、地址、凭据一起送出去。
+
+**做法**：
+- 新增 `src/message/diag-export.js`：`buildDiagExport(input)` 生成 Markdown，分「版本 / 账号 / 模式 / 开关 / 计数 / 最近报错 / 自检结论」七节；`aliasOf(value)` 把账号与发送者换成 `id-<sha256 前 6 位>`；`maskDeep(text)` 依次抹掉 URL、邮箱、手机号、24 位以上的长串、`token=/secret=/password=/key=/authorization=` 后面的值 —— **每一行拼进去之前都先过 `maskDeep`**，新增字段不会因为忘了脱敏而漏出去。
+- `src/index.js`：`/diag` 的 handler 从无参改成收参数，`export|导出|打包` 走 `exportDiag()`；导出写到 `~/.dsh/weixin/diag/diag-<时间戳>.md`，回复里给路径并提醒「转发出去之前建议自己扫一眼」。只带失败的审计行（`readToolAudit(...).filter(entry => entry.ok !== true)`，最多 8 条），成功的那些对「为什么出问题」没有解释力。
+- `src/sessions.js`：`/diag` 规则原来写死 `^\/diag$`，`/diag export` 根本匹配不上、被当成聊天消息发给模型 —— 改成可选参数。
+
+**两个真错**：
+1. `/diag export` 先报 `（处理失败：TypeError: record.agent.followup is not a function）` —— 不是 handler 写错，是命令表压根没匹配上，消息掉进了 agent。`node -e` 单跑 `parseSessionCommand('/diag export')` 立刻看出返回 `{command:'diag', arg:'export'}` 才是对的。
+2. 修完路由后变成 `ReferenceError: conversationId is not defined`：`exportDiag` 写在 persona bundle 外面，没有 `conversationId` 可用。体检包是「账号现在什么样」而不是「这个会话什么样」，所以模式一栏改成取账号默认模式（`live.personaDefaultMode ?? DEFAULT_MODE_ID`），并在代码里写清这个取舍。
+
+**验证**：`test/session-commands.test.js` 新增端到端 1 条（回复含「已导出体检包」与 `.md` 路径；读文件断言含 `# 微信BOT 体检包`、`## 开关`、`## 最近报错`、`## 自检结论`，且**不含**真实账号 id 与白名单 id、含 `- 账号 id-`）；该文件 42/42、`check.mjs` → `checked 229 files`。
