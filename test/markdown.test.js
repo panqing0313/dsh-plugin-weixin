@@ -18,6 +18,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { EMPTY_POLL_HOLD_MS } from './fake-ilink.js'
 
 import {
   MARKDOWN_MODES,
@@ -212,7 +213,17 @@ test('markdown: chunking the converted text never exceeds the limit', () => {
 // End-to-end: the plugin's own outbound path filters before it chunks
 // ---------------------------------------------------------------------------
 
-/** Fake iLink endpoint that records every sendmessage body. */
+/**
+ * Fake iLink for this file: the first `getupdates` after `apply()` delivers the
+ * scripted batch, then everything is empty.
+ *
+ * Deliberately NOT the shared helper (`test/fake-ilink.js`): this file asserts
+ * on the raw `sendmessage` bodies, and its flow is "start the port, apply, then
+ * the very next poll carries the message". Handing the message to the plugin as
+ * an inbound delivery kept failing here — the transport saw a rejected round
+ * (`getUpdates errcode=-14`) before any message reached the handler — so the
+ * body shape is kept exactly as it was, with the empty-poll hold added.
+ */
 async function startFakeILink(msgs) {
   const sent = []
   let poll = 0
@@ -231,11 +242,11 @@ async function startFakeILink(msgs) {
       if (url.pathname === '/ilink/bot/getupdates') {
         const batch = poll === 0 ? msgs : []
         poll += 1
-        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs: batch })
-        // Hold an empty poll: answering `[]` instantly makes the transport spin
-        // (thousands of polls a second), which starves the fake agent's timers.
-        if (batch.length === 0) return void setTimeout(() => res.end(body), 200)
-        return res.end(body)
+        const payload = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs: batch })
+        // An empty poll answered instantly makes the transport spin (thousands
+        // of polls a second), which starves the fake agent's timers.
+        if (batch.length === 0) return void setTimeout(() => res.end(payload), EMPTY_POLL_HOLD_MS)
+        return res.end(payload)
       }
       res.end(JSON.stringify({ ret: 0 }))
     })
@@ -254,19 +265,19 @@ async function roundTrip({ reply, config: extraConfig = {} }) {
   const allowed = 'wxid_abc'
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
   try {
+    // Seed first with a placeholder, then rewrite the file once the fake knows
+    // its port: the store loads the account at apply() time, so the baseUrl
+    // must already be final by then.
     const accounts = path.join(stateRoot, 'openclaw-weixin', 'accounts')
     fs.mkdirSync(accounts, { recursive: true })
-    fs.writeFileSync(path.join(accounts, `${accountId}.json`), JSON.stringify({ token: 'tok', baseUrl: '' }), { mode: 0o600 })
     fs.writeFileSync(path.join(stateRoot, 'openclaw-weixin', 'accounts.json'), JSON.stringify([accountId]))
-
     const { server, baseUrl, sent } = await startFakeILink([
       { message_id: 2001, from_user_id: allowed, group_id: '', message_type: 1, message_state: 2, context_token: 'ct1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] },
     ])
-    const accounts2 = path.join(stateRoot, 'openclaw-weixin', 'accounts', `${accountId}.json`)
-    fs.writeFileSync(accounts2, JSON.stringify({ token: 'tok', baseUrl }), { mode: 0o600 })
+    fs.writeFileSync(path.join(accounts, `${accountId}.json`), JSON.stringify({ token: 'tok', baseUrl }), { mode: 0o600 })
 
     const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
-    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, humanPacing: false, bubbleGapMs: 0, replyDelayMaxMs: 0, allowedSenders: [allowed], accountId, ...extraConfig })
+    const config = plugin.Config({ typingIndicator: false, eventPollMs: 25, sendIntervalMs: 1, humanPacing: false, bubbleGapMs: 0, replyDelayMaxMs: 0, allowedSenders: [allowed], accountId, ...extraConfig })
 
     const agents = {
       get: () => undefined,
@@ -296,9 +307,9 @@ async function roundTrip({ reply, config: extraConfig = {} }) {
       get: (n) => (n === 'agents' ? agents : undefined),
     }
     plugin.apply(ctx, config)
-
     const deadline = Date.now() + 8000
     while (sent.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+
     for (const d of disposers) await (await d)?.()
     await new Promise((r) => setTimeout(r, 50))
     server.close()

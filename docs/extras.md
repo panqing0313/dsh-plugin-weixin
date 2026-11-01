@@ -710,3 +710,41 @@ allowlist 拒收是静默的，这是设计（deny-by-default）。但「静默�
 - **大部分设置是热的**：热路径（限流、会话命令、提醒、主动开口、记忆、群聊、导出）每一处都重新读存档文件，所以白名单加人、改主动开口概率、开关记忆都是下一条消息就生效。
 - **少数几项要重启**：ASR 子进程、通知服务的监听端口、长轮询与发送间隔、OCR 超时、语音外发——这些是插件加载时一次性建立的东西，改了不会自己重建。列在 `/config` 里就是为了不再靠猜。
 - **这张表被测试盯着**：`test/config-effect.test.js` 拿 schema 的 107 个实际字段名逐字核对，漏一项、写错一个字都会红，而不是悄悄归进「保存即生效」。
+
+## 假 iLink 测试工具包：一个假服务端，三份实现合成一份（1.2.0）
+
+`test/fake-ilink.js` 是「假装我们是微信服务端」的唯一实现，`test/fake-ilink.test.js` 是它自己的
+自测（10 条）。原来 `e2e` / `session-commands` / `markdown` 三个文件各写了一遍，细节还不一样：
+
+- `e2e` 和 `markdown` 的空轮询一开始**立刻回 `[]`**，传输层于是变成忙循环（探针实测约 7000 次
+  `getupdates`/秒），把进程里的定时器全饿住，一个文件的耗时从几秒变成一分钟；`session-commands`
+  那份后来才补上 200ms 的挂起。同一个坑踩了两次 —— 现在只有一处能踩。
+- 三份对 `getconfig` 的处理不同：一份在缺 `ilink_user_id` 时回 `ret: -2`（照抄真实服务端），另两份
+  无脑回 `ret: 0`。
+
+现在的接口：
+
+```js
+import { startFakeILink } from './fake-ilink.js'
+
+const fake = await startFakeILink({ upload: true })   // upload: 也服务 getuploadurl
+fake.deliver('你好', 'm1')                             // 排队一条入站文字
+fake.deliver('打卡', 'm2', { groupId: 'room@chatroom' })
+fake.failNext('/ilink/bot/sendmessage', { ret: -1 })   // 下一次发送失败（默认一次）
+fake.outbound                                          // [{ text, body }]，每条发出的 chunk
+fake.bodies                                            // 只给请求体的活视图（旧测试的 sent 形状）
+fake.seen.uploads                                      // 每次 getuploadurl 的请求体
+await fake.close()                                     // 连 keep-alive socket 一起关
+```
+
+要点：
+
+- **空轮询会挂住 `EMPTY_POLL_HOLD_MS`（200ms）**，这是让整套 e2e 不空转的关键；
+- `deliver()` 按 `message_id` 去重，「同一条消息被重投递」只有在测试想测时才发生；
+- `bodies` 是**活**视图（Proxy），调用方在插件还在跑时就拿到的引用不会永远读到空数组；
+- 脚本化时序用 `startFakeILink({ batches: [[...], [...]] })`：第 1、2 次 `getupdates` 各回一个数组，
+  用完后回到 `deliver()` 的队列。
+
+`markdown.test.js` 仍然保留自己的假服务端：它断言的是原始 `sendmessage` 请求体，而且流程是
+「先起端口、再 apply、下一条轮询就要带上消息」。把它换成共享实现时，传输层会先看到一轮被拒的
+`getUpdates`（`errcode=-14`），消息根本没到处理器 —— 这条写在该文件的注释里，免得下一个人重试同一件事。

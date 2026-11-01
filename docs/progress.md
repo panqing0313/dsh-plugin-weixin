@@ -3408,3 +3408,28 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 **一个设计取舍**：先在 `src/index.js` 里手写了一张表，结果 107 个字段里写错/漏了 56 个（`journalRetentionDays` 实为 `retentionJournalDays` 等）。改成从 `Config.dict` 生成，并让测试拿 schema 反向核对——「表要覆盖 schema 的每个字段」变成一条会红的断言，而不是靠人记得。
 
 **验证**：`test/config-effect.test.js` 6 条（字段全覆盖、restart 名单精确、未知字段不崩、分段文案、未保存时不说谎、live 字段不误报重启）、`test/session-commands.test.js` 端到端 1 条（不开会话）；全量见发版前记录。
+
+## ⑨ 假 iLink 测试工具包（2026-11-01）
+
+三个 e2e 文件各写了一份假 iLink，其中两份的空轮询会立刻回 `[]`，传输层因此忙循环（约 7000 次/秒），
+把 `e2e` 从几秒拖到一分钟；`session-commands` 那份后来才补了 200ms 挂起。第 ⑨ 项把它们收成
+`test/fake-ilink.js`：
+
+- 新增 `test/fake-ilink.js`（`startFakeILink`、`EMPTY_POLL_HOLD_MS`、`deliver/failNext/texts/pending/close`、
+  `outbound` 与只给请求体的活视图 `bodies`、`upload` 变体、脚本化 `batches`）；
+- 新增 `test/fake-ilink.test.js` 10 条（空轮询挂住、投递一次后为空、群里带 room id、`sendmessage` 记录、
+  `getconfig` 缺 id 报 `-2`、`failNext` 只错 N 次、上传变体、close 释放端口、未知路由 `ret 0`、keep-alive
+  下 `close()` 不挂）；
+- `test/e2e.test.js` 与 `test/session-commands.test.js` 改用它（`e2e` 保留两个薄包装，`sent` 仍是原始请求体）；
+- `test/markdown.test.js` **保持自己的假服务端**并写明原因：它断言的是原始 `sendmessage` 请求体，换成共享
+  实现后传输层先看到一轮被拒的 `getUpdates`（`errcode=-14`），消息没到处理器（本轮真踩到了）。
+
+验证：全量 **1003/1003**、`node bin/check.mjs` → `checked 233 files`。
+
+踩坑记录（都写进了测试注释）：
+
+1. `sent` 拷一份数组会永远读到空 —— 调用方在插件还在跑时已拿到引用，必须是活视图；
+2. `deliver(text, id, from)` 的第三个参数从字符串变成对象（`{ from, groupId }`），改到一半时 43 条
+   `session-commands` 用例全超时（消息被当成陌生人拒掉）；
+3. 用 python 按字符串切片替换两个假服务端时，把中间的 `seedAccount()` 辅助函数一起切掉了，报
+   `ReferenceError: seedAccount is not defined` 并连带一个「事件循环已结束」的假挂起。

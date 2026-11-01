@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { appendJournal } from '../src/message/journal.js'
+import { startFakeILink as startSharedFake } from './fake-ilink.js'
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..')
 
@@ -138,52 +139,6 @@ function fixedReplyAgents(reply) {
   }
 }
 
-/**
- * How long an empty `getupdates` is held open, in ms.
- *
- * The real server long-polls for tens of seconds; a fake that answers `[]`
- * immediately makes the transport poll as fast as the loop can issue requests
- * (~7000/s measured), which starves every timer in the process and inflated
- * this file from a few seconds to a minute. Long enough to keep the loop calm,
- * short enough that a case waiting for a later batch still finishes promptly.
- */
-const EMPTY_POLL_HOLD_MS = 200
-
-/** Fake iLink endpoint: getupdates once with a scripted batch, then empty. */
-async function startFakeILink(batches) {
-  const sent = []
-  let poll = 0
-  const server = http.createServer((req, res) => {
-    let body = ''
-    req.on('data', (c) => { body += c })
-    req.on('end', () => {
-      const url = new URL(req.url, 'http://x')
-      res.setHeader('content-type', 'application/json')
-      if (url.pathname === '/ilink/bot/getconfig') return res.end(JSON.stringify({ ret: 0, typing_ticket: 'TT' }))
-      if (url.pathname === '/ilink/bot/sendmessage') {
-        sent.push(JSON.parse(body))
-        return res.end(JSON.stringify({ ret: 0 }))
-      }
-      if (url.pathname === '/ilink/bot/sendtyping') return res.end(JSON.stringify({ ret: 0 }))
-      if (url.pathname === '/ilink/bot/getupdates') {
-        const msgs = batches[poll] ?? []
-        poll += 1
-        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs })
-        // Hold an empty poll the way the real server holds its long poll.
-        // Answering `[]` instantly turns the transport's loop into a hot spin
-        // (measured: ~7000 polls/second), which starves the fake agent's
-        // timers and made every case in this file take seconds instead of
-        // milliseconds. The scripted batch is still answered immediately.
-        if (msgs.length === 0) return void setTimeout(() => res.end(body), EMPTY_POLL_HOLD_MS)
-        return res.end(body)
-      }
-      res.end(JSON.stringify({ ret: 0 }))
-    })
-  })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, sent }
-}
-
 /** Write a saved account into a throwaway state dir and point the plugin at it. */
 function seedAccount(stateRoot, baseUrl) {
   const accounts = path.join(stateRoot, 'openclaw-weixin', 'accounts')
@@ -193,48 +148,34 @@ function seedAccount(stateRoot, baseUrl) {
 }
 
 /**
- * Fake iLink endpoint that also serves `getuploadurl`.
+ * Fake iLink: answers the scripted batches one per `getupdates`, then empty.
  *
- * The plain {@link startFakeILink} answers every unknown route with `{ret: 0}`,
- * which carries no `upload_param` — the upload then fails before any CDN request
- * is made, and a test could not tell "the wiring is broken" from "the fake is
- * too thin". This variant returns a real upload param and records every upload
- * request, so the outbound path is observable end to end.
+ * Thin wrapper over `test/fake-ilink.js` so this file keeps its old shape —
+ * `sent` is the raw request bodies, `server` is closed by the caller — while the
+ * behaviour (including the empty-poll hold that stops the transport spinning)
+ * lives in one place.
+ *
+ * @param {object[][]} batches
+ */
+async function startFakeILink(batches) {
+  const fake = await startSharedFake({ batches })
+  // `sent` is the raw request bodies, like the hand-rolled fake this replaced;
+  // `outbound` (with its `text` field) stays reachable for teardown.
+  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies }
+}
+
+/**
+ * Fake iLink that also serves `getuploadurl`.
+ *
+ * The plain fake answers unknown routes with `{ret: 0}`, which carries no
+ * `upload_param` — an upload would fail before any CDN request, and a test could
+ * not tell "the wiring is broken" from "the fake is too thin".
  */
 async function startFakeILinkWithUpload(batches) {
-  const sent = []
-  const uploadUrls = []
-  let poll = 0
-  const server = http.createServer((req, res) => {
-    let body = ''
-    req.on('data', (c) => { body += c })
-    req.on('end', () => {
-      const url = new URL(req.url, 'http://x')
-      res.setHeader('content-type', 'application/json')
-      if (url.pathname === '/ilink/bot/getconfig') return res.end(JSON.stringify({ ret: 0, typing_ticket: 'TT' }))
-      if (url.pathname === '/ilink/bot/getuploadurl') {
-        uploadUrls.push(JSON.parse(body))
-        return res.end(JSON.stringify({ ret: 0, upload_param: 'UP-PARAM-E2E' }))
-      }
-      if (url.pathname === '/ilink/bot/sendmessage') {
-        sent.push(JSON.parse(body))
-        return res.end(JSON.stringify({ ret: 0 }))
-      }
-      if (url.pathname === '/ilink/bot/sendtyping') return res.end(JSON.stringify({ ret: 0 }))
-      if (url.pathname === '/ilink/bot/getupdates') {
-        const msgs = batches[poll] ?? []
-        poll += 1
-        const body = JSON.stringify({ ret: 0, get_updates_buf: 'b1', longpolling_timeout_ms: 20, msgs })
-        // See startFakeILink: an instant `[]` makes the loop spin.
-        if (msgs.length === 0) return void setTimeout(() => res.end(body), EMPTY_POLL_HOLD_MS)
-        return res.end(body)
-      }
-      res.end(JSON.stringify({ ret: 0 }))
-    })
-  })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return { server, baseUrl: `http://127.0.0.1:${server.address().port}`, sent, uploadUrls }
+  const fake = await startSharedFake({ batches, upload: true, uploadParam: 'UP-PARAM-E2E' })
+  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies, uploadUrls: fake.seen.uploads }
 }
+
 
 test('one Weixin round trip: allow → dedupe → agent → chunked reply', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)

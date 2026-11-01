@@ -21,6 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { after } from 'node:test'
 
+import { startFakeILink as startSharedFake } from './fake-ilink.js'
 import { hostTest } from './host-packages.mjs'
 
 import { appendJournal } from '../src/message/journal.js'
@@ -46,79 +47,6 @@ function withStateRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-cmd-state-'))
   roots.push(root)
   return root
-}
-
-/**
- * A fake iLink that delivers ONE queued inbound text message.
- *
- * `sendmessage` bodies are recorded so a test can assert what the plugin
- * replied. `getupdates` answers with the queued message once and then an empty
- * poll, the same shape a real long-poll produces after a delivery.
- */
-async function startFakeILink() {
-  /** @type {Array<{text: string}>} */
-  const outbound = []
-  const seen = { getupdates: 0, delivered: 0, inboundTexts: [] }
-  /** @type {Array<object>} */
-  const queue = []
-
-  const server = http.createServer((req, res) => {
-    let body = ''
-    req.on('data', (chunk) => { body += chunk })
-    req.on('end', () => {
-      const url = new URL(req.url, 'http://x')
-      res.setHeader('content-type', 'application/json')
-      if (url.pathname === '/ilink/bot/getconfig') {
-        const parsed = body ? JSON.parse(body) : {}
-        if (!parsed.ilink_user_id) return res.end(JSON.stringify({ ret: -2, errmsg: 'ilink_user_id required' }))
-        return res.end(JSON.stringify({ ret: 0, typing_ticket: 'TT' }))
-      }
-      if (url.pathname === '/ilink/bot/sendmessage') {
-        const parsed = body ? JSON.parse(body) : {}
-        const items = parsed?.msg?.item_list ?? []
-        const text = items.map((item) => item?.text_item?.text ?? '').join('')
-        outbound.push({ text })
-        return res.end(JSON.stringify({ ret: 0 }))
-      }
-      if (url.pathname === '/ilink/bot/getupdates') {
-        seen.getupdates += 1
-        const next = queue.shift()
-        if (next !== undefined) seen.delivered += 1
-        return res.end(JSON.stringify({
-          ret: 0,
-          get_updates_buf: 'buf',
-          longpolling_ms: 50,
-          msgs: next === undefined ? [] : [next],
-        }))
-      }
-      res.end(JSON.stringify({ ret: 0 }))
-    })
-  })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const baseUrl = `http://127.0.0.1:${server.address().port}`
-
-  /** Queue one inbound text message; `from` defaults to the allowed operator. */
-  function deliver(text, messageId, from = ALLOWED, groupId = '') {
-    seen.inboundTexts.push(text)
-    queue.push({
-      message_id: messageId,
-      from_user_id: from,
-      group_id: groupId,
-      message_type: 1,
-      message_state: 2,
-      context_token: 'CT',
-      create_time_ms: Date.now(),
-      item_list: [{ type: 1, text_item: { text } }],
-    })
-  }
-  return { server, baseUrl, seen, outbound, deliver }
-}
-
-function closeServer(server) {
-  return new Promise((resolve) => {
-    server.close(resolve)
-    server.closeAllConnections()
-  })
 }
 
 async function waitFor(check, what, timeoutMs = 5_000) {
@@ -150,8 +78,16 @@ async function withPlugin(body, overrides = {}) {
   const root = withStateRoot()
   const previousStateDir = process.env.DSH_WEIXIN_STATE_DIR
   process.env.DSH_WEIXIN_STATE_DIR = root
-  const fake = await startFakeILink()
-  const servers = [fake.server]
+  // The shared helper (test/fake-ilink.js). `servers` stays a list so a test
+  // can add its own server (a CDN, say) and the teardown keeps one shape.
+  const fake0 = await startSharedFake()
+  // Every caller here speaks as the allowlisted operator; the helper's default
+  // sender is empty on purpose (other files use it for strangers).
+  const fake = {
+    ...fake0,
+    deliver: (text, messageId, extra = {}) => fake0.deliver(text, messageId, { from: ALLOWED, ...extra }),
+  }
+  const servers = []
 
   const lines = []
   const disposers = []
@@ -229,7 +165,11 @@ async function withPlugin(body, overrides = {}) {
     // Debugging aid: DSH_DEBUG_LINES=1 dumps everything the plugin logged.
     if (process.env.DSH_DEBUG_LINES) console.error('LINES:\n' + lines.join('\n'))
     for (const disposer of disposers) await (await disposer)?.()
-    for (const target of servers.reverse()) await closeServer(target)
+    for (const target of servers.reverse()) await new Promise((resolve) => {
+      target.close(resolve)
+      target.closeAllConnections()
+    })
+    await fake.close()
     if (previousStateDir === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
     else process.env.DSH_WEIXIN_STATE_DIR = previousStateDir
   }
@@ -273,13 +213,13 @@ test('a refused sender cannot steer the conversation, even with a valid command'
     // enrolment (whoever scans owns the account), so their command is
     // ANSWERED — /new replies and never opens an agent session (that is the
     // contract asserted by the /new test above), so the reply is the proof.
-    fake.deliver('/new', 'm1', 'wxid_stranger')
+    fake.deliver('/new', 'm1', { from: 'wxid_stranger' })
     await waitFor(() => fake.outbound.length > 0, 'the enrolled first contact to get the command reply')
     assert.match(fake.outbound[0].text, /已开启第 2 条会话/)
     assert.deepEqual(sessionsOpened, [], 'a command must not cost a model turn, even for the enrolled contact')
     // A SECOND stranger arrives after the enrolment: refused, before any
     // session command, silently to the sender.
-    fake.deliver('/list', 'm2', 'wxid_second_stranger')
+    fake.deliver('/list', 'm2', { from: 'wxid_second_stranger' })
     await waitFor(
       () => lines.some((line) => /refused message from wxid_second_stranger/.test(line)),
       'the refusal to be logged',
@@ -509,7 +449,7 @@ test('/keyword stats says which rules exist and how often each fired', async () 
     // A rule that did fire shows its count; the other one stays at zero. The
     // gate only opens in a group from an allowlisted sender (the third group
     // policy), so the triggering message has to be a group message.
-    fake.deliver('打卡', 'm2', ALLOWED, ROOM)
+    fake.deliver('打卡', 'm2', { from: ALLOWED, groupId: ROOM })
     await waitFor(() => fake.outbound.length > 1, 'the keyword reply')
     assert.equal(fake.outbound[1].text, '打卡成功')
     fake.deliver('/keyword stats', 'm3')
@@ -912,20 +852,20 @@ test('a group chat is silent by default, and answers only when addressed once en
   // (spam), and a group message slipping past the allowlist into a model turn.
   const ROOM = 'room@chatroom'
   await withPlugin(async ({ fake, sessionsOpened }) => {
-    fake.deliver('今天吃什么', 'g1', ALLOWED, ROOM)
+    fake.deliver('今天吃什么', 'g1', { groupId: ROOM })
     await new Promise((resolve) => setTimeout(resolve, 200))
     assert.deepEqual(sessionsOpened, [], 'groups are off by default, so nothing reaches the agent')
     assert.deepEqual(fake.outbound, [], 'and nothing is said back into the group')
   })
 
   await withPlugin(async ({ fake, sessionsOpened }) => {
-    fake.deliver('今天吃什么', 'g2', ALLOWED, ROOM)
+    fake.deliver('今天吃什么', 'g2', { groupId: ROOM })
     await new Promise((resolve) => setTimeout(resolve, 200))
     assert.deepEqual(sessionsOpened, [], 'a group message that does not address the bot is ignored')
   }, { groupChatEnabled: true })
 
   await withPlugin(async ({ fake, sessionsOpened }) => {
-    fake.deliver('@bot1 今天吃什么', 'g3', ALLOWED, ROOM)
+    fake.deliver('@bot1 今天吃什么', 'g3', { groupId: ROOM })
     await waitFor(() => sessionsOpened.length > 0, 'an addressed group message reaches the agent')
   }, { groupChatEnabled: true })
 })
