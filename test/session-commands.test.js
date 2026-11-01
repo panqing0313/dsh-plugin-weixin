@@ -495,6 +495,64 @@ test('/memory stale lists only the facts nobody has confirmed in months', async 
   })
 })
 
+test('/import previews what it would write and only writes after a yes', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/remember 我住在杭州', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the stored reply')
+
+    const doc = [
+      '## 长期记忆',
+      '',
+      '1. 我对花生过敏',
+      '2. 我住在杭州',
+      '',
+      '## 关于你的档案',
+      '',
+      '- 称呼：阿伟',
+    ].join('\n')
+
+    fake.deliver(`/import ${doc}`, 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the preview')
+    const preview = fake.outbound[1].text
+    assert.match(preview, /从粘贴的内容里读到/)
+    assert.match(preview, /长期记忆 1 条：我对花生过敏/, 'the stored fact is not offered again')
+    assert.match(preview, /档案 1 项：call/)
+    assert.match(preview, /回「是」/)
+    assert.equal(sessionsOpened.length, 0, 'a preview never spends a model turn')
+
+    // Nothing is written before the confirmation.
+    const file = path.join(root, 'memory', 'global-bot1.json')
+    const before = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.deepEqual(before.facts.map((fact) => fact.text), ['我住在杭州'])
+
+    fake.deliver('/是', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the import result')
+    assert.match(fake.outbound[2].text, /导入完成/)
+    assert.match(fake.outbound[2].text, /1 条长期记忆/)
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.deepEqual(after.facts.map((fact) => fact.text), ['我住在杭州', '我对花生过敏'])
+    assert.equal(after.facts[1].origin, '/import')
+    assert.equal(sessionsOpened.length, 0)
+  })
+})
+
+test('/import writes nothing when the answer is no', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/import ## 长期记忆\n\n1. 我对花生过敏', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the preview')
+    assert.match(fake.outbound[0].text, /回「是」/)
+
+    fake.deliver('/不用', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the cancellation')
+    assert.match(fake.outbound[1].text, /什么都没改/)
+
+    // Cancelling writes nothing at all — not even an empty memory file.
+    const file = path.join(root, 'memory', 'global-bot1.json')
+    assert.equal(fs.existsSync(file), false)
+    assert.equal(sessionsOpened.length, 0)
+  })
+})
+
 test('/remember stores a fact, /memory shows it, /forget removes it', async () => {
   await withPlugin(async ({ root, fake, sessionsOpened }) => {
     fake.deliver('/remember', 'm1')

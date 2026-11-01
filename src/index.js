@@ -93,6 +93,7 @@ import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
 import { formatStaleReport, staleDigestLine, staleFacts } from './message/memory-stale.js'
+import { IMPORT_CONFIRM_TTL_MS, applyMemoryImport, formatImportPreview, parseMemoryMarkdown, planMemoryImport } from './message/memory-import.js'
 import { MemoryConflictQueue, conflictReply, findMemoryConflict, parseConflictAnswer } from './message/memory-conflict.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -1566,6 +1567,34 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
   // ② A 「把 X 改成 Y 吗」 question lives in memory only: an unanswered one must
   // expire with the process instead of firing a week later.
   const conflictQueue = new MemoryConflictQueue()
+  // ④ A parsed-but-unconfirmed import lives here until the user answers. Same
+  // rule as the conflict queue: nobody's pending question survives a restart.
+  let pendingImport
+  // ④ Shared by /import and the 「是」 that follows it: one place decides what a
+  // written import reports, so the preview and the outcome cannot disagree.
+  const applyImport = (plan) => {
+    const written = applyMemoryImport({
+      stateRoot,
+      accountId,
+      plan,
+      warn,
+      // `modeConfig` is defined inside the bundle below; this helper sits above it
+      // so it reads the live config directly.
+      maxFacts: Number(effectiveConfig.current.memoryGlobalMaxFacts ?? 30),
+    })
+    const parts = []
+    if (written.facts > 0) parts.push(`${written.facts} 条长期记忆`)
+    if (written.events > 0) parts.push(`${written.events} 条事件与待办`)
+    if (written.profile > 0) parts.push(`档案 ${written.profile} 项`)
+    if (written.digest === true) parts.push('人物小传')
+    if (parts.length === 0) {
+      return `这次没有写进去任何东西${written.failures.length > 0 ? `（${written.failures.slice(0, 3).join('；')}）` : ''}。`
+    }
+    const tail = written.failures.length === 0
+      ? ''
+      : `\n（${written.failures.length} 项没成功：${written.failures.slice(0, 3).join('；')}）`
+    return `导入完成：${parts.join('、')}。${tail}\n（/memory 看现状，记错了 /undo 撤销最近一条）`
+  }
   const personaCommands = (conversationId) => {
     const memoryOn = () => effectiveConfig.current.memoryEnabled !== false
     const modeConfig = () => effectiveConfig.current
@@ -1781,6 +1810,20 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       // router); otherwise the message stays ordinary chat.
       answer: (arg) => {
         if (memoryOn() === false) return undefined
+        const decision = parseConflictAnswer(arg)
+        // ④ An unconfirmed import is answered with the same two short words. It is
+        // checked first: "是" right after /import must never be read as a fact.
+        if (pendingImport !== undefined) {
+          const { plan, at } = pendingImport
+          const staleImport = Date.now() - at > IMPORT_CONFIRM_TTL_MS
+          if (decision === 'yes' && staleImport === false) {
+            pendingImport = undefined
+            return applyImport(plan)
+          }
+          pendingImport = undefined
+          if (decision === 'no') return '好，什么都没改。'
+          if (staleImport && decision === 'yes') return '这个预览已经超过十分钟了，为了安全没有导入。再发一次 /import 我重新读一遍。'
+        }
         const pending = conflictQueue.take(accountId)
         if (pending === undefined) return undefined
         const answer = parseConflictAnswer(arg)
@@ -1833,6 +1876,23 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (result.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
         if (result.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
         return '没存上，写入记忆文件失败了（详见日志）。'
+      },
+      import: (arg) => {
+        if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」）。'
+        const text = String(arg ?? '')
+        if (text.trim() === '') {
+          return '用法：/import <粘贴 /memory export 导出的内容>\n我会先念一遍要导入什么，你回「是」才真的写进去。'
+        }
+        const parsed = parseMemoryMarkdown(text)
+        const plan = planMemoryImport(parsed, readGlobalMemory(stateRoot, accountId, { warn }), {
+          maxFacts: modeConfig().memoryGlobalMaxFacts,
+        })
+        if (plan.nothingToDo) {
+          pendingImport = undefined
+          return formatImportPreview(plan)
+        }
+        pendingImport = { plan, at: Date.now() }
+        return formatImportPreview(plan)
       },
       undo: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
@@ -2208,9 +2268,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         && isCompanionMode(resolveMode(readPersonaStore(stateRoot, { warn }), activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
         ? bondLine(readConvMemory(stateRoot, accountId, message.conversationId, { warn }).bond)
         : '',
-      // ② `/是`、`/不用` 答的是「要不要把它换成这条」；问题只存在内存里，
-      //    所以这个入口要能自己说「现在没人问你」（回 undefined = 普通聊天）。
-      //    它必须挂在 persona 上：命令视图只认识 persona 这一袋 handler。
+      // ② `/是`、`/不用` 答的是「要不要把它换成这条」（以及 ④ 的导入确认）。
+      //    问题只存在内存里，所以这个入口要能自己说「现在没人问你」（回
+      //    undefined = 普通聊天）。它必须挂在 persona 上：命令视图只认识
+      //    persona 这一袋 handler。
+      // ② 每收到一条消息都会新拼一个 persona bundle，两个 handler 都是无状态的，
+      //    待答问题存在上面那两个模块级变量里 —— 这正是 /import → /是 能接上的
+      //    原因。`answer` 因此是 bundle 上唯一的入口，不再额外包一层。
       persona: personaCommands(message.conversationId),
       t: createTranslator(effectiveConfig.current.locale).t,
     })

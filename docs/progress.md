@@ -3338,3 +3338,19 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 **坑**：阈值夹取第一版写成 `Number(staleDays) || DEFAULT`，`0` 会被 `||` 当成假值回落到 90，测试期望是夹到最小 7 天；改成「只有非数字才回落默认值，其余由 `Math.max(MIN, …)` 夹」。
 
 **验证**：`test/memory-stale.test.js` 6 条、`test/session-commands.test.js` 端到端 1 条；全量 **967/967**、`check.mjs` 通过。
+
+### ④ `/import` 记忆导入（2026-11-01）
+
+**问题**：`/memory export` 能导出 Markdown，但换机器/重装/从备份回来只能手抄，「把它知道的东西带走」只做了一半。
+
+**做法**：
+- 新增 `src/message/memory-import.js`：`parseMemoryMarkdown`（只认 `## 人物小传` / `## 关于你的档案` / `## 事件与待办` / `## 长期记忆` 四节与 `1. ` / `- ` 两种列表形状，其余记进 `skipped`）、`planMemoryImport`（与现有记忆比对出「新增 / 已存在 / 放不下」）、`formatImportPreview`、`applyMemoryImport`（逐条走 `addGlobalFact`（`origin: '/import'`）/`addEvent`/`saveProfile`/`setDigest`，只增不删）。
+- `src/index.js`：persona bundle 新增 `import` handler（解析 → 计划 → 预览，存进模块级 `pendingImport`）；`answer` handler 先处理待确认导入（`IMPORT_CONFIRM_TTL_MS = 10 分钟`），再处理记忆冲突；`applyImport` 提到 bundle 之外，供两处共用。
+- `src/sessions.js`：规则 `{ id: 'import', pattern: /^\/(?:import|导入)(?:\s+([\S\s]+))?$/i, helpRank: 9, helpKey: 'help.import' }`，加入 `PERSONA_COMMANDS`；`src/i18n.js` 加 `help.import`。
+
+**踩到的坑**：
+1. `applyImport` 最初放在 persona bundle 内部却引用 `modeConfig`（它定义在 bundle 里、位置在 `applyImport` 之后的作用域里），`/是` 时报 `ReferenceError: modeConfig is not defined` —— 表现是「预览正常、确认后毫无反应」。改成直接读 `effectiveConfig.current.memoryGlobalMaxFacts`。
+2. 「回「不用」什么都不改」的测试原本去读 `global-bot1.json`，但取消路径根本不写文件，`readFileSync` 直接 ENOENT —— 改成断言文件不存在，反而更准确地表达了「什么都没改」。
+3. 预览截图里的 `档案 1 项：call` 用的是 schema 字段名而不是中文标签，测试与文档都按实际输出写，不美化。
+
+**验证**：`test/memory-import.test.js` 11 条、`test/session-commands.test.js` 端到端 2 条；全量 **980/980**、`check.mjs` → `checked 227 files` 通过。
