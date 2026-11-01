@@ -3281,3 +3281,18 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - `README.md` / `README.en.md` 的「发布出处（provenance）」之后各加一节「配一次 NPM_TOKEN，从此不再点 OTP」：npm token 页 → Generate New Token → **Automation** → 复制 `npm_…` → GitHub 仓库 Settings → Secrets and variables → Actions → New repository secret（名字必须是 `NPM_TOKEN`）→ Actions 里 Run workflow 验证 → 之后发版序变成 bump+push+打 tag。
 - 写清了三类典型报错：空 secret（我们自己加的那步，约 5 秒红）、`ENEEDAUTH`/`E401`（token 失效或未填）、以及 tag 推送即开始发布（所以必须先 bump 再打 tag）。
 - 最后一步不能忘：CI 发完仍要本机 `node bin/release.mjs --finish <version>` 把 profile 依赖升上去。
+
+## NPM_TOKEN 已配好并验证（2026-11-01）
+
+用户按 granular 路线配好 secret 后，用**已发布的 tag** 跑了一次 `workflow_dispatch` 验证（run `41263238196`，`tag=v1.0.0`）：
+
+- `an NPM_TOKEN secret must exist before anything runs` ✅（secret 读得到）
+- `npm ci` / `fast checks` / `full suite` / `tag 与 package.json 一致` ✅
+- `publish with provenance` ✅ **认证通过**：`Signed provenance statement with source and build information from GitHub Actions`，透明日志 `search.sigstore.dev/?logIndex=3617567811`
+- 最后被 `403 You cannot publish over the previously published versions: 1.0.0` 拦下 —— 预期结果，说明权限够了、只是版本已存在
+
+secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../actions/secrets` 只列名字不列值）。
+
+`README.md` / `README.en.md` 的 NPM_TOKEN 一节据此重写：改成 granular 路线（`Read and write (publish and stage)` + 勾 Bypass 2FA + 90 天），验证步骤改成「用已发布的 tag，看到 403 就是成功」，并补两条变化：**token 到期（默认 30 天）** 与 **npm 从 2027-01 起限制直接发布**（届时可能要转 OIDC 信任发布）。
+
+> 浏览器侧：用 `browser-skill` 只**只读**看了一眼 granular token 新建页（未填任何字段、未点 Generate），确认表单结构与选项；凭证一律没有读取。

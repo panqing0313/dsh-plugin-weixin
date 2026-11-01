@@ -1033,17 +1033,24 @@ The CI path needs the repository secret `NPM_TOKEN` (an npm Automation token) an
 
 Releasing from this laptop asks for a one-time password in the browser every time; if nobody is at the keyboard, nothing ships (both 0.9.20 and 1.1.0 stalled on this). Hand the publish to CI and it is configured once:
 
-1. **Create an npm Automation token**: <https://www.npmjs.com/settings/~/tokens> → *Generate New Token* → choose **Automation** (not Publish, not Granular) → scope `read and write` → copy the `npm_…` string.
-   - An Automation token **bypasses 2FA** — that is exactly why CI needs no OTP. It is shown once.
-   - It dies the moment you rotate your npm password or revoke it under the npm security settings; CI then reports `ENEEDAUTH` and you generate a new one.
+1. **Create an npm token**. Prefer **granular** (<https://www.npmjs.com/settings/~/tokens/granular-access-tokens/new>) — it is the safer path under npm's new rules; Automation also works, see "two things that change" below:
+   - *Token name*: something like `github-actions-dsh-weixin`
+   - *Packages and scopes*: **Read and write (publish and stage)**, package range **All packages** (or just `dsh-plugin-weixin`)
+   - Tick **Bypass two-factor authentication (2FA)** — without it CI is still asked for an OTP, which defeats the point
+   - *Expiration*: the default is only **30 days**; 90 is better (see below)
+   - The page shows the `npm_…` string once. Copy it; do not screenshot it, do not write it to a file.
 2. **Add it as a GitHub repository secret**: repo → *Settings* → *Secrets and variables* → *Actions* → **New repository secret**:
    - Name must be exactly `NPM_TOKEN` (the workflow hard-codes it)
    - Value: the `npm_…` string, with no leading/trailing whitespace
-3. **Verify**: repo → *Actions* → **release** → *Run workflow*, put an existing-but-unpublished tag in `tag` (to merely check the configuration, watch it clear the `an NPM_TOKEN secret must exist` step and continue into the suite).
-   - Empty secret: `secret NPM_TOKEN is not set` (that early check fails in ~5 s instead of after the whole suite).
-   - Invalid or expired token: `npm error code ENEEDAUTH` / `E401`.
+3. **Verify**: repo → *Actions* → **release** → *Run workflow*, put an **already-published** tag in `tag`. The right ending is: every earlier step green, `publish with provenance` printing `Signed provenance statement…`, and then `403 You cannot publish over the previously published versions` — **that 403 means authentication worked**, the version simply exists. Seeing `ENEEDAUTH` / `E401` there instead means the token is wrong or expired.
+   - An empty secret fails fast with `secret NPM_TOKEN is not set` (the workflow checks it in ~5 s, before the suite).
 4. From then on the release order is: **bump the version and commit → push → `git tag -a v1.1.1 -m …` → `git push origin v1.1.1`**. CI checks out the tag, installs, runs the suite, verifies tag vs `package.json`, and runs `npm publish --provenance`, so the tarball carries `dist.attestations`. **Note**: pushing the tag starts the publish — bump the version before tagging.
 5. After it lands, still run `node bin/release.mjs --finish <version>` locally to move this machine's profile (CI cannot reach your laptop).
+
+**Two things that change**:
+
+- **Tokens expire.** Granular defaults to 30 days and Automation allows up to 90; when it expires CI suddenly reports `ENEEDAUTH` — regenerate it in npm and update the secret. Put the expiry date in a calendar.
+- **npm is restricting 2FA-bypassing tokens** (the yellow banner on npm's settings page): account changes from Aug 2026, **direct publishing from Jan 2027**. By then the durable path is likely CI trusted publishing (OIDC), without a long-lived token in a secret; until then this token + `id-token: write` path keeps working.
 
 > Security: `NPM_TOKEN` lets whoever holds it publish any version as you. Keep it only in this repository's Actions secret — never in a file, never committed, never printed.
 

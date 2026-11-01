@@ -1053,17 +1053,24 @@ CI 那条路需要仓库 secret `NPM_TOKEN`（npm 的 Automation token），以�
 
 本机发布每次都要在浏览器里点一次性密码；夜里人不在电脑前就发不出去（0.9.20 与 1.1.0 都因此卡过）。把发布交给 CI 就只需要配一次：
 
-1. **在 npm 生成 Automation token**：<https://www.npmjs.com/settings/~/tokens> → *Generate New Token* → 选 **Automation**（不是 Publish、不是 Granular）→ 权限只需 `read and write` → 复制 `npm_…` 开头的串。
-   - Automation token **跳过 2FA**，这正是 CI 里不需要 OTP 的原因。生成后只显示一次。
-   - 换过一次 npm 密码或在 npm 安全设置里吊销 token，它立刻失效 —— 那时 CI 会报 `ENEEDAUTH`，回来重新生成一个即可。
+1. **在 npm 生成 token**。推荐 **granular**（<https://www.npmjs.com/settings/~/tokens/granular-access-tokens/new>），它在新规下更稳；Automation 也行，但见下方「两个变化」：
+   - *Token name*：`github-actions-dsh-weixin` 之类的用途名
+   - *Packages and scopes* 选 **Read and write (publish and stage)**，包范围选 **All packages**（或只勾 `dsh-plugin-weixin`）
+   - 勾上 **Bypass two-factor authentication (2FA)** —— 不勾的话 CI 里仍会被要 OTP，等于白配
+   - *Expiration*：默认只有 **30 天**，建议 90 天（见下方「两个变化」）
+   - 生成后页面只显示一次 `npm_…`，复制它，不要截图、不要写进文件。
 2. **填进 GitHub 仓库 secret**：仓库 → *Settings* → *Secrets and variables* → *Actions* → **New repository secret**：
    - Name 必须是 `NPM_TOKEN`（workflow 里写死这个名字）
    - Secret 粘贴上面那串 `npm_…`（前后不要有空格或换行）
-3. **验证**：在仓库 → *Actions* → **release** → *Run workflow*，`tag` 填一个**已存在但尚未发布**的 tag（只想检验配置的话，可以先看它是否在 `an NPM_TOKEN secret must exist` 那一步通过并继续往下跑测试）。
-   - 空省时的典型报错：`secret NPM_TOKEN is not set`（我们加了这一步，5 秒内红，不用等全套测试跑完）。
-   - token 无效或过期：`npm error code ENEEDAUTH` / `E401`。
+3. **验证**：仓库 → *Actions* → **release** → *Run workflow*，`tag` 填一个**已经发布过的** tag。正确的结局是：前面的步骤全绿、`publish with provenance` 打印 `Signed provenance statement…`，最后被 `403 You cannot publish over the previously published versions` 拦下 —— **这个 403 说明认证通过**，只是版本已存在。若在这里看到 `ENEEDAUTH` / `E401`，才是 token 没填对或已失效。
+   - 空 secret 的报错是 `secret NPM_TOKEN is not set`（workflow 加了这一步，约 5 秒红，不用等全套测试跑完）。
 4. 之后正常发版的顺序变成：**bump 版本并提交 → push → `git tag -a v1.1.1 -m …` → `git push origin v1.1.1`**，CI 从 tag 装依赖、跑全量、核对 tag 与 `package.json` 版本、`npm publish --provenance`，产物带 `dist.attestations`。**注意**：tag 一旦推送就开始发布，版本号必须先 bump 好再打 tag。
 5. 发布完成后，本机仍要执行 `node bin/release.mjs --finish <version>` 把 profile 依赖升上去（CI 管不到你的本机）。
+
+**两个变化要记着**：
+
+- **token 会到期**。graded granular 默认 30 天、Automation 可以选 90 天；到期后 CI 突然报 `ENEEDAUTH`，回 npm 重新生成一个、更新 secret 即可。建议把到期日记在日历上。
+- **npm 正在收紧「跳过 2FA 的 token」**（npm 设置页顶部的黄条）：账户变更加 2026 年 8 月起限制，**直接发布从 2027 年 1 月起限制**。到那时大概率要改成 CI 的 OIDC 信任发布（trusted publishing），不再放长命 token 进 secret；现在这条路（token + `id-token: write`）先继续可用。
 
 > 安全提醒：`NPM_TOKEN` 等价于「能以你的名义发布任何版本」，只加到这个仓库的 Actions secret 里，不要写进任何文件、不要提交、不要在日志里打印。
 
