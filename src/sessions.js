@@ -614,7 +614,7 @@ const COMMANDS = [
     helpRank: 16,
     helpKey: 'help.remind',
   },
-  { id: 'remindlist', pattern: /^\/remindlist$/i, build: identity, helpRank: 17, helpKey: 'help.remindlist' },
+  { id: 'remindlist', pattern: /^\/remindlist(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 17, helpKey: 'help.remindlist' },
   {
     id: 'remindcancel',
     pattern: /^\/remindcancel\s+(\S+)$/i,
@@ -832,7 +832,7 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
       return `已跳过下一次：${skipped.text}（${skipped.recurrenceLabel ?? '重复'}，下次 ${next}）`
     }
     if (raw === '') {
-      return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了 或 /remind 明天 9:00 开会\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、下周一 10点、3小时后'
+      return '用法：/remind <时间> <内容>，例如 /remind 10m 该喝水了 或 /remind 明天 9:00 开会\n时间支持 10m / 2h / 1d30m、14:30、2026-10-19 09:00、明天 9:00、周五、下周三 10点、3小时后、每天 9:00'
     }
     // 时间可能自己带空格（`明天 9:00`），按前缀逐段尝试：第一个能解析的前缀
     // 就是时间，其余是内容。这样不用在正则里穷举所有中文写法。
@@ -894,11 +894,29 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
     const scheduler = context?.reminders
     if (scheduler === undefined) return '当前无法查看提醒（调度器不可用）。'
     const items = scheduler.list(context?.accountId ?? accountId ?? '')
+
+    // ⑤ `/remindlist 2 1h`：第 2 条往后推一小时。编号和 /remindlist 打印的顺序一致
+    // （按触发时间排），不用用户自己先算出「哪条最早」。
+    const shift = /^(\d+)\s+(\S+)$/.exec(String(command.arg ?? '').trim())
+    if (shift !== null) {
+      const position = Number(shift[1])
+      if (position < 1 || position > items.length) return `没有第 ${position} 条（/remindlist 看现有 ${items.length} 条）。`
+      const span = parseWhen(shift[2])
+      if (span.ok !== true) return `没听懂「${shift[2]}」。用法：/remindlist 2 1h（第 2 条往后推一小时）。`
+      const minutes = Math.max(1, Math.round((span.fireAt - Date.now()) / 60_000))
+      const moved = scheduler.snoozeById(items[position - 1].id, minutes)
+      if (moved === undefined) return `没有找到第 ${position} 条提醒。`
+      const at = new Date(moved.fireAt).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      return `已把第 ${position} 条推后 ${minutes} 分钟：${moved.text}（${at}）`
+    }
     if (items.length === 0) return '这个账号现在没有待发的提醒。'
-    return ['待发的提醒：', ...items.map((item) => {
-      const repeat = item.recurrence === undefined ? '' : `（${item.recurrenceLabel ?? '重复'}）`
-      return `${item.id} · ${new Date(item.fireAt).toLocaleString()}${repeat} · ${item.text}`
-    })].join('\n')
+    return [
+      '待发的提醒（/remindlist <序号> <时长> 可以把某一条往后推，例如 /remindlist 2 1h）：',
+      ...items.map((item, position) => {
+        const repeat = item.recurrence === undefined ? '' : `（${item.recurrenceLabel ?? '重复'}）`
+        return `${position + 1}. ${new Date(item.fireAt).toLocaleString()}${repeat} · ${item.text}（编号 ${item.id}）`
+      }),
+    ].join('\n')
   }
   if (command.command === 'remindcancel') {
     const scheduler = context?.reminders

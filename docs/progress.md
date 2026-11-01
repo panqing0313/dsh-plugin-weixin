@@ -3354,3 +3354,16 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 3. 预览截图里的 `档案 1 项：call` 用的是 schema 字段名而不是中文标签，测试与文档都按实际输出写，不美化。
 
 **验证**：`test/memory-import.test.js` 11 条、`test/session-commands.test.js` 端到端 2 条；全量 **980/980**、`check.mjs` → `checked 227 files` 通过。
+
+### ⑤ 提醒的「周X」与按序号顺延（2026-11-01）
+
+**两个小毛病**：`/remind 周五 交周报` 被拒（「还需要一个钟点」），而 `/snooze` 只能推最早那一条。
+
+**做法**：
+- `src/message/scheduler.js` 的 `parseNaturalWhen`：量词支持 `下个/这个/下/这/本` + `周|星期` + 星期字；只给星期不给钟点时默认早上 9 点（`bareWeekday`）；`day.weekday` 已过且没说「这个」时顺延 7 天。
+- `ReminderScheduler.snoozeById(id, minutes, now)`：`snooze` 改为找最早那条再调它；新增按 id 定向推后。
+- `src/sessions.js`：`/remindlist` 规则改为可带参数，handler 识别 `<序号> <时长>`（序号与列表顺序一致，按 `fireAt` 排），列表行也带上 `编号 <id>`；帮助文案补 `周五` / `/remindlist 2 1h`。
+
+**坑**：第一版把「按序号推后」的断言写成固定日期（`2026-11-06 09:00`），而测试里的 `now` 是另一天，断言跟着日期飘 —— 改成断言星期几与小时，只有需要「今天 vs 下周」的用例才自带 `now`。
+
+**验证**：`test/scheduler.test.js` 12 条（新增 `周五`、`下周一`、`周天`、`这个周日 15:00`、`下个周三 8点` 五种形态）、`test/session-commands.test.js` 端到端 1 条；全量 **981/981**、`check.mjs` 通过。

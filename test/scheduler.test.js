@@ -170,9 +170,27 @@ test('parseWhen reads natural Chinese times, without guessing', () => {
 
   // Incomplete or already-past forms are refused, not guessed.
   assert.equal(parseWhen('明天下午', now).ok, false)
-  assert.equal(parseWhen('下周一', now).ok, false)
   assert.equal(parseWhen('今天 9:00', now).ok, false)
   assert.equal(parseWhen('25点', now).ok, false)
+
+  // ⑤ A weekday on its own is a whole date: 「提醒我周五交周报」 is the common shape and
+  // the morning of that day is the obvious reading.
+  // `now` in this test is Wed 2026-09-28 10:00 … whatever the date, the weekday
+  // must match and the morning default must hold.
+  const friday = parseWhen('周五', now)
+  assert.equal(friday.ok, true)
+  assert.equal(new Date(friday.fireAt).getDay(), 5, 'the weekday that was asked for')
+  assert.equal(new Date(friday.fireAt).getHours(), 9, 'morning by default')
+  assert.equal(parseWhen('下周一', now).label !== '', true)
+  // 周日 spoken on a Sunday means the next one: today's 9:00 is already gone.
+  const sunday = new Date(2026, 10, 1, 10, 0, 0)
+  const nextSunday = parseWhen('周天', sunday)
+  assert.equal(nextSunday.ok, true)
+  assert.equal(nextSunday.fireAt > sunday.getTime() + 6 * 86_400_000, true, 'next week, not today')
+  // 「这个周日」 may land later today, so it stays this week.
+  assert.equal(parseWhen('这个周日 15:00', sunday).label, '今天 15:00')
+  // The two-word quantifiers are the same thing as the one-word ones.
+  assert.equal(new Date(parseWhen('下个周三 8点', now).fireAt).getDay(), 3)
 })
 
 test('repeats parse into a recurrence and the first slot after now', () => {

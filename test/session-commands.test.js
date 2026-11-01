@@ -495,6 +495,41 @@ test('/memory stale lists only the facts nobody has confirmed in months', async 
   })
 })
 
+test('/remindlist numbers the queue and can push one entry back by number', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/remind 2h 喝水', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the first reminder')
+    fake.deliver('/remind 3h 吃药', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the second reminder')
+
+    fake.deliver('/remindlist', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the list')
+    const list = fake.outbound[2].text
+    assert.match(list, /1\..*喝水/)
+    assert.match(list, /2\..*吃药/)
+    assert.match(list, /\/remindlist <序号> <时长>/)
+
+    // Push the *second* one back an hour: the id it targets is the one shown at
+    // position 2, not the soonest one.
+    fake.deliver('/remindlist 2 1h', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the shift')
+    assert.match(fake.outbound[3].text, /已把第 2 条推后 60 分钟：吃药/)
+
+    fake.deliver('/remindlist', 'm5')
+    await waitFor(() => fake.outbound.length > 4, 'the list again')
+    const after = fake.outbound[4].text
+    const waterLine = after.split('\n').find((line) => line.includes('喝水'))
+    const pillLine = after.split('\n').find((line) => line.includes('吃药'))
+    assert.match(waterLine, /^1\./, '喝水 is still first, it was not moved')
+    assert.match(pillLine, /^2\./, '吃药 stays second, just later')
+
+    fake.deliver('/remindlist 9 1h', 'm6')
+    await waitFor(() => fake.outbound.length > 5, 'the out-of-range reply')
+    assert.match(fake.outbound[5].text, /没有第 9 条/)
+    assert.equal(sessionsOpened.length, 0)
+  })
+})
+
 test('/import previews what it would write and only writes after a yes', async () => {
   await withPlugin(async ({ root, fake, sessionsOpened }) => {
     fake.deliver('/remember 我住在杭州', 'm1')

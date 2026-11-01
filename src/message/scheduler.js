@@ -121,9 +121,10 @@ function parseNaturalWhen(spec, now) {
     day = { offset: CN_DAY_OFFSET[dayMatch[1]], evening: dayMatch[1].endsWith('晚') }
     rest = rest.slice(dayMatch[1].length).trim()
   } else {
-    const week = /^(下|这|本)?(?:周|星期)([一二三四五六日天])/.exec(rest)
+    // `下周一 10点` / `周五` / `这个周三` / `下个周日` — all the ways people say it.
+    const week = /^(下个|这个|下|这|本)?(?:周|星期)([一二三四五六日天])/.exec(rest)
     if (week !== null) {
-      day = { weekday: CN_WEEKDAY[week[2]], next: week[1] === '下' }
+      day = { weekday: CN_WEEKDAY[week[2]], next: week[1] === '下' || week[1] === '下个' }
       rest = rest.slice(week[0].length).trim()
     }
   }
@@ -135,7 +136,13 @@ function parseNaturalWhen(spec, now) {
     rest = rest.slice(periodMatch[1].length).trim()
   }
 
-  const clock = /^(\d{1,2})\s*(?:[:：点时])\s*(?:(\d{1,2})\s*分?|(半))?$/.exec(rest)
+  // 只说了「周五」「下个周三」而没给钟点：按早上 9 点算。这是「提醒我周五交周报」
+  // 最常见的形状，拒绝它只会让人多打四个字；而「明天」这种连哪天都还没定的
+  // 说法仍然要问，因为一天里的哪个时刻完全猜不出来。
+  const bareWeekday = day?.weekday !== undefined && rest === ''
+  const clock = bareWeekday
+    ? ['', '9', undefined, undefined]
+    : /^(\d{1,2})\s*(?:[:：点时])\s*(?:(\d{1,2})\s*分?|(半))?$/.exec(rest)
   if (clock === null) {
     if (day !== null || period !== null) return { ok: false, reason: '还需要一个钟点，例如 明天 9:00 / 下午 3 点半' }
     return undefined
@@ -161,6 +168,11 @@ function parseNaturalWhen(spec, now) {
   target.setHours(hour, minute, 0, 0)
 
   if (day === null && target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1)
+  // 「周天」在周日当天说，指的是下一个周日 —— 今天这个已经过了（或者说，它更像是
+  // 在说「下回」）。只有明确的「今天/这周X」才允许落在今天。
+  if (day?.weekday !== undefined && day.next !== true && target.getTime() <= now.getTime()) {
+    target.setDate(target.getDate() + 7)
+  }
   if (target.getTime() <= now.getTime()) return { ok: false, reason: '那个时刻已经过去了' }
   if (target.getTime() - now.getTime() > MAX_DELAY_MS) return { ok: false, reason: '定得太远：最多支持一年以内' }
   return { ok: true, fireAt: target.getTime(), label: formatLabel(target) }
@@ -389,7 +401,21 @@ export class ReminderScheduler {
    * @returns {Reminder | undefined} the item, or undefined when nothing is pending
    */
   snooze(accountId, minutes, now = Date.now()) {
-    const item = this.list(accountId)[0]
+    return this.snoozeById(this.list(accountId)[0]?.id, minutes, now)
+  }
+
+  /**
+   * Same shift, addressed by id: `/remindlist` numbers each pending reminder so
+   * 「第 3 条往后推一小时」 does not need the user to first work out which one is
+   * soonest. Returns undefined when the id is unknown.
+   *
+   * @param {string | undefined} id
+   * @param {number} minutes
+   * @param {number} [now]
+   * @returns {Reminder | undefined}
+   */
+  snoozeById(id, minutes, now = Date.now()) {
+    const item = this.store.items.find((entry) => entry.id === id)
     if (item === undefined) return undefined
     const span = Math.max(1, Math.round(minutes)) * 60_000
     const timer = this.timers.get(item.id)

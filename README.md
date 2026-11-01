@@ -356,7 +356,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `/digest` | 现在按今天的流水生成一条日报（和 21:00 定时那条同一套数据与提示词，不等点）；回复就是日报，不会再往聊天里多发一条 |
 | `/outbox` | 看待重发的消息；`/outbox retry` 立即重试，`/outbox drop <id>` 丢弃一条 |
 | `/snooze 10m` | 把最近一条待发提醒往后推（只推一条，不改重复规则）；`/remind skip` 跳过重复提醒的下一次 |
-| `/remindlist` | 列出本账号还没触发的提醒（含编号） |
+| `/remindlist` | 列出本账号还没触发的提醒（含编号）；`/remindlist 2 1h` 把第 2 条往后推一小时 |
 | `/remindcancel <编号>` | 取消一条还没触发的提醒 |
 
 **切换是保留的，不是重置**：切走的那条不会被结束或清空，切回来时它之前的上下文原样都在。
@@ -495,7 +495,7 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 微信里用 `/remind 10m 内容`、`/remind 18:30 内容`、`/remind 明天 9:00 内容` 或 `/remind 2026-10-20 09:00 内容` 安排，
 重复提醒用 `/remind 每天 9:00 内容`、`/remind 工作日 8:30 内容`、`/remind 每周一 10点 内容`——每次触发后自动排到下一个周期，
 不会消失，直到 `/remindcancel <编号>` 取消，
-`/remindlist` 查看、`/remindcancel <编号>` 取消。设置卡的「定时提醒」页签显示全部账号的待发提醒
+`/remindlist` 查看、`/remindcancel <编号>` 取消；时间可以只说星期几（`/remind 周五 交周报`，默认早上 9 点）。设置卡的「定时提醒」页签显示全部账号的待发提醒
 （到点时间、内容），可直接点「取消」——立即生效，不需要去微信里发命令。提醒到点由插件直接发出
 （「（提醒：内容）」），不消耗模型调用；到点时对应账号离线则丢弃并警告（重启后不补发过期的）。
 `test/scheduler.test.js`、`test/reminders-ui.test.js` 与 e2e 的 reminders 用例守着这些行为。
