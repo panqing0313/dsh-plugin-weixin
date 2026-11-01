@@ -24,6 +24,13 @@ import { readJournal } from './message/journal.js';
 export const DEFAULT_MEMORY_GLOBAL_MAX_FACTS = 30;
 /** How many replaced facts to keep for display, newest last (C18). */
 export const DEFAULT_SUPERSEDED_MAX = 20
+/**
+ * How many memory writes /undo can take back. The history lives beside the
+ * facts (`history` in global-<account>.json) so it survives restarts: /remember
+ * is the command users reach for most, and "I recorded it wrong" is the failure
+ * they notice immediately.
+ */
+export const DEFAULT_UNDO_MAX = 20
 export const DEFAULT_MEMORY_GLOBAL_MAX_CHARS = 1500;
 export const DEFAULT_MEMORY_CONV_MAX_CHARS = 1200;
 export const DEFAULT_MEMORY_RECENT_TURNS = 5;
@@ -94,9 +101,38 @@ function sanitizeFacts(raw) {
         if (typeof text !== 'string' || text.trim() === '') continue;
         const at = entry !== null && typeof entry === 'object' && typeof entry.at === 'number' ? entry.at : 0;
         const weight = clampWeight(entry !== null && typeof entry === 'object' ? entry.weight : undefined);
-        facts.push({ text: text.trim(), at, weight });
+        // Where it came from ("/remember", "记忆整理", a conversation id) and
+        // when it was last confirmed: /memory shows both so a stale fact can be
+        // told apart from a fresh one.
+        const origin = entry !== null && typeof entry === 'object' && typeof entry.origin === 'string' ? entry.origin : '';
+        const updatedAt = entry !== null && typeof entry === 'object' && typeof entry.updatedAt === 'number' ? entry.updatedAt : at;
+        facts.push({ text: text.trim(), at, weight, origin, updatedAt });
     }
     return facts;
+}
+
+/**
+ * Undo history: the last few writes, oldest first, each one enough to take the
+ * change back (`remove` drops the fact it added; `restore` puts back the text it
+ * replaced or removed).
+ */
+function sanitizeHistory(raw) {
+    if (Array.isArray(raw) !== true) return [];
+    const entries = [];
+    for (const entry of raw) {
+        if (entry === null || typeof entry !== 'object') continue;
+        const kind = entry.kind === 'add' || entry.kind === 'replace' || entry.kind === 'remove' ? entry.kind : '';
+        const text = typeof entry.text === 'string' ? entry.text : '';
+        if (kind === '' || text === '') continue;
+        entries.push({
+            kind,
+            text,
+            at: typeof entry.at === 'number' ? entry.at : 0,
+            by: typeof entry.by === 'string' ? entry.by : '',
+            restore: Array.isArray(entry.restore) ? entry.restore.filter((line) => typeof line === 'string') : [],
+        });
+    }
+    return entries.slice(-DEFAULT_UNDO_MAX);
 }
 
 /**
@@ -171,6 +207,7 @@ export function readGlobalMemory(stateRoot, accountId, { warn = noopWarn, now = 
         events: sanitizeEvents(parsed.events, now),
         digest: typeof parsed.digest === 'string' ? parsed.digest.trim() : '',
         digestAt: typeof parsed.digestAt === 'number' ? parsed.digestAt : 0,
+        history: sanitizeHistory(parsed.history),
     };
 }
 
@@ -187,6 +224,7 @@ export function addGlobalFact(stateRoot, accountId, text, {
     maxChars = DEFAULT_MEMORY_GLOBAL_MAX_CHARS,
     weight = DEFAULT_FACT_WEIGHT,
     supersedes = [],
+    origin = '',
 } = {}) {
     const trimmed = String(text ?? '').trim();
     if (trimmed === '') return { added: false, reason: 'empty' };
@@ -218,7 +256,17 @@ export function addGlobalFact(stateRoot, accountId, text, {
     if (memory.facts.reduce((sum, fact) => sum + fact.text.length, 0) + trimmed.length > maxChars) {
         return { added: false, reason: 'cap' };
     }
-    memory.facts.push({ text: trimmed, at: now, weight: clampWeight(weight) });
+    memory.facts.push({
+        text: trimmed,
+        at: now,
+        weight: clampWeight(weight),
+        origin: String(origin ?? '').slice(0, 60),
+        updatedAt: now,
+    });
+    memory.history = [
+        ...(Array.isArray(memory.history) ? memory.history : []),
+        { kind: replaced.length > 0 ? 'replace' : 'add', text: trimmed, at: now, by: String(origin ?? '').slice(0, 60), restore: replaced },
+    ].slice(-DEFAULT_UNDO_MAX);
     if (replaced.length > 0) {
         memory.superseded = [
             ...(Array.isArray(memory.superseded) ? memory.superseded : []),
@@ -243,9 +291,91 @@ export function removeGlobalFact(stateRoot, accountId, index, { warn = noopWarn 
         return { removed: false, reason: 'no-such-index' };
     }
     const [fact] = memory.facts.splice(position - 1, 1);
+    memory.history = [
+        ...(Array.isArray(memory.history) ? memory.history : []),
+        { kind: 'remove', text: fact.text, at: Date.now(), by: 'forget', restore: [] },
+    ].slice(-DEFAULT_UNDO_MAX);
     return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
         ? { removed: true, text: fact.text }
         : { removed: false, reason: 'write-failed' };
+}
+
+/**
+ * One line per fact for /memory and /memory stale: the text, when it was last
+ * confirmed, and where it came from. Nothing is invented when the fields are
+ * missing (facts written before 1.2.0 have no origin).
+ *
+ * @param {Array<{text: string, at?: number, origin?: string, updatedAt?: number}>} facts
+ * @param {{ now?: number, index?: boolean, maxOriginChars?: number }} [options]
+ * @returns {string[]}
+ */
+export function formatFactLines(facts, { now = Date.now(), index = true, maxOriginChars = 18 } = {}) {
+    const list = Array.isArray(facts) ? facts : [];
+    return list.map((fact, position) => {
+        const stamp = Number(fact.updatedAt || fact.at || 0)
+        const head = index ? `${position + 1}. ${fact.text}` : fact.text
+        const age = stamp > 0 ? Math.max(0, Math.floor((now - stamp) / 86_400_000)) : undefined
+        const when = age === undefined ? '时间未知' : (age === 0 ? '今天记的' : `${age} 天前`)
+        const origin = String(fact.origin ?? '').trim()
+        const originText = origin === '' ? '' : ` · 来自${origin.length > maxOriginChars ? `${origin.slice(0, maxOriginChars)}…` : origin}`
+        return `${head}（${when}${originText}）`
+    })
+}
+
+/**
+ * Take back the most recent memory write. `within` (ms) refuses when the newest
+ * entry is older than that, so a /undo typed weeks later cannot silently delete
+ * something the user still meant.
+ *
+ * @param {string} stateRoot
+ * @param {string} accountId
+ * @param {{ within?: number, now?: number, warn?: (line: string) => void }} [options]
+ * @returns {{ ok: true, kind: string, text: string, restored: number } | { ok: false, reason: 'empty'|'too-old'|'write-failed' }}
+ */
+export function undoLastMemoryChange(stateRoot, accountId, { within, now = Date.now(), warn = noopWarn } = {}) {
+    const memory = readGlobalMemory(stateRoot, accountId, { warn, now })
+    const history = Array.isArray(memory.history) ? memory.history : []
+    if (history.length === 0) return { ok: false, reason: 'empty' }
+    const entry = history[history.length - 1]
+    if (Number.isFinite(within) && within > 0 && now - Number(entry.at || 0) > within) {
+        return { ok: false, reason: 'too-old' }
+    }
+    const key = normalizeFact(entry.text)
+    const before = memory.facts.map((fact) => fact.text)
+    let restored = 0
+    if (entry.kind === 'add') {
+        memory.facts = memory.facts.filter((fact) => normalizeFact(fact.text) !== key)
+    } else if (entry.kind === 'replace') {
+        // Drop the replacement, then put the text it displaced back.
+        memory.facts = memory.facts.filter((fact) => normalizeFact(fact.text) !== key)
+        for (const text of entry.restore ?? []) {
+            if (memory.facts.some((fact) => normalizeFact(fact.text) === normalizeFact(text))) continue
+            memory.facts.push({ text, at: now, weight: DEFAULT_FACT_WEIGHT, origin: '撤销恢复', updatedAt: now })
+            restored += 1
+        }
+        memory.superseded = (Array.isArray(memory.superseded) ? memory.superseded : []).filter((line) => {
+            const by = normalizeFact(line.by)
+            return by !== key || entry.restore.includes(line.text) === false
+        })
+    } else {
+        // A /forget undo puts the fact back where the user can see it.
+        if (memory.facts.some((fact) => normalizeFact(fact.text) === key) === false) {
+            memory.facts.push({ text: entry.text, at: now, weight: DEFAULT_FACT_WEIGHT, origin: '撤销删除', updatedAt: now })
+            restored += 1
+        }
+    }
+    const after = memory.facts.map((fact) => fact.text)
+    if (after.length === before.length && after.every((text, index) => text === before[index])) {
+        // Nothing actually changed (the fact had already been removed again);
+        // still consume the entry so /undo does not get stuck.
+        memory.history = history.slice(0, -1)
+        writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
+        return { ok: false, reason: 'empty' }
+    }
+    memory.history = history.slice(0, -1)
+    return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
+        ? { ok: true, kind: entry.kind, text: entry.text, restored }
+        : { ok: false, reason: 'write-failed' }
 }
 
 /**

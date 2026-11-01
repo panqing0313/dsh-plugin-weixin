@@ -490,7 +490,7 @@ test('/remember stores a fact, /memory shows it, /forget removes it', async () =
     fake.deliver('/memory', 'm4')
     await waitFor(() => fake.outbound.length > 3, 'the memory view')
     assert.match(fake.outbound[3].text, /1\. 我对花生过敏/)
-    assert.match(fake.outbound[3].text, /长期记忆：/)
+    assert.match(fake.outbound[3].text, /长期记忆（括号里是最后一次确认的时间与来源）：/)
     assert.match(fake.outbound[3].text, /本会话记忆：还没有摘要/)
     fake.deliver('/forget 5', 'm5')
     await waitFor(() => fake.outbound.length > 4, 'the bad index reply')
@@ -853,5 +853,24 @@ test('/habit lists and checks without opening a session', async () => {
     assert.match(fake.outbound[2].text, /习惯 · 今天 1\/1/)
 
     assert.equal(sessionsOpened.length, 0, 'habits never need the model')
+  })
+})
+
+test('/undo takes back a mis-remembered fact without spending a model turn', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/remember 我对花生过敏', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the stored reply')
+    assert.match(fake.outbound[0].text, /记错了 \/undo 撤销/)
+    fake.deliver('/remember 我对花生过敏', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the duplicate reply')
+    fake.deliver('/undo', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the undo reply')
+    assert.match(fake.outbound[2].text, /撤销「我对花生过敏」/)
+    const store = JSON.parse(fs.readFileSync(path.join(root, 'memory', 'global-bot1.json'), 'utf8'))
+    assert.deepEqual(store.facts, [])
+    fake.deliver('/undo', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the empty history reply')
+    assert.match(fake.outbound[3].text, /没有可撤销的记忆改动/)
+    assert.deepEqual(sessionsOpened, [], 'undo is a local edit, never a model turn')
   })
 })

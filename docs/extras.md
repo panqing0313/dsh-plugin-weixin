@@ -517,3 +517,32 @@ allowlist 拒收是静默的，这是设计（deny-by-default）。但「静默�
 - 校验只有一条代码路径 —— 远程安装最终调的是 `packImport`，没有第二套「信任远程」的逻辑。
 
 实现：`src/message/pack-index.js`（`normalizePackIndex` / `fetchPackJson`），远程方法 `packIndex` / `packInstallRemote`（`src/login-remote.js`），卡片面板在 PersonaSection（`src/client.card.js`）。索引文件你可以放在任何静态托管上，分享人设就是分享一个 URL。
+
+## `/undo`：记错了能撤回来（1.2.0）
+
+`/remember` 写进去的东西以前只能手动删：`/forget` 要编号、要关键词，改口还得写成「旧 → 新」。一句话记错，用户当晚就得跟机器人较劲。
+
+现在每次长期记忆改动都留一条**撤销记录**，和事实存在同一个文件里（`global-<account>.json` 的 `history`，最多 20 步）。`/undo` 撤最近一步，`/undo 3` 连撤三步（上限 5）：
+
+| 当时做了什么 | `/undo` 之后 |
+| --- | --- |
+| `/remember 我对花生过敏` | 那条事实消失 |
+| `/remember 我住北京 → 我搬到杭州了` | 「我搬到杭州了」消失，「我住北京」回来 |
+| `/forget 1` | 被删的那条回来 |
+| 记忆整理自动改口 | 同「改口」 |
+
+**只认最近 30 分钟**。这条限制不是抠门：一个「撤销」按钮如果隔一周还生效，某天手滑打出一个 `/undo` 就会删掉早被当成常识的事。更早的改动请用 `/forget 编号` 手动处理——那一步会把你删的内容原样告诉你。
+
+`/memory` 每行后面现在也带括号：**最后一次确认是多久以前、从哪来的**。
+
+```text
+长期记忆（括号里是最后一次确认的时间与来源）：
+1. 我对花生过敏（12 天前 · 来自/remember）
+2. 我住在杭州（今天记的 · 来自记忆整理）
+3. 我妈生日 5 月 20（3 天前 · 来自撤销恢复）
+```
+
+「多久以前」按最后确认时间算，不是最早写入时间：一条被改口纠正过的事实，日期会往前跳——这件事被重新确认过。老版本写下的事实没有来源，会显示「时间未知」，不会被编一个出来。
+
+实现上，`addGlobalFact` 与 `removeGlobalFact` 各追加一条 `{kind: 'add'|'replace'|'remove', text, at, by, restore}`；`undoLastMemoryChange(stateRoot, accountId, {within, now})` 负责反向施加并吞掉那条记录。撤不动（例如那条事实已经被别的方式删了）时它会明确回「没有可撤销的记忆改动」，而不是假装成功。
+

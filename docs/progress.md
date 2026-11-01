@@ -3296,3 +3296,14 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 `README.md` / `README.en.md` 的 NPM_TOKEN 一节据此重写：改成 granular 路线（`Read and write (publish and stage)` + 勾 Bypass 2FA + 90 天），验证步骤改成「用已发布的 tag，看到 403 就是成功」，并补两条变化：**token 到期（默认 30 天）** 与 **npm 从 2027-01 起限制直接发布**（届时可能要转 OIDC 信任发布）。
 
 > 浏览器侧：用 `browser-skill` 只**只读**看了一眼 granular token 新建页（未填任何字段、未点 Generate），确认表单结构与选项；凭证一律没有读取。
+
+## ① `/undo`：撤销记忆写入（2026-11-01，1.2.0 第 1 项）
+
+- 问题：`/remember` 记错只能 `/forget` 手挑，改口还得写成「旧 → 新」；用户当晚就得跟机器人较劲。
+- `src/memory.js`：事实对象新增 `origin` / `updatedAt`；`readGlobalMemory` 多返回 `history`；`addGlobalFact` 接受 `origin` 并在写入时追加 `{kind:'add'|'replace', text, at, by, restore}`，`removeGlobalFact` 追加 `{kind:'remove'}`；新增 `formatFactLines(facts, {now})` 与 `undoLastMemoryChange(stateRoot, accountId, {within, now})`（`replace` 撤回时把被替换的原文放回，`remove` 撤回时把事实放回）。
+- 常量 `DEFAULT_UNDO_MAX = 20`，历史随事实同文件保存，重启不丢。
+- `src/index.js`：`/remember` 传 `origin: '/remember'`；`/memory` 改用 `formatFactLines`（每行带「多久以前 · 来自哪」）；新增 `undo` handler（`/undo`、`/undo 2`，上限 5 步，`within: 30 分钟`）。
+- `src/sessions.js`：规则 `{ id: 'undo', pattern: /^\/(?:undo|撤销)(?:\s+([\S\s]+))?$/i, helpRank: 9, helpKey: 'help.undo' }`，加入 `PERSONA_COMMANDS`；`src/i18n.js` 加 `help.undo`。
+- 测试：`test/memory.test.js` 新增 3 条（来源与时间、三种撤销、超时拒绝与空历史），`test/session-commands.test.js` 新增端到端 1 条（撤销后事实清空、第二次 /undo 明确说没有可撤销、`sessionsOpened` 为空）。全量 **950/950**、`check.mjs` 通过。
+- 文档：README「个性化与记忆」与「记忆改口」两节、`docs/extras.md` 新增「`/undo`：记错了能撤回来」。
+

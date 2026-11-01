@@ -122,6 +122,8 @@ import {
   readConvMemory,
   readRecentWindow,
   addGlobalFact,
+  formatFactLines,
+  undoLastMemoryChange,
   removeGlobalFact,
   bondLine,
   formatEvents,
@@ -1767,16 +1769,41 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           warn,
           maxFacts: modeConfig().memoryGlobalMaxFacts,
           supersedes,
+          origin: '/remember',
         })
         if (result.added === true) {
           const replaced = Array.isArray(result.superseded) && result.superseded.length > 0
             ? `\n（原来的「${result.superseded.join('」「')}」已作废）`
             : ''
-          return `已记住：${text}${replaced}\n（/memory 可以查看全部，/forget <编号> 可以删除）`
+          return `已记住：${text}${replaced}\n（/memory 可以查看全部，/forget <编号> 可以删除，记错了 /undo 撤销）`
         }
         if (result.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
         if (result.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
         return '没存上，写入记忆文件失败了（详见日志）。'
+      },
+      undo: (arg) => {
+        if (memoryOn() === false) return '记忆功能当前是关闭的。'
+        const times = arg === '' ? 1 : Number(arg)
+        if (Number.isInteger(times) === false || times < 1 || times > 5) return '用法：/undo 或 /undo 2（一次最多撤销 5 步）。'
+        const done = []
+        for (let step = 0; step < times; step += 1) {
+          // Only recent writes: a /undo typed a week later must not quietly
+          // delete a fact the user still means ("the undo button has no memory").
+          const result = undoLastMemoryChange(stateRoot, accountId, { warn, within: 30 * 60_000 })
+          if (result.ok === true) {
+            done.push(result.restored > 0 ? `恢复「${result.text}」` : `撤销「${result.text}」`)
+            continue
+          }
+          if (result.reason === 'too-old') {
+            done.push('最近一次记忆改动是 30 分钟以前的，为了安全没有撤销 —— 用 /forget <编号> 手动删')
+            break
+          }
+          if (result.reason === 'empty') break
+          done.push('没撤销成功，写入记忆文件失败了（详见日志）')
+          break
+        }
+        if (done.length === 0) return '没有可撤销的记忆改动。'
+        return [...done.map((line, index) => `${index + 1}. ${line}`), '（/memory 看当前内容）'].join('\n')
       },
       forget: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
@@ -1835,7 +1862,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (store.events.length > 0) parts.push(['事件与待办：', ...formatEvents(store.events)].join('\n'))
         parts.push(store.facts.length === 0
           ? '长期记忆：还没有，用 /remember 教我。'
-          : ['长期记忆：', ...store.facts.map((f, i) => `${i + 1}. ${f.text}`)].join('\n'))
+          : ['长期记忆（括号里是最后一次确认的时间与来源）：', ...formatFactLines(store.facts, { now: Date.now() })].join('\n'))
         const affinity = describeAffinity(readAffinityHistory(stateRoot, accountId, conversationId, { warn }))
         if (affinity !== '') parts.push(['最近的关系曲线：', affinity].join('\n'))
         if (store.superseded.length > 0) {

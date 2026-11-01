@@ -25,6 +25,8 @@ import {
 	replaceFacts,
 	formatProfile,
 	formatEvents,
+	formatFactLines,
+	undoLastMemoryChange,
 	DEFAULT_MEMORY_GLOBAL_MAX_FACTS,
   openThreadLines,
 } from '../src/memory.js'
@@ -45,7 +47,7 @@ after(() => {
 
 test('global facts: add, read back, duplicate refused', () => {
 	const dir = join(root, 'global')
-	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [] })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [], history: [] })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '用户对花生过敏', { warn }), { added: true })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '  用户对花生过敏  ', { warn }), { added: false, reason: 'duplicate' })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '', { warn }), { added: false, reason: 'empty' })
@@ -179,7 +181,7 @@ test('a broken memory file degrades to empty, not a throw', () => {
 	mkdirSync(join(dir, 'memory'), { recursive: true })
 	writeFileSync(join(dir, 'memory', 'global-b@im.bot.json'), '{ broken')
 	warns.length = 0
-	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [] })
+	assert.deepEqual(readGlobalMemory(dir, 'b@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [], history: [] })
 	assert.ok(warns.length === 1, `warned once: ${JSON.stringify(warns)}`)
 })
 
@@ -378,4 +380,49 @@ test('superseding on a full store still works: the correction is not refused by 
 	assert.equal(texts.length, 3)
 	assert.ok(texts.includes('第 0 条事实（已更新）'))
 	assert.ok(!texts.includes('第 0 条事实'))
+})
+
+test('a fact remembers where it came from and when it was last confirmed', () => {
+	const dir = join(root, 'origin')
+	addGlobalFact(dir, 'bot@im.bot', '用户养了一只叫豆豆的猫', { warn, now: 1_000, origin: '/remember' })
+	const [fact] = readGlobalMemory(dir, 'bot@im.bot', { warn }).facts
+	assert.equal(fact.text, '用户养了一只叫豆豆的猫')
+	assert.equal(fact.origin, '/remember')
+	assert.equal(fact.updatedAt, 1_000)
+	const lines = formatFactLines([fact], { now: 1_000 + 3 * 86_400_000 })
+	assert.match(lines[0], /^1\. 用户养了一只叫豆豆的猫（3 天前 · 来自\/remember）$/)
+	assert.match(formatFactLines([{ text: '旧事实', at: 0 }], { now: 0 })[0], /时间未知/, 'facts from before this version have no timestamp')
+})
+
+test('/undo takes back the last add, the last replace and the last forget', () => {
+	const dir = join(root, 'undo')
+	addGlobalFact(dir, 'bot@im.bot', '用户住在杭州', { warn, now: 1_000, origin: '/remember' })
+	const first = undoLastMemoryChange(dir, 'bot@im.bot', { now: 2_000 })
+	assert.deepEqual(first, { ok: true, kind: 'add', text: '用户住在杭州', restored: 0 })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts, [])
+
+	// A correction puts the old wording back.
+	addGlobalFact(dir, 'bot@im.bot', '用户住在杭州', { warn, now: 1_000 })
+	addGlobalFact(dir, 'bot@im.bot', '用户住在上海', { warn, now: 2_000, supersedes: ['用户住在杭州'] })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts.map((f) => f.text), ['用户住在上海'])
+	const back = undoLastMemoryChange(dir, 'bot@im.bot', { now: 3_000 })
+	assert.equal(back.ok, true)
+	assert.equal(back.restored, 1)
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts.map((f) => f.text), ['用户住在杭州'])
+
+	// A /forget undo puts the fact back.
+	removeGlobalFact(dir, 'bot@im.bot', 1, { warn })
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts, [])
+	const restored = undoLastMemoryChange(dir, 'bot@im.bot', { now: 4_000 })
+	assert.equal(restored.restored, 1)
+	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts.map((f) => f.text), ['用户住在杭州'])
+})
+
+test('/undo refuses an old change, and reports an empty history honestly', () => {
+	const dir = join(root, 'undo-old')
+	assert.deepEqual(undoLastMemoryChange(dir, 'bot@im.bot', { now: 1 }), { ok: false, reason: 'empty' })
+	addGlobalFact(dir, 'bot@im.bot', '用户对花粉过敏', { warn, now: 1_000 })
+	const refused = undoLastMemoryChange(dir, 'bot@im.bot', { now: 1_000 + 31 * 60_000, within: 30 * 60_000 })
+	assert.deepEqual(refused, { ok: false, reason: 'too-old' })
+	assert.equal(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts.length, 1, 'nothing was removed')
 })
