@@ -92,6 +92,7 @@ import { createMediaCommands } from './message/media-archive.js'
 import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
+import { MemoryConflictQueue, conflictReply, findMemoryConflict, parseConflictAnswer } from './message/memory-conflict.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
 import { allowedMediaDirs, deliverOutboundMedia, DEFAULT_MAX_MEDIA_BYTES, listProducedFiles } from './media/outbound.js'
@@ -1552,6 +1553,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
   // and answering from a cached snapshot would quietly lie. Memory commands
   // honour memoryEnabled being off; /mode does not — the mode table and the
   // memory store are separate features.
+  // ② A 「把 X 改成 Y 吗」 question lives in memory only: an unanswered one must
+  // expire with the process instead of firing a week later.
+  const conflictQueue = new MemoryConflictQueue()
   const personaCommands = (conversationId) => {
     const memoryOn = () => effectiveConfig.current.memoryEnabled !== false
     const modeConfig = () => effectiveConfig.current
@@ -1755,16 +1759,47 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         }
         return `这个会话里没有，但账号下其他对话里有：\n${formatRecallHits(anywhere, { query: keyword })}`
       },
+      // `/是`、`/不用`：only routed here while a question is pending (see the
+      // router); otherwise the message stays ordinary chat.
+      answer: (arg) => {
+        if (memoryOn() === false) return undefined
+        const pending = conflictQueue.take(accountId)
+        if (pending === undefined) return undefined
+        const answer = parseConflictAnswer(arg)
+        if (answer === undefined) return undefined
+        if (answer === 'no') return conflictReply(pending, 'no')
+        const applied = addGlobalFact(stateRoot, accountId, pending.text, {
+          warn,
+          maxFacts: modeConfig().memoryGlobalMaxFacts,
+          supersedes: pending.supersedes,
+          origin: '/remember',
+        })
+        if (applied.added === true) return conflictReply(pending, 'yes')
+        if (applied.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
+        if (applied.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
+        return '没存上，写入记忆文件失败了（详见日志）。'
+      },
       remember: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」），先打开再用 /remember。'
         if (arg === undefined || String(arg).trim() === '') {
           return '用法：/remember <要记住的内容>，例如 /remember 我对花生过敏\n改口用箭头：/remember 我搬到杭州了 → 我住在杭州'
         }
+        // ② A new fact supersedes any outstanding question: the user moved on.
+        conflictQueue.clear(accountId)
         // Explicit correction (C18): `旧 → 新` replaces the old fact instead of
         // leaving both for the model to choose from.
         const arrow = String(arg).match(/^(.+?)\s*(?:→|->|=>)\s*(.+)$/)
         const text = arrow === null ? String(arg).trim() : arrow[2].trim()
         const supersedes = arrow === null ? [] : [arrow[1].trim()]
+        // ② Same slot, different value ("我住在杭州" vs "我住在上海"): ask before
+        // letting two contradictory facts sit side by side and confuse the model.
+        if (supersedes.length === 0) {
+          const conflict = findMemoryConflict(text, readGlobalMemory(stateRoot, accountId, { warn }).facts)
+          if (conflict !== undefined) {
+            conflictQueue.ask(accountId, { text, supersedes: [conflict.text] })
+            return conflictReply({ text, supersedes: [conflict.text] })
+          }
+        }
         const result = addGlobalFact(stateRoot, accountId, text, {
           warn,
           maxFacts: modeConfig().memoryGlobalMaxFacts,
@@ -2145,6 +2180,9 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         && isCompanionMode(resolveMode(readPersonaStore(stateRoot, { warn }), activeModeFor(stateRoot, accountId, message.conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn })))
         ? bondLine(readConvMemory(stateRoot, accountId, message.conversationId, { warn }).bond)
         : '',
+      // ② `/是`、`/不用` 答的是「要不要把它换成这条」；问题只存在内存里，
+      //    所以这个入口要能自己说「现在没人问你」（回 undefined = 普通聊天）。
+      //    它必须挂在 persona 上：命令视图只认识 persona 这一袋 handler。
       persona: personaCommands(message.conversationId),
       t: createTranslator(effectiveConfig.current.locale).t,
     })

@@ -3307,3 +3307,20 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 - 测试：`test/memory.test.js` 新增 3 条（来源与时间、三种撤销、超时拒绝与空历史），`test/session-commands.test.js` 新增端到端 1 条（撤销后事实清空、第二次 /undo 明确说没有可撤销、`sessionsOpened` 为空）。全量 **950/950**、`check.mjs` 通过。
 - 文档：README「个性化与记忆」与「记忆改口」两节、`docs/extras.md` 新增「`/undo`：记错了能撤回来」。
 
+
+### ② 记忆冲突检测（2026-11-01）
+
+**问题**：模型抽取的事实有 `supersedes` 能自我纠正，但用户亲口 `/remember` 一条与已存事实同槽位、不同值的内容时，两条会并存；注入上下文后模型拿到互相矛盾的两份说法。
+
+**做法**：
+- `src/message/memory-conflict.js`：`conflictWords`（中文 bigram、英文数字整词）、`findMemoryConflict`（Levenshtein 距离 ≤ 2 且词数比 ≥ 0.5、距离 > 0）、`MemoryConflictQueue`（进程内，TTL 10 分钟，`ask`/`take`/`clear`）、`conflictReply`、`parseConflictAnswer`（先去掉开头的 `/`，再精确匹配短句白名单）。
+- `src/index.js`：persona bundle 新增 `answer` handler（处理 `/是` / `/不用`，无待答问题时回 `undefined`）；`remember` handler 开头 `conflictQueue.clear`，命中冲突时 `ask` 并回问题；命令视图的 `persona` 里带上这个 handler。
+- `src/sessions.js`：新增 `ANSWER_PATTERN`（捕获组只取回答词），`parseSessionCommand` **先试答案正则再试命令表**；`runSessionCommand` 的答案分支拿到 `undefined` 时继续往下走，最终由桥回 `undefined`，调用方当作普通聊天。
+
+**踩到的坑**：
+1. `parseSessionCommand('/是')` 先被 `/use` 的前缀规则命中，回了会话列表 —— 答案正则必须排在命令表之前。
+2. 命令视图只认识 `context.persona` 这一袋 handler；把 `answer` 挂在 `context` 顶层是拿不到的。
+3. `parseConflictAnswer` 收到的是带斜杠的 `/是`，不剥掉就既不是 yes 也不是 no，问题被静默丢弃。
+4. 测试里 `fake.outbound` 的索引是硬编码的，多了一条回复之后 `> 5`、`[6]` 全部偏移。
+
+**验证**：`test/memory-conflict.test.js` 8 条、`test/session-commands.test.js` 新增端到端 2 条；全量 **960/960**、`check.mjs` 224 文件通过。

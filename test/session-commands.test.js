@@ -522,6 +522,60 @@ test('/forget by keyword: single hit forgets, several hits ask for the number', 
   })
 })
 
+test('a fact about the same thing asks before replacing it, and 是 applies it', async () => {
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/remember 我住在杭州', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the first fact')
+    assert.match(fake.outbound[0].text, /已记住：我住在杭州/)
+
+    // Same slot, different value: the bot must ask instead of storing both.
+    fake.deliver('/remember 我住在上海', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the conflict question')
+    assert.match(fake.outbound[1].text, /我记得你说过「我住在杭州」/)
+    assert.match(fake.outbound[1].text, /要改成「我住在上海」吗/)
+
+    // A bare 是 would be ordinary chat (and cost a model turn); the slash form
+    // is the one that reaches the command router.
+    fake.deliver('/是', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the confirmation')
+    assert.match(fake.outbound[2].text, /那就改成「我住在上海」/)
+
+    fake.deliver('/memory', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the fact list')
+    assert.match(fake.outbound[3].text, /我住在上海/)
+    assert.doesNotMatch(fake.outbound[3].text, /1\. 我住在杭州/, 'the old value is gone')
+  })
+})
+
+test('a conflict answered with 不用 keeps the original, and an unrelated answer drops the question', async () => {
+  // 不用 / 是 used to be ordinary chat text, which costs a model turn; with the
+  // question pending they are read as the answer instead.
+  await withPlugin(async ({ fake }) => {
+    fake.deliver('/remember 我住在杭州', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the first fact')
+
+    fake.deliver('/remember 我住在上海', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the conflict question')
+    fake.deliver('/不用 我住在上海', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the refusal')
+    assert.match(fake.outbound[2].text, /那我还是记着「我住在杭州」/)
+
+    fake.deliver('/memory', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the fact list')
+    assert.match(fake.outbound[3].text, /我住在杭州/)
+    assert.doesNotMatch(fake.outbound[3].text, /我住在上海/, 'the refused fact was not stored')
+
+    // A pending question expires the moment the user says something else: a new
+    // statement becomes a plain fact instead of answering a stale question.
+    fake.deliver('/remember 我住在成都', 'm6')
+    await waitFor(() => fake.outbound.length > 4, 'second conflict question')
+    assert.match(fake.outbound[4].text, /我记得你说过「我住在杭州」/)
+    fake.deliver('/remember 我每天早上跑步', 'm7')
+    await waitFor(() => fake.outbound.length > 5, 'the unrelated statement')
+    assert.match(fake.outbound[5].text, /已记住：我每天早上跑步/)
+  })
+})
+
 test('a switching a mode does not disturb an ordinary queued message flow', async () => {
   await withPlugin(async ({ fake }) => {
     fake.deliver('/mode 朋友', 'm1')

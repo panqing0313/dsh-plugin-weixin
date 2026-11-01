@@ -548,6 +548,14 @@ export function isInterruptCommand(text) {
 
 const identity = () => ({})
 
+/**
+ * `/是`、`/不用`：an answer to the question the bot just asked. Not in
+ * COMMANDS — it is not help-worthy, it is routing for one pending question.
+ */
+// The word first, then anything the user felt like adding (`/不用 我住在上海`).
+// Longest first so 不用 is not read as 不 followed by text.
+const ANSWER_PATTERN = /^\/(是|是的|对|好的|好|改|不用|不是|不|别|no|yes)(?:\s+[\S\s]+)?$/i
+
 /** @type {CommandRule[]} */
 const COMMANDS = [
   { id: 'new', pattern: /^\/new$/i, build: identity, helpRank: 1, helpKey: 'help.new' },
@@ -689,6 +697,13 @@ export const SESSION_COMMANDS_HELP = buildCommandsHelp()
  */
 export function parseSessionCommand(text) {
   const trimmed = String(text ?? '').trim()
+  // Answers to a pending question come FIRST. The bot asks 「要改成 X 吗？回「是」…」
+  // and the very next message is the answer; letting the normal table run first
+  // would quietly turn `/是` into `/use`, which answers with a session list
+  // instead. The router only consumes this when a question is actually pending
+  // (the handler answers `undefined` otherwise, and the message stays chat).
+  const answerMatch = ANSWER_PATTERN.exec(trimmed)
+  if (answerMatch !== null) return { command: 'answer', arg: answerMatch[1] }
   for (const rule of COMMANDS) {
     const match = rule.pattern.exec(trimmed)
     if (match !== null) return { command: rule.id, ...rule.build(match) }
@@ -759,6 +774,13 @@ export function runSessionCommand(lines, conversationId, text, accountId, contex
   const rule = COMMANDS.find((candidate) => candidate.id === command.command)
   if (rule?.run !== undefined) return rule.run({ lines, conversationId, accountId, command, context })
 
+  if (command.command === 'answer' && typeof context?.persona?.answer === 'function') {
+    // ② `/是`、`/不用` 只在真的有待答问题时才算命令：`/remember` 刚问过「要换成
+    //    这条吗」，下一句就靠这里认出来。handler 回 undefined 表示没人问话，
+    //    于是继续往下走 —— 最后落到桥的答案分支回 undefined，调用方当作普通聊天。
+    const answered = context.persona.answer(command.arg)
+    if (answered !== undefined) return answered
+  }
   if (command.command === 'new') {
     const sessionId = lines.create(conversationId, accountId)
     const ordinal = lines.list(conversationId, accountId).length

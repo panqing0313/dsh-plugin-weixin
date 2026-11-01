@@ -225,6 +225,10 @@ export class AgentBridge {
    * @returns {string | undefined}
    */
   handleCommand(conversationId, text, accountId, statusContext) {
+    // 命令回复以前是一条字符串，调用方 await 之后就能发出去。现在有了一条会
+    // 回 undefined 的命令（待答问题不在了，`/是` 应当当作普通聊天），此时
+    // bridge 仍然会执行完清理，只是必须让调用方知道「没有回复」而不是把
+    // undefined 当作命令结果吞掉（那会让这句本该进会话的话彻底消失）。
     // Capture the target BEFORE the command runs: `/clear` replaces the line,
     // and the id to orphan is the one that was active up to now.
     const key = scopedLineKey(accountId, conversationId)
@@ -235,6 +239,8 @@ export class AgentBridge {
       ...statusContext,
       cancelRunningTurn: () => this.#cancelRunningTurn(key, conversationId, accountId),
     })
+    // `undefined` means the command existed but had nothing to say (`/是` with no
+    // pending question): the caller must treat the message as ordinary chat.
     if (reply === undefined) return undefined
     // /summary resolves through a side session and answers asynchronously; the
     // caller that awaits command replies handles the promise, and no async
