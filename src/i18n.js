@@ -46,6 +46,7 @@ export const CATALOG = Object.freeze({
     'help.memory': { zh: '/memory 查看记住的内容；/memory export 导出成 Markdown 文件', en: '/memory show what is remembered; /memory export writes it out as Markdown' },
     'help.undo': { zh: '/undo 撤销上一次记错的事（/undo 3 连续撤销三次）', en: '/undo take back the last thing remembered (/undo 3 for three times)' },
     'help.keyword': { zh: '/keyword stats 看群关键词规则各自的命中次数（哪些在干活、哪些没人用）', en: '/keyword stats shows how often each group keyword rule fired' },
+    'help.config': { zh: '/config 看哪些设置保存即生效、哪些要重启 DSH 才生效', en: '/config explains which settings apply immediately and which need a restart' },
     'help.import': { zh: '/import 把 /memory export 导出的记忆读回来（先给预览，回「是」才写）', en: '/import read back the memory from /memory export (preview first, then confirm)' },
     'help.recall': { zh: '/recall <关键词> 在本地消息流水里翻原文（如 /recall 报错），不经过模型、不花 token', en: '/recall <keyword> search the local transcript for the original text — no model, no tokens' },
     'help.summary': { zh: '/summary 总结这段会话：聊到哪了、定了什么、还有什么待办', en: '/summary summarise this session: what we discussed, what we decided, what is left' },

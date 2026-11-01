@@ -21,7 +21,7 @@ import z from '@deepseek-ai/schemastery'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import { dirname, join, resolve as resolvePath } from 'node:path'
-import { configureWeixinStateDir, accountsDir, ensureSessionsDir, inboxDir, stateDir, withSavedConfig } from './state.js'
+import { configureWeixinStateDir, accountsDir, configFile, ensureSessionsDir, inboxDir, stateDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
 import {
   MAX_TEMP_QUIET_MS,
@@ -37,6 +37,7 @@ import { detectHostVersion, hostStatus } from './host-compat.js'
 import { buildUsageReport } from './message/usage.js'
 import { readBudget } from './budget.js'
 import { createRequire } from 'node:module'
+import { describeConfigEffect } from './config-effect.js'
 
 // 服务端也要知道自己的版本（`/diag` 用），但 client.js 是浏览器入口，不能 import。
 const PLUGIN_VERSION = createRequire(import.meta.url)('../package.json').version
@@ -1943,6 +1944,20 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       },
       // ⑥ 群关键词规则配在设置卡里，命中是静默的模板回复 —— 用户看不出哪条
       //    规则在干活、哪条写错了正则永远不响。这个命令把规则和计数一起摊开。
+      config: () => {
+        // 只描述规则：哪一项保存即生效、哪一项要重启。不读文件、不改任何东西。
+        let savedAt
+        try {
+          savedAt = fs.statSync(configFile()).mtimeMs
+        } catch {
+          savedAt = undefined
+        }
+        return describeConfigEffect({
+          fields: Object.keys(Config.dict ?? {}),
+          configFile: configFile(),
+          savedAt,
+        })
+      },
       keyword: (arg) => {
         const action = String(arg ?? '').trim()
         if (action !== '' && /^(stats|统计|命中)$/i.test(action) === false) {

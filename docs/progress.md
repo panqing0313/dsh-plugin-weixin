@@ -3395,3 +3395,16 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 2. 修完路由后变成 `ReferenceError: conversationId is not defined`：`exportDiag` 写在 persona bundle 外面，没有 `conversationId` 可用。体检包是「账号现在什么样」而不是「这个会话什么样」，所以模式一栏改成取账号默认模式（`live.personaDefaultMode ?? DEFAULT_MODE_ID`），并在代码里写清这个取舍。
 
 **验证**：`test/session-commands.test.js` 新增端到端 1 条（回复含「已导出体检包」与 `.md` 路径；读文件断言含 `# 微信BOT 体检包`、`## 开关`、`## 最近报错`、`## 自检结论`，且**不含**真实账号 id 与白名单 id、含 `- 账号 id-`）；该文件 42/42、`check.mjs` → `checked 229 files`。
+
+### ⑧ `/config` 热生效说明（2026-11-01）
+
+**问题**：设置卡保存之后，有些改动下一条消息就生效（白名单、主动开口开关），有些必须重启（ASR 子进程、通知端口、长轮询间隔）。这条区别从没被写下来过，用户改完发现「没反应」，第一反应是「没保存」而不是「这项要重启」。
+
+**做法**：
+- 新增 `src/config-effect.js`：`CONFIG_EFFECTS` 把 schema 的 107 个字段逐一定为 `live`（保存即生效）/ `restart`（重启生效）；`describeConfigEffect({fields, configFile, savedAt, now})` 生成 `/config` 的回答——三段分类 + 存档路径 + 上次保存多久以前；`effectOf`/`effectLabel` 给未来在设置卡里标「重启后生效」留接口。
+- `restart` 只有 6 项：`asr`、`notifyPort`、`eventPollMs`、`sendIntervalMs`、`ocrTimeoutMs`、`voiceOutbound`——全部是启动时一次性建立的东西。
+- `src/index.js`：persona bundle 新增 `config` handler（不读模型、不写文件，只 `fs.statSync(configFile()).mtimeMs`）；`src/sessions.js` 规则 `{ id: 'config', pattern: /^\/config$/i, helpRank: 26 }` + `PERSONA_COMMANDS`；`src/i18n.js` 加 `help.config`。
+
+**一个设计取舍**：先在 `src/index.js` 里手写了一张表，结果 107 个字段里写错/漏了 56 个（`journalRetentionDays` 实为 `retentionJournalDays` 等）。改成从 `Config.dict` 生成，并让测试拿 schema 反向核对——「表要覆盖 schema 的每个字段」变成一条会红的断言，而不是靠人记得。
+
+**验证**：`test/config-effect.test.js` 6 条（字段全覆盖、restart 名单精确、未知字段不崩、分段文案、未保存时不说谎、live 字段不误报重启）、`test/session-commands.test.js` 端到端 1 条（不开会话）；全量见发版前记录。

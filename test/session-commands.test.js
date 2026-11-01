@@ -1020,6 +1020,20 @@ test('/diag export writes a masked bundle and never names the account', async ()
   })
 })
 
+test('/config says which settings already apply and which wait for a restart', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/config', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the config reply')
+    const reply = fake.outbound[0].text
+    assert.match(reply, /配置一共 \d+ 项：\d+ 项保存即生效，\d+ 项要重启。/)
+    assert.match(reply, /保存即生效（下一条消息就按新值走）：/)
+    assert.match(reply, /重启 DSH 后才生效：.*eventPollMs/)
+    assert.match(reply, /存档：/)
+    // 「哪儿能改」和「改完什么时候算数」是两回事：这条命令只回答后者，不跑模型。
+    assert.equal(sessionsOpened.length, 0)
+  })
+})
+
 test('/outbox shows the empty queue instead of pretending a send happened', async () => {
   await withPlugin(async ({ fake, sessionsOpened }) => {
     fake.deliver('/outbox', 'm1')

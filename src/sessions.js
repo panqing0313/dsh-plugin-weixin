@@ -662,6 +662,7 @@ const COMMANDS = [
   { id: 'forget', pattern: /^\/(?:forget|忘记)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() }), helpRank: 8, helpKey: 'help.forget' },
   { id: 'memory', pattern: /^\/(?:memory|记忆)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 9, helpKey: 'help.memory' },
   { id: 'undo', pattern: /^\/(?:undo|撤销)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 9, helpKey: 'help.undo' },
+  { id: 'config', pattern: /^\/config$/i, build: identity, helpRank: 26, helpKey: 'help.config' },
   { id: 'keyword', pattern: /^\/(?:keyword|关键词)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 22, helpKey: 'help.keyword' },
   { id: 'import', pattern: /^\/(?:import|导入)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 9, helpKey: 'help.import' },
   { id: 'recall', pattern: /^\/(?:recall|回忆|翻记录)(?:\s+([\S\s]+))?$/i, build: (match) => ({ arg: match[1]?.trim() ?? '' }), helpRank: 10, helpKey: 'help.recall' },
@@ -671,7 +672,7 @@ const COMMANDS = [
 ]
 
 /** Commands answered by the inbound handler's persona bundle (state root lives there). */
-const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'undo', 'import', 'keyword', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag', 'outbox', 'quiet', 'usage', 'habit', 'media', 'digest'])
+const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'undo', 'import', 'keyword', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag', 'outbox', 'quiet', 'usage', 'habit', 'media', 'digest', 'config',])
 
 /**
  * The help text in one locale (C33). Command rules carry a `helpKey` into the
