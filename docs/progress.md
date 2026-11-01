@@ -3264,3 +3264,12 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 ## release.yml 的 NPM_TOKEN 快速失败（2026-11-01，0.10.0 第 6 项）
 
 0.9.19 的 tag 发布路径死于一个空 secret：suite 跑完才在 publish 一步报 `ENEEDAUTH`。工作流现在在 setup-node 之后、`npm ci` 之前检查 `secrets.NPM_TOKEN`，为空立刻红并给出「去 Settings → Secrets and actions 加一个 Automation token」的指引。真正的修复是仓库设置（不是代码）：填一个 npm Automation token 进 `NPM_TOKEN`，tag 发布即恢复（带 provenance）。
+
+## 发布 1.1.0（2026-11-01）
+
+- **内容**：六项运营闭环（陌生人加白 `d37d3fd`、流水搜索/翻页/下钻 `e9fae2f`、群关键词回复 `8e5cbe9`、`/memory export` `e9df030`、模板包远程索引 `f75130c`、release.yml 的 NPM_TOKEN 检查 `fbd1a9d`）；全量 **946/946**、`check.mjs` 通过。
+- **publish 卡了三次窗口**：凌晨连开三个伪 TTY 授权窗口，每个都在等待中 404 过期（用户不在电脑前）。最终由用户在真实终端 `npm publish --access public` 完成 —— 与 0.9.20 同一条路：**夜里发版别指望远程点链接，直接请用户在终端跑**。
+- **核验**：本地 tarball `shasum 7eda2543106480e3ed0ff3bf6e1d4ea1f73672d3` = registry `dist.shasum`；`dist.integrity sha512-jp11+Ry1kM/jkGZGNSUHPsZJOp2rjYr4QxjkZ21qtZcXiI0sBSf7H5cqoupXT0woWfda2Z/nFXBfJGnNtjd1TA==`；`gitHead 6fd767acb9ed227530359e71f319509d4686a0f8`；`dist-tags.latest = 1.1.0`；tag `v1.1.0`（annotated，指向 `6fd767a`）、GitHub release https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.1.0 （非 draft/prerelease）。
+- **profile**：`^1.0.0 → ^1.1.0`、`node_modules` = 1.1.0、锁文件已刷新；`doctor` → `installed 1.1.0`、`host 0.2.1-rc.5 (tested)`、`published up to date`。
+- **注册表延迟**：用户 publish 后首次 `npm view @1.1.0` 仍 404，约 1 分钟后可读 —— 老规矩。
+- 版本号跳过 0.10.0 的设想：既然已经是 1.0.x，新功能走 `1.1.0`（minor），扩展点文档里写的「0.10.0」只是当时的草稿号。
