@@ -1029,6 +1029,24 @@ So there are two paths:
 
 The CI path needs the repository secret `NPM_TOKEN` (an npm Automation token) and `id-token: write` in the workflow (already declared in the file).
 
+### Set NPM_TOKEN once and stop clicking OTPs
+
+Releasing from this laptop asks for a one-time password in the browser every time; if nobody is at the keyboard, nothing ships (both 0.9.20 and 1.1.0 stalled on this). Hand the publish to CI and it is configured once:
+
+1. **Create an npm Automation token**: <https://www.npmjs.com/settings/~/tokens> → *Generate New Token* → choose **Automation** (not Publish, not Granular) → scope `read and write` → copy the `npm_…` string.
+   - An Automation token **bypasses 2FA** — that is exactly why CI needs no OTP. It is shown once.
+   - It dies the moment you rotate your npm password or revoke it under the npm security settings; CI then reports `ENEEDAUTH` and you generate a new one.
+2. **Add it as a GitHub repository secret**: repo → *Settings* → *Secrets and variables* → *Actions* → **New repository secret**:
+   - Name must be exactly `NPM_TOKEN` (the workflow hard-codes it)
+   - Value: the `npm_…` string, with no leading/trailing whitespace
+3. **Verify**: repo → *Actions* → **release** → *Run workflow*, put an existing-but-unpublished tag in `tag` (to merely check the configuration, watch it clear the `an NPM_TOKEN secret must exist` step and continue into the suite).
+   - Empty secret: `secret NPM_TOKEN is not set` (that early check fails in ~5 s instead of after the whole suite).
+   - Invalid or expired token: `npm error code ENEEDAUTH` / `E401`.
+4. From then on the release order is: **bump the version and commit → push → `git tag -a v1.1.1 -m …` → `git push origin v1.1.1`**. CI checks out the tag, installs, runs the suite, verifies tag vs `package.json`, and runs `npm publish --provenance`, so the tarball carries `dist.attestations`. **Note**: pushing the tag starts the publish — bump the version before tagging.
+5. After it lands, still run `node bin/release.mjs --finish <version>` locally to move this machine's profile (CI cannot reach your laptop).
+
+> Security: `NPM_TOKEN` lets whoever holds it publish any version as you. Keep it only in this repository's Actions secret — never in a file, never committed, never printed.
+
 
 One command runs the whole release chain (verify → test → bump version → pack and verify → publish → tag → GitHub Release):
 

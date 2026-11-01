@@ -3273,3 +3273,11 @@ A 的落点：`src/message/strangers.js`（`recordStranger/readStrangers/clearSt
 - **profile**：`^1.0.0 → ^1.1.0`、`node_modules` = 1.1.0、锁文件已刷新；`doctor` → `installed 1.1.0`、`host 0.2.1-rc.5 (tested)`、`published up to date`。
 - **注册表延迟**：用户 publish 后首次 `npm view @1.1.0` 仍 404，约 1 分钟后可读 —— 老规矩。
 - 版本号跳过 0.10.0 的设想：既然已经是 1.0.x，新功能走 `1.1.0`（minor），扩展点文档里写的「0.10.0」只是当时的草稿号。
+
+## NPM_TOKEN 配置说明（2026-11-01）
+
+用户问「这个教我一下」。仓库目前 `gh api .../actions/secrets` → `total_count: 0`，一个 secret 都没有。
+
+- `README.md` / `README.en.md` 的「发布出处（provenance）」之后各加一节「配一次 NPM_TOKEN，从此不再点 OTP」：npm token 页 → Generate New Token → **Automation** → 复制 `npm_…` → GitHub 仓库 Settings → Secrets and variables → Actions → New repository secret（名字必须是 `NPM_TOKEN`）→ Actions 里 Run workflow 验证 → 之后发版序变成 bump+push+打 tag。
+- 写清了三类典型报错：空 secret（我们自己加的那步，约 5 秒红）、`ENEEDAUTH`/`E401`（token 失效或未填）、以及 tag 推送即开始发布（所以必须先 bump 再打 tag）。
+- 最后一步不能忘：CI 发完仍要本机 `node bin/release.mjs --finish <version>` 把 profile 依赖升上去。
