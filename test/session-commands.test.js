@@ -495,6 +495,34 @@ test('/memory stale lists only the facts nobody has confirmed in months', async 
   })
 })
 
+test('/keyword stats says which rules exist and how often each fired', async () => {
+  const ROOM = 'room@chatroom'
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/keyword stats', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the stats reply')
+    const stats = fake.outbound[0].text
+    assert.match(stats, /群关键词规则 2 条/)
+    assert.match(stats, /1\. \^打卡\$ → 打卡成功/)
+    assert.match(stats, /命中 0 次 · 还没响过/)
+    assert.match(stats, /一次都没命中过/)
+
+    // A rule that did fire shows its count; the other one stays at zero. The
+    // gate only opens in a group from an allowlisted sender (the third group
+    // policy), so the triggering message has to be a group message.
+    fake.deliver('打卡', 'm2', ALLOWED, ROOM)
+    await waitFor(() => fake.outbound.length > 1, 'the keyword reply')
+    assert.equal(fake.outbound[1].text, '打卡成功')
+    fake.deliver('/keyword stats', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the second stats reply')
+    assert.match(fake.outbound[2].text, /命中 1 次 · 最近一次/)
+
+    fake.deliver('/keyword nope', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the usage reply')
+    assert.match(fake.outbound[3].text, /用法：\/keyword stats/)
+    assert.equal(sessionsOpened.length, 0)
+  }, { groupKeywords: '^打卡$ => 打卡成功\n^没人用$ => x', groupChatEnabled: true })
+})
+
 test('/remindlist numbers the queue and can push one entry back by number', async () => {
   await withPlugin(async ({ fake, sessionsOpened }) => {
     fake.deliver('/remind 2h 喝水', 'm1')

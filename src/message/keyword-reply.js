@@ -19,6 +19,16 @@ export const MAX_KEYWORD_RULES = 50
 const MAX_COOLDOWN_KEYS = 512
 
 const recent = new Map()
+/**
+ * ⑥ 命中计数：哪条规则真的在工作、哪条写了没人用。
+ *
+ * 只记内存里的累计值（进程重启清零），因为它回答的是「这条规则最近有没有被
+ * 触发」，而不是账本数据 —— 落盘反而会让「重置它」变成一件需要解释的事。
+ * 同时记「命中但被冷却吃掉」的次数：这个数字大说明规则写得太宽。
+ */
+const hits = new Map()
+/** 统计表上限：比规则数多得多，但仍然有界。 */
+const MAX_HIT_KEYS = 256
 
 /**
  * @param {string} spec 配置原文，每行 `pattern => reply`。
@@ -70,14 +80,72 @@ export function keywordGate(rules, text, conversationId, { now = Date.now(), coo
   const rule = matchKeywordReply(rules, text)
   if (rule === null) return null
   const key = `${String(conversationId ?? '')}|${rule.source}`
-  const last = recent.get(key) ?? 0
-  if (now - last < cooldownMs) return null
+  // `recent.has` instead of `?? 0`: a rule that has never fired has no cooldown,
+  // and treating "never" as timestamp 0 would make the first hit disappear
+  // whenever the clock happens to be within one window of the epoch (`now`
+  // defaults to Date.now(), but tests and callers may pass any clock).
+  const last = recent.get(key)
+  if (last !== undefined && now - last < cooldownMs) {
+    bumpHits(rule.source, { cooled: true })
+    return null
+  }
   recent.set(key, now)
+  bumpHits(rule.source, {})
   if (recent.size > MAX_COOLDOWN_KEYS) recent.clear()
   return rule
+}
+
+function bumpHits(source, { cooled }) {
+  const entry = hits.get(source) ?? { triggered: 0, cooled: 0, lastAt: 0 }
+  if (cooled === true) entry.cooled += 1
+  else {
+    entry.triggered += 1
+    entry.lastAt = Date.now()
+  }
+  hits.set(source, entry)
+  if (hits.size > MAX_HIT_KEYS) {
+    // Drop the least recently used rule rather than the oldest inserted: a rule
+    // that fired a minute ago is not the one to forget.
+    let oldestSource
+    let oldestAt = Infinity
+    for (const [key, value] of hits) {
+      const at = value.lastAt === 0 ? 0 : value.lastAt
+      if (at < oldestAt) {
+        oldestAt = at
+        oldestSource = key
+      }
+    }
+    if (oldestSource !== undefined) hits.delete(oldestSource)
+  }
 }
 
 /** 测试与重载用：把冷却表整个清掉。 */
 export function resetKeywordCooldowns() {
   recent.clear()
+}
+
+/** 测试用：把命中计数清掉。 */
+export function resetKeywordHits() {
+  hits.clear()
+}
+
+/**
+ * ⑥ `/keyword stats`：把配置里的规则与命中计数并起来，配置里的顺序就是
+ * 输出顺序 —— 没命中的规则也要出现，否则「为什么没有统计」会被误读成
+ * 「这条规则不存在」。
+ *
+ * @param {string} spec 配置原文
+ * @returns {Array<{source: string, reply: string, triggered: number, cooled: number, lastAt: number}>}
+ */
+export function keywordStats(spec, { warn } = {}) {
+  return parseKeywordRules(spec, { warn }).map((rule) => {
+    const entry = hits.get(rule.source) ?? { triggered: 0, cooled: 0, lastAt: 0 }
+    return {
+      source: rule.source,
+      reply: rule.reply,
+      triggered: entry.triggered,
+      cooled: entry.cooled,
+      lastAt: entry.lastAt,
+    }
+  })
 }

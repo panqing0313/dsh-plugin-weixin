@@ -3367,3 +3367,16 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 **坑**：第一版把「按序号推后」的断言写成固定日期（`2026-11-06 09:00`），而测试里的 `now` 是另一天，断言跟着日期飘 —— 改成断言星期几与小时，只有需要「今天 vs 下周」的用例才自带 `now`。
 
 **验证**：`test/scheduler.test.js` 12 条（新增 `周五`、`下周一`、`周天`、`这个周日 15:00`、`下个周三 8点` 五种形态）、`test/session-commands.test.js` 端到端 1 条；全量 **981/981**、`check.mjs` 通过。
+
+### ⑥ `/keyword stats` 关键词命中统计（2026-11-01）
+
+**问题**：群关键词规则写在设置卡里，命中是静默的模板回复。写错正则（大小写、`^$` 锚点、只在群里生效）的表现和「没人发过」完全一样。
+
+**做法**：
+- `src/message/keyword-reply.js`：模块级 `hits` Map 记每条规则 `{triggered, cooled, lastAt}`，`keywordGate` 放行时 `bumpHits(source, {})`、被冷却吃掉时 `bumpHits(source, {cooled: true})`；新增 `keywordStats(spec)`（按配置顺序返回，未命中的规则也在）、`resetKeywordHits()`。
+- `src/index.js`：persona bundle 新增 `keyword` handler，`/keyword stats` 打印每条规则的命中次数与最近一次时间，全部为 0 时附一句排查提示；时间复用 `media-archive.js` 的 `humanTime`（今天/昨天）。
+- `src/sessions.js` 规则 `{ id: 'keyword', pattern: /^\/(?:keyword|关键词)(?:\s+([\S\s]+))?$/i, helpRank: 22 }` + `PERSONA_COMMANDS`；`src/i18n.js` 加 `help.keyword`。
+
+**顺手修掉的一个潜伏 bug**：`keywordGate` 用 `recent.get(key) ?? 0` 判断冷却，把「从未响过」当成时间戳 0。真实时钟下无害（`Date.now()` 远大于一分钟），但任何传入小数值时钟的调用方都会发现**第一次命中被冷却吃掉**。改成 `const last = recent.get(key); if (last !== undefined && now - last < cooldownMs)`。
+
+**验证**：`test/keyword-reply.test.js` 新增 3 条（按规则计数与冷却计数分开、跨群累计、后加的规则从 0 开始）、`test/session-commands.test.js` 端到端 1 条（列表 → 群里打卡触发 → 计数变 1 → 用法提示）；全量 **985/985**。

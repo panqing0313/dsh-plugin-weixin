@@ -4,9 +4,11 @@ import assert from 'node:assert/strict'
 import {
     KEYWORD_COOLDOWN_MS,
     keywordGate,
+    keywordStats,
     matchKeywordReply,
     parseKeywordRules,
     resetKeywordCooldowns,
+    resetKeywordHits,
 } from '../src/message/keyword-reply.js'
 
 test('rules parse line by line; broken lines are skipped, not fatal', () => {
@@ -48,4 +50,40 @@ test('the cooldown lets one reply through per rule per chat, then silences', () 
     const two = parseKeywordRules('^打卡$ => ok\n^签到$ => signed')
     assert.equal(keywordGate(two, '签到', 'c1', { now: t0 + 3000 }).reply, 'signed')
     resetKeywordCooldowns()
+})
+
+test('hits are counted per rule, cooldown swallows are counted separately', () => {
+  resetKeywordHits()
+  resetKeywordCooldowns()
+  const spec = '^打卡$ => 打卡成功\n^帮助$ => 看这里\n^没人用$ => x'
+  const rules = parseKeywordRules(spec)
+  keywordGate(rules, '打卡', 'chat1', { now: 1_000 })
+  keywordGate(rules, '打卡', 'chat1', { now: 30_000 }) // within the 60s cooldown
+  keywordGate(rules, '帮助', 'chat1', { now: 31_000 })
+
+  const stats = keywordStats(spec)
+  assert.deepEqual(stats.map((entry) => [entry.source, entry.triggered, entry.cooled]), [
+    ['^打卡$', 1, 1],
+    ['^帮助$', 1, 0],
+    ['^没人用$', 0, 0],
+  ])
+  // The last one never fired, and says so — that is what makes the command useful.
+  assert.equal(stats[2].lastAt, 0)
+})
+
+test('hits accumulate across chats while the cooldown is per chat', () => {
+  resetKeywordHits()
+  resetKeywordCooldowns()
+  const rules = parseKeywordRules('^打卡$ => ok')
+  keywordGate(rules, '打卡', 'chat1', { now: 1_000 })
+  keywordGate(rules, '打卡', 'chat2', { now: 1_000 })
+  assert.equal(keywordStats('^打卡$ => ok')[0].triggered, 2)
+})
+
+test('rules added later start at zero without losing the others', () => {
+  resetKeywordHits()
+  resetKeywordCooldowns()
+  keywordGate(parseKeywordRules('^a$ => A'), 'a', 'c', { now: 1_000 })
+  const stats = keywordStats('^a$ => A\n^b$ => B')
+  assert.deepEqual(stats.map((entry) => entry.triggered), [1, 0])
 })

@@ -54,7 +54,7 @@ import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './me
 import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { recordStranger } from './message/strangers.js'
 import { renderMemoryMarkdown, writeMemoryExport } from './message/memory-export.js'
-import { keywordGate, parseKeywordRules } from './message/keyword-reply.js'
+import { keywordGate, keywordStats, parseKeywordRules } from './message/keyword-reply.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
 import { AgentBridge } from './agent-bridge.js'
@@ -88,7 +88,7 @@ import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
 import { createHabitCommands, habitDigestLine, habitsList } from './message/habits.js'
-import { createMediaCommands } from './message/media-archive.js'
+import { createMediaCommands, humanTime } from './message/media-archive.js'
 import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
@@ -1876,6 +1876,29 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (result.reason === 'duplicate') return '这条已经记过了，不用再记一遍。'
         if (result.reason === 'cap') return `长期记忆已经存满（${modeConfig().memoryGlobalMaxFacts} 条）。用 /forget 先删掉一些再记。`
         return '没存上，写入记忆文件失败了（详见日志）。'
+      },
+      // ⑥ 群关键词规则配在设置卡里，命中是静默的模板回复 —— 用户看不出哪条
+      //    规则在干活、哪条写错了正则永远不响。这个命令把规则和计数一起摊开。
+      keyword: (arg) => {
+        const action = String(arg ?? '').trim()
+        if (action !== '' && /^(stats|统计|命中)$/i.test(action) === false) {
+          return '用法：/keyword stats（看每条群关键词规则的命中次数）'
+        }
+        const rules = parseKeywordRules(String(withSavedConfig(config).groupKeywords ?? ''), { warn })
+        if (rules.length === 0) {
+          return '还没有配置群关键词规则。设置卡的「群聊」页签里，每行一条：正则 => 回复。'
+        }
+        const stats = keywordStats(String(withSavedConfig(config).groupKeywords ?? ''), { warn })
+        const lines = [`群关键词规则 ${stats.length} 条（命中次数是插件启动以来的累计）：`]
+        for (const [index, entry] of stats.entries()) {
+          // media-archive 的 humanTime 已经在别处用「今天 14:03 / 昨天」这套说法，
+          // 同一个产品里不该有两种「多久以前」。
+          const when = entry.lastAt === 0 ? '还没响过' : `最近一次 ${humanTime(entry.lastAt, { now: Date.now() })}`
+          const cooled = entry.cooled > 0 ? `，另有 ${entry.cooled} 次因为冷却被吞` : ''
+          lines.push(`${index + 1}. ${entry.source} → ${entry.reply.slice(0, 20)}${entry.reply.length > 20 ? '…' : ''}\n   命中 ${entry.triggered} 次${cooled} · ${when}`)
+        }
+        if (stats.every((entry) => entry.triggered === 0)) lines.push('（这些规则一次都没命中过：检查正则大小写、^$ 锚点，以及是不是只在群里生效）')
+        return lines.join('\n')
       },
       import: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」）。'
