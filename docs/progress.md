@@ -3433,3 +3433,22 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
    `session-commands` 用例全超时（消息被当成陌生人拒掉）；
 3. 用 python 按字符串切片替换两个假服务端时，把中间的 `seedAccount()` 辅助函数一起切掉了，报
    `ReferenceError: seedAccount is not defined` 并连带一个「事件循环已结束」的假挂起。
+
+## 发布 1.2.0（2026-11-01）
+
+走的是 CI 发布（`v1.2.0` tag → `.github/workflows/release.yml`），因为本机 npm 登录态过期（`npm whoami` 401），
+而仓库 secret `NPM_TOKEN` 已于 2026-11-01T01:57:47Z 配好。
+
+- 本地 bump（package.json / package-lock 两处 version / `src/client.js` 的 `PLUGIN_VERSION` / README 发布行）
+  → 提交 `ca06f3d chore(release): 1.2.0` → 打 tag `v1.2.0` 并 push。
+- CI run `41273766543`：secret 检查 ✅、`npm ci` ✅、`npm run check` ✅、全量 suite ✅、tag 版本比对 ✅、
+  `npm publish --provenance` ✅（带 provenance）。**只有最后一步「等注册表可见」失败**：
+  脚本 10×10s 轮询 `npm view` 期间 registry 还没回 1.2.0，`::error::the registry never served 1.2.0`。
+  事后本地立刻能读到，说明只是注册表延迟超过了 CI 的 100 秒窗口 —— 该步骤的等待时间偏短，下次可以放宽。
+- 核验：`dist-tags.latest = 1.2.0`、`dist.shasum 064c77513589d826fc2c7f1f2405937b4d0cc188`、
+  `dist.integrity sha512-MYeqhGf2waaNFHCpn6UyoDWJWXI+CJqrKa6zGInHFpl9NjgfFCQMF/tASJp9N+ABtblhDMgnwSplT6VbpIAXqA==`、
+  `gitHead ca06f3d45e235395ed5dd2aea15a22eb2a3cfd5c`（= 本地 HEAD）。
+- `node bin/release.mjs --finish 1.2.0`：注册表可见 ✅、push main+tag ✅、GitHub release 创建 ✅、
+  profile `^1.1.0 → ^1.2.0` 且锁文件刷新 ✅。
+- `node bin/doctor.mjs` → `published version up to date (1.2.0)`、`host 0.2.1-rc.5 (tested)`、13 项检查 0 问题。
+- 兼容表：`1.2.0` 已装进 profile，**等重启复核**后再记一行真机验证。
