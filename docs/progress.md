@@ -3451,4 +3451,4 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 - `node bin/release.mjs --finish 1.2.0`：注册表可见 ✅、push main+tag ✅、GitHub release 创建 ✅、
   profile `^1.1.0 → ^1.2.0` 且锁文件刷新 ✅。
 - `node bin/doctor.mjs` → `published version up to date (1.2.0)`、`host 0.2.1-rc.5 (tested)`、13 项检查 0 问题。
-- 兼容表：`1.2.0` 已装进 profile，**等重启复核**后再记一行真机验证。
+- 兼容表：`1.2.0` 已装进 profile，2026-11-01 用户重启复核通过（「已验证」），已记入 `docs/compatibility.md` 真机验证行。
