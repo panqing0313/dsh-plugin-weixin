@@ -14,6 +14,7 @@
 import { readConvMemory, readGlobalMemory } from '../memory.js'
 import { readJournalRange } from './chat-export.js'
 import { habitDigestLine, habitsList } from './habits.js'
+import { staleDigestLine, staleFacts } from './memory-stale.js'
 import { buildDigestPrompt } from './reports.js'
 
 /**
@@ -24,10 +25,11 @@ import { buildDigestPrompt } from './reports.js'
  *   now?: number,
  *   warn?: (line: string) => void,
  *   day: string,
+ *   staleDays?: number,
  * }} input
  * @returns {{ prompt: string, total: { in: number, out: number, all: number }, conversations: Array<{ conversationId: string, all: number }> }}
  */
-export function composeDigest({ stateRoot, accountId, conversationId, now = Date.now(), warn = () => {}, day }) {
+export function composeDigest({ stateRoot, accountId, conversationId, now = Date.now(), warn = () => {}, day, staleDays }) {
   const entries = readJournalRange(stateRoot, { accountId, conversationId, days: 1, now })
   const total = { in: 0, out: 0, all: entries.length }
   const perConversation = new Map()
@@ -45,6 +47,9 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
   const events = (global.events ?? []).filter((event) => event.done !== true)
   const conv = readConvMemory(stateRoot, accountId, conversationId, { warn })
   const habits = habitDigestLine(habitsList(stateRoot, accountId, { warn }), { today: day })
+  // ③ One line, and only when something actually went stale: a digest that ends
+  // with a chore list every day is a digest nobody reads.
+  const stale = staleDigestLine(staleFacts(global.facts ?? [], { now, staleDays }))
   const prompt = buildDigestPrompt({
     day,
     total,
@@ -52,6 +57,7 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
     events,
     summary: conv.summary,
     ...(habits === '' ? {} : { habits }),
+    ...(stale === '' ? {} : { stale }),
   })
   return { prompt, total, conversations }
 }

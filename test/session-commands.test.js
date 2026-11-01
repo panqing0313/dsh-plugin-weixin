@@ -474,6 +474,27 @@ test('/mode by English id also works (girlfriend)', async () => {
   })
 })
 
+test('/memory stale lists only the facts nobody has confirmed in months', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/remember 我对花生过敏', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the stored reply')
+
+    // Backdate one fact and leave the other fresh: only the old one is stale.
+    const file = path.join(root, 'memory', 'global-bot1.json')
+    const store = JSON.parse(fs.readFileSync(file, 'utf8'))
+    store.facts.push({ text: '我住在杭州', at: Date.now() - 200 * 86_400_000, updatedAt: Date.now() - 200 * 86_400_000, weight: 1, origin: '/remember' })
+    fs.writeFileSync(file, JSON.stringify(store))
+
+    fake.deliver('/memory stale', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the stale report')
+    assert.match(fake.outbound[1].text, /超过 90 天没确认过的记忆，共 1 条/)
+    assert.match(fake.outbound[1].text, /2\. 我住在杭州（200 天没提起了）/)
+    assert.doesNotMatch(fake.outbound[1].text, /我对花生过敏（\d+ 天没提起/)
+    assert.match(fake.outbound[1].text, /\/forget <编号> 删掉/)
+    assert.equal(sessionsOpened.length, 0, 'a memory check never spends a model turn')
+  })
+})
+
 test('/remember stores a fact, /memory shows it, /forget removes it', async () => {
   await withPlugin(async ({ root, fake, sessionsOpened }) => {
     fake.deliver('/remember', 'm1')

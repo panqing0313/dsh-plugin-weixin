@@ -92,6 +92,7 @@ import { createMediaCommands } from './message/media-archive.js'
 import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
+import { formatStaleReport, staleDigestLine, staleFacts } from './message/memory-stale.js'
 import { MemoryConflictQueue, conflictReply, findMemoryConflict, parseConflictAnswer } from './message/memory-conflict.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -212,6 +213,7 @@ export const Config = z.object({
   memorySummaryTurns: z.number().min(1).default(10).description(
     'How often (in agent turns per conversation) the background summarizer rewrites the conversation summary. The summarizer runs as a hidden side turn after a real turn finishes; it never sends anything to WeChat. 1 disables nothing — set memoryEnabled false for that.',
   ),
+  memoryStaleDays: z.number().min(7).max(3650).default(90).description('How many days a fact may go unconfirmed before /memory stale and the daily digest flag it. Rewriting a fact (a correction) counts as confirming it.'),
   memoryGlobalMaxFacts: z.number().min(1).default(30).description('How many global /remember facts to keep per account. Full refuses new facts instead of silently dropping the oldest — delete some with /forget.'),
   memoryConvMaxChars: z.number().min(1).default(1200).description('Character budget for the conversation summary in the injected memory block.'),
   memoryGlobalMaxTokens: z.number().min(0).default(0).description('Optional cap on the long-term memory block measured in estimated tokens (0 = count characters only). One Chinese character is about one token, four latin characters about one; set this when routing to a model with a tight window.'),
@@ -792,7 +794,15 @@ export function apply(ctx, config) {
             // Same builder the manual `/digest` uses: one definition of "what
             // today looked like", so the scheduled and on-demand reports can
             // never drift apart.
-            prompt = composeDigest({ stateRoot, accountId, conversationId, now, warn, day }).prompt
+            prompt = composeDigest({
+              stateRoot,
+              accountId,
+              conversationId,
+              now,
+              warn,
+              day,
+              staleDays: Number(effectiveConfig.current.memoryStaleDays ?? 90),
+            }).prompt
           }
 
           const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: kind === 'review' ? 'wx-rev-' : 'wx-dig-', route: sideRoute('report') })
@@ -1699,7 +1709,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       digest: async () => {
         const now = Date.now()
         const day = formatStamp(now)
-        const { prompt, total } = composeDigest({ stateRoot, accountId, conversationId, now, warn, day })
+        const { prompt, total } = composeDigest({
+          stateRoot,
+          accountId,
+          conversationId,
+          now,
+          warn,
+          day,
+          staleDays: Number(effectiveConfig.current.memoryStaleDays ?? 90),
+        })
         if (total.all === 0) return '今天还没有消息流水，日报没什么可写的。'
         const result = await bridge.summarize({ conversationId, accountId, prompt, sessionPrefix: 'wx-dig-', route: sideRoute?.('report') })
         if (result === undefined) return '当前有对话在跑，等这轮结束再试 /digest。'
@@ -1868,6 +1886,16 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         // /memory export (导出): the operator's right to carry what it knows.
         // Same shape as /memory, rendered as a document; a long one lands in
         // exports/ and rides the attachment path like /export does.
+        // /memory stale (过期 / 核对): which facts have not been reconfirmed in
+        // a long while. Read-only — corrections still go through /remember and
+        // /forget, the two places memory is allowed to change.
+        if (/^(stale|过期|核对)$/i.test(sub)) {
+          const report = staleFacts(store.facts, {
+            now: Date.now(),
+            staleDays: Number(modeConfig().memoryStaleDays ?? 90),
+          })
+          return formatStaleReport(report, { total: store.facts.length })
+        }
         if (/^(export|导出)$/i.test(sub)) {
           const markdown = renderMemoryMarkdown({
             store,

@@ -3324,3 +3324,17 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 4. 测试里 `fake.outbound` 的索引是硬编码的，多了一条回复之后 `> 5`、`[6]` 全部偏移。
 
 **验证**：`test/memory-conflict.test.js` 8 条、`test/session-commands.test.js` 新增端到端 2 条；全量 **960/960**、`check.mjs` 224 文件通过。
+
+### ③ 记忆过期自检（2026-11-01）
+
+**问题**：长期记忆只增不减，半年后用户在做别的事、住在别处，机器人还在用旧事实推理；用户只会觉得「记性变差」，不知道哪些条目已经过时。
+
+**做法**：
+- 新增 `src/message/memory-stale.js`：`MIN_STALE_DAYS = 7`、`DEFAULT_STALE_DAYS = 90`、`MAX_STALE_LIST = 30`；`staleFacts(facts, {now, staleDays})` 按 `updatedAt || at` 算天数，最久没动的排前面，无时间戳归 `unknown`（不算过期）；`formatStaleReport` 与 `staleDigestLine` 共用同一份数据。
+- `src/index.js`：`/memory stale`（也认 `过期` / `核对`）分支；schema 新增 `memoryStaleDays`（min 7 / max 3650 / default 90）；两处 `composeDigest` 传 `staleDays`。
+- `src/config-remote.js`：设置卡新增「记忆过期天数」字段。
+- `src/message/digest.js` / `src/message/reports.js`：日报提示词多一条可选的 `stale` 行，为空时不出现。
+
+**坑**：阈值夹取第一版写成 `Number(staleDays) || DEFAULT`，`0` 会被 `||` 当成假值回落到 90，测试期望是夹到最小 7 天；改成「只有非数字才回落默认值，其余由 `Math.max(MIN, …)` 夹」。
+
+**验证**：`test/memory-stale.test.js` 6 条、`test/session-commands.test.js` 端到端 1 条；全量 **967/967**、`check.mjs` 通过。
