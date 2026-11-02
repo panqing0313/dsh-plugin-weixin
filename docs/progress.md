@@ -3612,3 +3612,39 @@ chatgpt-on-wechat 一类项目里最被需要的能力，而这个插件此前�
 深拷贝、已过钟点顺延、加法安装、重复安装无新增、群聊包是 mention 且不主动开口）；
 `test/client-remote.test.js` 再加一条源码形状用例断言 presets 在 index 之前渲染。
 全量 **1054/1054**、40.2s；`check.mjs` → `checked 247 files`。
+
+## 发布 1.3.0（2026-11-03）
+
+1.3.0 的三件事（知识库 `4687cf4`、上手清单 `d0da4a5`、三个内置模板包 `6e2c560`）走 CI 发布：
+`docs: 1.3.0` 提交 `5567bd1` bump 版本并打 tag `v1.3.0`，`release.yml` 用仓库 secret
+`NPM_TOKEN` 带 provenance 发布成功（第一次 tag 指向的提交 CI 是红的，见下）。
+
+### CI 抓到三个真问题（都已修，四个提交）
+
+- `bcc1ca6`：两条知识库 e2e 等首条 prompt 只给 5 秒，负载高的 runner 上不够 → 放宽到 20 秒。
+- `729bbe0` / `8ad052d` / `c7fdfa8`：`bin/onboard.mjs` 在**没有 DSH 的机器**上退出 1。
+  根因不在脚本的渲染，而在 `src/onboarding.js:188` 的 `complete` 把 `host` 也算进
+  「必须 done」，而 host 在未测宿主上永远不是 done。两处一起改：host 步骤从
+  `hostTested === false ? 'todo'` 改成 `'note'`（操作者改不了宿主版本），
+  `complete` 只要求 `account` + `allowlist`。
+- `d98e763`：两条知识库 e2e 在无宿主包时永远拿不到 prompt，只是等满超时。
+  它们建的是真 agent bridge，所以改用 `hostTest(...)`（同文件其它回合路径用例的写法），
+  无宿主时 skip。
+
+改完 main CI run `41482241388` 绿；重打 tag 指向 `d98e763`，release run `41482605271` 成功。
+
+### 核验
+
+- `dist-tags.latest = 1.3.0`、`dist.shasum 0cb76ebfdc25f75187df3e550e5bf1310fb47eb9`、
+  `dist.integrity sha512-6H3LZqumD/M6W54ZF0HP+vkqu7aPGWpk4vXq5FwVIR0/c8Heoqu3sYo7BDwtBjkzomC2alYuiapB+Hd8A2Fncg==`、
+  `gitHead d98e763613541de2684f78536b63c66a79f3ddca`（= `v1.3.0` 指向）。
+- profile：依赖 `^1.2.1 → ^1.3.0`，`node_modules/dsh-plugin-weixin` 1.3.0，锁文件刷新。
+- `doctor` → `installed version 1.3.0`、`host app host 0.2.1-rc.5 (tested)`、
+  `published version up to date (1.3.0)`、备份 3 份。
+
+### 教训
+
+- **`complete` 的口径要想清楚「谁能让它变 done」**。宿主版本不是操作者在插件里能改的，
+  把它算进必需项，等于在一台没装 DSH 的机器上永远说自己没准备好。
+- **无宿主的用例要用 `hostTest`**。`test/host-packages.mjs` 的 `hostOnlySkip` 就是为这个
+  存在的；裸 `test()` 加长超时只是把「永远失败」变成「慢着失败」。
