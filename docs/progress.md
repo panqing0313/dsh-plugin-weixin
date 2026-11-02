@@ -3648,3 +3648,19 @@ chatgpt-on-wechat 一类项目里最被需要的能力，而这个插件此前�
   把它算进必需项，等于在一台没装 DSH 的机器上永远说自己没准备好。
 - **无宿主的用例要用 `hostTest`**。`test/host-packages.mjs` 的 `hostOnlySkip` 就是为这个
   存在的；裸 `test()` 加长超时只是把「永远失败」变成「慢着失败」。
+
+## issue #9：过期的回执票不再白费重试（2026-11-03）
+
+用户在 issue #9 指出：iLink 的回执票（`context_token`）只有十分钟有效，模型思考跨过窗口后
+最后一句会被 `prepare failed` 丢掉。代码里没有针对这个窗口的处理。
+
+- `src/message/outbox.js` 新增 `CONTEXT_TOKEN_TTL_MS = 8 * 60_000` 与
+  `tokenExpired(item, at)`；`flush()` 在最前面判断，带票且超过 8 分钟的条目不调传输层、
+  不累加 attempts，`lastError` 写 `context token expired (...)` 后停靠（仍保留在队列里，
+  `/outbox drop` 可删）。
+- 不带票的条目不受影响（走会话路径 / typing-ticket 兜底，没有这个窗口）。
+- 测试 `test/outbox-token-ttl.test.js` 4 条：TTL 边界、无票/无创建时间不误判、
+  过期块被停靠且传输层未被调用、新票正常发出。全量 1059/1059。
+
+为什么不是十分钟：留两分钟给时钟偏差与发送本身。为什么不是「自动换新票」：票由服务端随
+入站消息签发，插件拿不到第二张，只能选择发或停靠。

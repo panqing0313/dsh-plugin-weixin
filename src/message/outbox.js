@@ -25,6 +25,21 @@ import path from 'node:path'
 import { atomicWriteJson, readJsonFile } from '../atomic.js'
 import fs from 'node:fs'
 
+/**
+ * How long an inbound `context_token` is worth echoing.
+ *
+ * iLink issues the token with a ten-minute window (issue #9: a message received
+ * at 15:44:25 was still accepted at 15:54:21 and refused at 15:54:37). The token
+ * is what routes the reply; once it is too old the server answers
+ * `prepare failed`, so retrying the same item can never succeed — it would just
+ * burn the eight attempts and then park a message we know cannot be delivered.
+ *
+ * Eight minutes leaves a two-minute margin for clock skew and the send itself.
+ * An item without a token is not subject to this: it sends on the conversation
+ * path (or the typing-ticket fallback), which has no such window.
+ */
+export const CONTEXT_TOKEN_TTL_MS = 8 * 60_000
+
 /** Attempts before an item is parked (kept, but no longer retried by the timer). */
 export const MAX_ATTEMPTS = 8
 /** First retry delay, doubling per attempt, capped. */
@@ -52,6 +67,23 @@ export function readOutbox(stateRoot, { warn = () => {} } = {}) {
     fallback: () => ({ items: [] }),
     migrate: (parsed) => ({ items: Array.isArray(parsed.items) ? parsed.items.filter((item) => item && typeof item.text === 'string' && typeof item.conversationId === 'string') : [] }),
   })
+}
+
+/**
+ * Would sending this item with its stored context token be refused outright?
+ *
+ * Only items that actually carry a token are affected; the age is measured from
+ * when it was queued, which is a slightly conservative stand-in for when the
+ * inbound message arrived (the reply is written seconds later, never earlier).
+ *
+ * @param {{ contextToken?: string, createdAt?: number }} item
+ * @param {number} at
+ */
+export function tokenExpired(item, at = Date.now()) {
+  if (typeof item?.contextToken !== 'string' || item.contextToken === '') return false
+  const born = Number(item.createdAt ?? 0)
+  if (!Number.isFinite(born) || born <= 0) return false
+  return at - born >= CONTEXT_TOKEN_TTL_MS
 }
 
 /** @param {number} attempts */
@@ -127,6 +159,16 @@ export function createOutbox({ stateRoot, transportFor, warn = () => {}, log = (
       for (const item of queue) {
         if (blocked) {
           remaining.push(item)
+          continue
+        }
+        // A reply riding an expired context token cannot be delivered by this
+        // server (issue #9). Park it with a reason instead of retrying a
+        // guaranteed failure — the operator sees why in /outbox and can decide.
+        if (tokenExpired(item, at)) {
+          item.attempts = MAX_ATTEMPTS
+          item.lastError = 'context token expired (iLink accepts a reply for ten minutes after the message arrives)'
+          remaining.push(item)
+          blocked = false
           continue
         }
         if (item.attempts >= MAX_ATTEMPTS) {
