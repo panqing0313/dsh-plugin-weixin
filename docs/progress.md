@@ -3594,3 +3594,21 @@ chatgpt-on-wechat 一类项目里最被需要的能力，而这个插件此前�
    的主题 token 守卫当场抓住 → 改用真实的 `C.success`/`C.warn`。
 
 全量两次 1046/1046、40.4s / 40.4s；`node bin/check.mjs` → `checked 244 files`。
+
+## 1.3.0-C 三个内置模板包（2026-11-03）
+
+远程索引要求先填对一个 https 地址，这对「刚装上」的人是死路。所以把三个包直接做进插件：
+`src/pack-presets.js` 导出 `PACK_PRESETS`（贴心陪伴 / 办事助手 / 群聊主持）、`listPresetPacks()`、
+`presetPack(id)`（深拷贝）、`normalizePackForImport(pack, {now})`。
+
+- 安装走原有 `importPack`：同一白名单、同一上限、同一「只增不删」语义，没有第二条迁移路径。
+- `normalizePackForImport` 解决一个真实的第一印象问题：已经过去的每日钟点（如 23:00 装
+  「每天 22:30 晚安」）改成「明天 HH:MM」，否则一装就弹。
+- 新增 remote `packPresets()` / `packInstallPreset({ id })`、对应 descriptor 与「个性化」页
+  顶部的卡片（在远程索引之上——先有内置，才谈分发）。
+- 群聊主持包特意 `proactiveEnabled: false`：群里活跃 + 按时私聊，是最快被拉黑的一种。
+
+测试 `test/pack-presets.test.js` 7 条（三个包结构合法且不含安全字段、清单只带展示字段、
+深拷贝、已过钟点顺延、加法安装、重复安装无新增、群聊包是 mention 且不主动开口）；
+`test/client-remote.test.js` 再加一条源码形状用例断言 presets 在 index 之前渲染。
+全量 **1054/1054**、40.2s；`check.mjs` → `checked 247 files`。

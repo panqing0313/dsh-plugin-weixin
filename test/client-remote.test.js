@@ -268,7 +268,9 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/packExport',
         'weixin/packImport',
         'weixin/packIndex',
+        'weixin/packInstallPreset',
         'weixin/packInstallRemote',
+        'weixin/packPresets',
         'weixin/pause',
         'weixin/personaAccountDefaultSet',
         'weixin/personaDefaultSet',
@@ -482,6 +484,20 @@ test('the card declares the services it reads, including ones it does not own', 
     declared.includes('remote.directoryPicker'),
     'the host chooser is unreachable unless remote.directoryPicker is declared',
   )
+})
+
+test('the persona tab offers the three built-in packs before any index url is set', () => {
+  const source = fs.readFileSync(CARD_PATH, 'utf8')
+  // The presets block must exist, call its own remote (not the index), and offer install.
+  assert.match(source, /ctx\.remote\.weixin\.packPresets\(\)/)
+  assert.match(source, /ctx\.remote\.weixin\.packInstallPreset\(\{ id: preset\.id \}\)/)
+  assert.match(source, /preset\.tagline/)
+  // It must sit BEFORE the remote index block: the first five minutes cannot
+  // depend on a third-party url.
+  const presetAt = source.indexOf('.packPresets()')
+  const indexAt = source.indexOf('.packIndex()')
+  assert.ok(presetAt !== -1 && indexAt !== -1)
+  assert.ok(presetAt < indexAt, 'the built-in presets must render before the remote index')
 })
 
 test('the card styles itself with host tokens, not hardcoded colors', () => {

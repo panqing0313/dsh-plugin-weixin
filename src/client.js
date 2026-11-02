@@ -311,6 +311,27 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/packPresets`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packPresets",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packPresets:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/packInstallPreset`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "packInstallPreset",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/packInstallPreset:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packInstallPreset:result`, create: _statusResult },
+				},
+
+				{
 					id: `${PKG}#weixin/personaOverview`,
 					service: "weixinLoginController",
 					namespace: "weixin",

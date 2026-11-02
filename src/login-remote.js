@@ -819,6 +819,25 @@ export class WeixinLoginController extends TypertRemoteService {
         return { available: true, url, packs };
     }
 
+    /** The three packs that ship with the plugin — no index url needed. */
+    async packPresets() {
+        const { listPresetPacks } = await import("./pack-presets.js");
+        return { presets: listPresetPacks() };
+    }
+
+    /**
+     * Install one built-in pack. Same validator as any other import, plus one
+     * adjustment: a daily subscription whose clock already passed today is moved
+     * to tomorrow, so installing 「每天 22:30 晚安」 at 23:00 does not send it at once.
+     */
+    async packInstallPreset(options) {
+        const id = String(options?.id ?? "").trim();
+        const { presetPack, normalizePackForImport } = await import("./pack-presets.js");
+        const pack = presetPack(id);
+        if (pack === undefined) throw new RemoteError("bad_preset", "没有这个内置模板", {});
+        return this.packImport({ pack: normalizePackForImport(pack) });
+    }
+
     /** Fetch one pack from its index url and import it through the same validator. */
     async packInstallRemote(options) {
         const url = String(options?.url ?? "").trim();
@@ -1176,4 +1195,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

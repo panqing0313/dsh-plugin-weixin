@@ -1558,6 +1558,52 @@ window.__ModuleLoader__.load({
 						createElement("button", { onClick: importPack, disabled: busy || packText.trim() === "", style: buttonStyleFor(busy || packText.trim() === "") }, t("Import pack", "导入人设包"))),
 					createElement("textarea", { value: packText, onChange: (e) => setPackText(e.target.value), placeholder: t("Export above, or paste a pack here and press Import.", "先点导出，或把要导入的人设包粘贴到这里再点导入。"), style: { ...textareaStyle, minHeight: 64 } }),
 					createElement("p", { style: captionStyle }, t("A pack carries your custom modes only. Importing adds modes; it never overwrites one you already have.", "人设包只包含自定义模式。导入只新增，不会覆盖已有的模式。"))),
+				// The three packs that ship with the plugin. They are the reason a
+				// brand-new install can change its voice without configuring an index
+				// url first — the remote index below is for people who distribute
+				// their own templates, not for the first five minutes.
+				(() => {
+					const [presets, setPresets] = react.useState(null);
+					const [presetNotice, setPresetNotice] = react.useState("");
+					const [presetBusy, setPresetBusy] = react.useState(false);
+					react.useEffect(() => {
+						let live = true;
+						callRemote(() => ctx.remote.weixin.packPresets())
+							.then((res) => { if (live) setPresets(Array.isArray(res?.presets) ? res.presets : []); })
+							.catch(() => { if (live) setPresets([]); });
+						return () => { live = false; };
+					}, []);
+					const installPreset = async (preset) => {
+						setPresetBusy(true);
+						setPresetNotice("");
+						try {
+							const result = await callRemote(() => ctx.remote.weixin.packInstallPreset({ id: preset.id }));
+							const modes = result?.modes?.added?.length ?? 0;
+							const subs = result?.subscriptions?.added?.length ?? 0;
+							setPresetNotice(t(`Installed “${preset.name}” — ${modes} mode(s), ${subs} reminder(s).`, `已安装「${preset.name}」——新增 ${modes} 个模式、${subs} 条提醒。`));
+							await load();
+						} catch (e) { setPresetNotice(String(e?.message ?? e)); } finally { setPresetBusy(false); }
+					};
+					return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 } },
+						createElement("p", { style: { ...captionStyle, margin: 0 } }, t("Start from a template: a voice, a pace and a few reminders. Importing adds; it never overwrites what you already have.", "从一个模板开始：一种说话的样子、一套节奏、几条提醒。导入只新增，不会覆盖你已经有的东西。")),
+						presets === null ? createElement("p", { style: captionStyle }, t("Loading…", "读取中…"))
+							: presets.map((preset) => createElement("div", {
+								key: preset.id,
+								className: "weixin-row",
+								style: {
+									display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+									padding: "8px 10px", border: `1px solid ${C.border}`,
+									borderRadius: RADIUS.control, background: C.surfaceSunken,
+								},
+							},
+								createElement("div", { style: { display: "flex", flexDirection: "column", gap: 2, flex: "1 1 200px" } },
+									createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary } }, preset.name),
+									createElement("span", { style: { fontSize: 12, color: C.labelSecondary, overflowWrap: "anywhere" } }, preset.tagline),
+									createElement("span", { style: { fontSize: 11, color: C.labelTertiary } }, t(`${preset.modes} mode(s) · ${preset.subscriptions} reminder(s)`, `${preset.modes} 个模式 · ${preset.subscriptions} 条提醒`))),
+								createElement("button", { onClick: () => installPreset(preset), disabled: presetBusy, style: buttonStyleFor(presetBusy) },
+									t("Install", "安装")))),
+						presetNotice ? createElement("p", { style: { ...captionStyle, margin: 0 } }, presetNotice) : null);
+				})(),
 				// Remote pack index: the operator points packsIndexUrl at a JSON
 				// list; fetching is manual (a button, not on mount) so merely
 				// opening the tab never phones a third-party host.
