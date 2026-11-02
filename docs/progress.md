@@ -3523,3 +3523,10 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 - `node bin/doctor.mjs` → `installed version 1.2.1`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.2.1)`。
 - 兼容表：`1.2.1` 只改了并发度、轮询间隔与测试/CI 等待，没有新增界面或命令；
   仍需用户重启后确认一次，再决定是否单独记一行真机验证。
+
+## 1.2.1 真机确认（2026-11-02）
+
+用户重启后确认运行正常（「重启了」）。`1.2.1` 只改并发度与事件轮询间隔，界面、命令、配置项都没有变化，
+所以兼容表新增一行 `1.2.1 / 0.2.1-rc.5` 并写明复核范围；宿主版本仍是 `0.2.1-rc.5`，
+`src/host-compat.js` 的 `TESTED_HOSTS` 因此不动（仍是 `['0.2.1-rc.3', '0.2.1-rc.5']`）。
+`test/host-compat.test.js` 5/5，`node bin/check.mjs` 通过。
