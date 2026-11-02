@@ -237,6 +237,15 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/onboarding`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "onboarding",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/onboarding:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/contacts`,
 					service: "weixinLoginController",
 					namespace: "weixin",

@@ -32,6 +32,7 @@
     "test": "node --import ./test/isolate-host-state.mjs --test \"test/**/*.test.js\"",
     "test:watch": "node --import ./test/isolate-host-state.mjs --test --watch \"test/**/*.test.js\"",
     "doctor": "node bin/doctor.mjs",
+    "onboard": "node bin/onboard.mjs",
     "check": "node bin/check.mjs",
     "vendor": "node bin/vendor-manifest.mjs",
     "i18n": "node bin/i18n-report.mjs",

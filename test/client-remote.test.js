@@ -261,6 +261,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/memoryFactRemove',
         'weixin/memoryProfileSave',
         'weixin/metrics',
+        'weixin/onboarding',
         'weixin/outbox',
         'weixin/outboxDrop',
         'weixin/outboxRetry',
@@ -928,4 +929,28 @@ test('the remote pack index is wired end to end, manually fetched', () => {
   assert.match(card, /ctx\.remote\.weixin\.packIndex\(\)/)
   assert.match(card, /ctx\.remote\.weixin\.packInstallRemote\(\{ url: pack\.url \}\)/)
   assert.match(card, /t\("Load pack index", "获取模板索引"\)/, 'fetching is a button, never on mount')
+})
+
+test('the getting-started tab renders the host checklist and can jump to another tab', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  // The decision "is this set up?" lives in the host (`src/onboarding.js`) and is
+  // unit-tested there; the card must not re-derive it from config reads.
+  assert.match(card, /function OnboardingSection\(\{ ctx, t, onGoTo \}\)/)
+  assert.match(card, /ctx\.remote\.weixin\.onboarding\(\)/)
+  assert.match(card, /\{ id: "start", label: t\("Getting started", "上手"\)/)
+  // It is the first tab: a fresh install should land on the checklist, not on a
+  // half-filled account form.
+  const tabsAt = card.indexOf('const TABS = [')
+  const startAt = card.indexOf('id: "start"', tabsAt)
+  const accountAt = card.indexOf('id: "account"', tabsAt)
+  assert.ok(startAt > tabsAt && startAt < accountAt, 'the checklist tab comes first')
+  // Every state the host can report has a visual, and the two switches the
+  // checklist depends on are the ones the host actually sends.
+  for (const state of ['done', 'todo', 'blocked', 'note']) {
+    assert.ok(card.includes(`step.state === "${state}"`) || card.includes(`stepState === "${state}"`), `no rendering for ${state}`)
+  }
+  assert.match(card, /const goToTab = \(id\) =>/)
+  const host = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'login-remote.js'), 'utf8')
+  assert.match(host, /async onboarding\(\)/)
+  assert.match(host, /buildOnboardingChecklist\(\{/)
 })

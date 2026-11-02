@@ -243,6 +243,17 @@ function fakeHost(script = []) {
       calls.status += 1
       return { accounts: calls.accounts, stateDir: '/tmp', pendingLogin: true, sessionExpired: false }
     },
+    // The getting-started tab is the first tab, so it mounts with the card and
+    // calls this immediately. It must answer, or an undeclared/failing method
+    // turns into an error panel on every unrelated assertion in this file.
+    async onboarding() {
+      return {
+        steps: [{ id: 'account', title: '登录一个微信账号', titleEn: 'Log in', state: 'todo', action: 'login', detail: '还没有账号。', detailEn: 'No account yet.', why: '只能你本人做。', whyEn: 'Only you can.' }],
+        done: 0,
+        total: 1,
+        complete: false,
+      }
+    },
     async cancel() {
       calls.cancel += 1
     },
@@ -452,6 +463,12 @@ async function mountCard(remote, options = {}) {
       assert.ok(sandbox.document, 'mount the card with { browser: true } to have a document')
       sandbox.document.visibilityState = state
     },
+    /** Click the tab whose label contains `text` (the login form lives on the 微信账号 tab). */
+    async openTab(text) {
+      const button = findButton(hooks.flush(), text)
+      await button.props.onClick()
+      hooks.flush()
+    },
     /** Click a button by its label, then let the resulting work settle. */
     async click(text) {
       const button = findButton(hooks.flush(), text)
@@ -487,6 +504,8 @@ test('the poll loop polls the session it just started, not the null it started w
   const host = fakeHost([{ status: 'wait' }, { status: 'wait' }])
   const card = await mountCard(host)
 
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   // Two waiting polls: this case is about which session is named, not about
   // reaching a terminal status.
@@ -518,6 +537,8 @@ test('one long poll runs at a time, and the loop stops at a terminal status', as
   }
 
   const card = await mountCard(host)
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   await card.drain()
 
@@ -537,6 +558,8 @@ test('a login the host no longer holds is reported instead of being swallowed', 
   const host = fakeHost([Object.assign(new Error('没有进行中的登录，请重新扫码'), { code: 'no_login' })])
   const card = await mountCard(host)
 
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   await card.drain()
 
@@ -556,6 +579,8 @@ test('a refused re-scan explains the phone-side unbind instead of looking like a
   ])
   const card = await mountCard(host)
 
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   await card.drain()
 
@@ -573,6 +598,8 @@ test('a transient poll failure keeps the loop alive', async () => {
   const host = fakeHost([new Error('socket hang up'), { status: 'wait' }])
   const card = await mountCard(host)
 
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   // The error is followed by another scheduled poll, so pump rather than drain.
   await card.pump(2)
@@ -596,6 +623,8 @@ test('a missing QR image is explained instead of rendered as a broken image', as
   const host = fakeHost()
   const card = await mountCard(host)
 
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   await card.pump(1)
 
@@ -648,9 +677,14 @@ test('the status card refreshes itself instead of going stale while mounted', as
   // listener to fire: the effect installed neither.
   const host = fakeHost()
   const card = await mountCard(host, { browser: true })
-
-  // Mounted: one read, and a timer that will read again on its own.
-  assert.equal(host.calls.status, 1, 'mounting reads the status once')
+  // The card now opens on the getting-started tab, and the account component
+  // that owns the status loop only mounts when its own tab is opened. Open it,
+  // then treat that as the mount point: every count below is relative to it, so
+  // the assertion stays about the refresh loop rather than about tab order.
+  await card.openTab('微信账号')
+  await settle()
+  const mountStatus = host.calls.status
+  assert.ok(mountStatus >= 1, 'opening the account tab reads the status')
   // The refresh is the only non-zero timer a freshly mounted card owns.
   const statusTimer = () => card.timers.find((t) => t.ms > 0)
   assert.ok(statusTimer(), 'a mounted card must schedule its own status refresh')
@@ -665,12 +699,12 @@ test('the status card refreshes itself instead of going stale while mounted', as
 
   await statusTimer().fn()
   await settle()
-  assert.equal(host.calls.status, 2, 'the interval must re-read the status')
+  assert.equal(host.calls.status, mountStatus + 1, 'the interval must re-read the status')
   assert.ok(statusTimer(), 'the refresh must keep scheduling itself')
 
   // Coming back to the window is exactly when a stale card gets looked at.
   card.fire('focus')
-  assert.equal(host.calls.status, 3, 'regaining focus must refresh immediately')
+  assert.equal(host.calls.status, mountStatus + 2, 'regaining focus must refresh immediately')
   await settle()
 
   // ... and so is the tab becoming visible again. Going hidden is not a refresh
@@ -678,10 +712,10 @@ test('the status card refreshes itself instead of going stale while mounted', as
   card.setVisibility('hidden')
   card.fire('visibilitychange')
   await settle()
-  assert.equal(host.calls.status, 3, 'hiding the card is not a reason to read')
+  assert.equal(host.calls.status, mountStatus + 2, 'hiding the card is not a reason to read')
   card.setVisibility('visible')
   card.fire('visibilitychange')
-  assert.equal(host.calls.status, 4, 'becoming visible must refresh immediately')
+  assert.equal(host.calls.status, mountStatus + 3, 'becoming visible must refresh immediately')
   await settle()
 
   // Ticks must not stack. The host may hold a request open, and the point of a
@@ -692,17 +726,19 @@ test('the status card refreshes itself instead of going stale while mounted', as
     return new Promise((resolve) => { release = resolve })
   }
   card.fire('focus')
-  assert.equal(host.calls.status, 5, 'the focus read is in flight')
+  assert.equal(host.calls.status, mountStatus + 4, 'the focus read is in flight')
   card.fire('focus')
-  assert.equal(host.calls.status, 5, 'a second trigger must not start a second read')
+  assert.equal(host.calls.status, mountStatus + 4, 'a second trigger must not start a second read')
   release({ accounts: [], stateDir: '/tmp', pendingLogin: false, sessionExpired: false })
   await settle()
   card.fire('focus')
-  assert.equal(host.calls.status, 6, 'once the read settles, the next trigger reads again')
+  assert.equal(host.calls.status, mountStatus + 5, 'once the read settles, the next trigger reads again')
   await settle()
 
   // A QR login owns the card while it runs, and that loop refreshes the status
   // on every transition itself; the background tick must not race it.
+  // The card opens on the getting-started tab now, so reach the login form first.
+  await card.openTab('微信账号')
   await card.click('扫码登录微信')
   const beforeLoginTick = host.calls.status
   await statusTimer().fn()
@@ -765,7 +801,7 @@ test('the options form speaks the UI language, and starts folded', async () => {
     reset: async () => ({ groups: [] }),
   }
   const card = await mountCard(host)
-  await card.click('配置项')
+  await card.openTab('配置项')
   await new Promise((resolve) => setImmediate(resolve))
 
   const folded = textOf(card.render())

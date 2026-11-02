@@ -39,6 +39,9 @@ import {
     MAX_CUSTOM_MODES,
 } from "./persona.js";
 import { DEFAULT_MODE_ID } from "./persona.js";
+import { detectHostVersion, hostStatus } from "./host-compat.js";
+import { listKnowledgeSources } from "./message/knowledge.js";
+import { buildOnboardingChecklist } from "./onboarding.js";
 import { lifeSummary, readOrInferLifeState } from "./message/life-state.js";
 import { qrDataUrl } from "./qr-png.js";
 import fs from "node:fs";
@@ -946,6 +949,46 @@ export class WeixinLoginController extends TypertRemoteService {
         return { ...result, composition, health };
     }
 
+    /**
+     * What a first-run user still has to do.
+     *
+     * The card could work this out itself from `status()` plus a few config
+     * reads, but the decision "is this installed well enough to use?" belongs in
+     * one place that a test can call directly — and the card then only renders.
+     */
+    async onboarding() {
+        const live = readSavedConfig();
+        let accounts = [];
+        try {
+            const status = await this.status();
+            accounts = Array.isArray(status?.accounts) ? status.accounts : [];
+        } catch {
+            accounts = [];
+        }
+        const hostVersion = detectHostVersion();
+        const accountIds = accounts.map((account) => String(account?.accountId ?? "")).filter(Boolean);
+        let knowledgeFiles = 0;
+        for (const id of accountIds) {
+            try {
+                knowledgeFiles += listKnowledgeSources(path.join(stateDir(), "knowledge", id)).length;
+            } catch {
+                // A missing directory simply means "no files yet".
+            }
+        }
+        return buildOnboardingChecklist({
+            accounts,
+            accountCount: accountIds.length,
+            hostVersion,
+            hostTested: hostStatus(hostVersion).status === "tested",
+            allowedSenders: Array.isArray(live.allowedSenders) ? live.allowedSenders : [],
+            personaDefaultMode: typeof live.personaDefaultMode === "string" && live.personaDefaultMode !== "" && live.personaDefaultMode !== DEFAULT_MODE_ID,
+            proactiveEnabled: live.proactiveEnabled === true,
+            knowledgeEnabled: live.knowledgeEnabled !== false,
+            knowledgeFiles,
+            backupEnabled: live.backupEnabled === true,
+        });
+    }
+
     async pause(accountId) {
         const id = String(accountId ?? "").trim();
         if (!id) throw new RemoteError("account id is required");
@@ -1133,4 +1176,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

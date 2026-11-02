@@ -3561,3 +3561,36 @@ chatgpt-on-wechat 一类项目里最被需要的能力，而这个插件此前�
    下次再红的时候不必猜。
 
 全量三次 1035/1035、40.7s / 41.1s / 40.7s；`node bin/check.mjs` → `checked 240 files`。
+
+## 1.3.0-B 一键上手引导（2026-11-02）
+
+新装之后没人读文档，所以把「还差什么才能用」做成看得见的清单：设置卡第一个页签是**上手**，
+`node bin/onboard.mjs` 打印同一份清单。七步里只有前三步是必须的（登录、宿主版本、白名单），
+其余四步永远是「提示」而不是「待办」——被清单追着走的用户会关掉清单。
+
+### 做了什么
+
+- `src/onboarding.js`：`buildOnboardingChecklist(input)` 纯函数（不读盘、不看时钟），
+  每步 `{id, title, state:'done'|'todo'|'blocked'|'note', action, detail, why}`；
+  `complete` 只要求 `account/host/allowlist` 三步 done。白名单**账号级**也算数——
+  只看全局会让只配账号级的用户一直看到「还没配」。
+- `src/login-remote.js` 的 `onboarding()` 方法把 status / 宿主版本 / 配置 / 知识库文件数
+  拼成输入；`src/client.js` 加对应 descriptor；`test/client-remote.test.js` 的方法表同步。
+- `src/client.card.js` 新增 `OnboardingSection` 并放到第一个页签，缺什么点什么跳过去。
+- `bin/onboard.mjs`：只读清单 + `quickstartLines()` 的三条命令；退出码 0/1 可当安装门槛；
+  唯一的写是把 `knowledge/<账号>/` 建出来（用户看完清单第一个问题就是「文件放哪」）。
+
+### 踩到的坑
+
+1. **注册表是以 accountId 为键的对象，不是 `{accounts: [...]}`**，我第一版按数组读，
+   于是「我明明登录了却显示没有账号」。同理凭据在 `openclaw-weixin/accounts/<id>.json`、
+   注册表在 state root，两个目录不是一个。
+2. `readRegistry()` 不接受 warn 参数（我传了回调，被当成别的意思）。
+3. `| head` 会让管道提前关闭，脚本抛 EPIPE → 加 `guardStdout()`。
+4. 卡片多了第一个页签之后，登录态轮询组件不再默认挂载，`test/client-login-poll.test.js`
+   里 7 条用例找不到「扫码登录微信」按钮；加 `card.openTab('微信账号')` 辅助，并把
+   status 的绝对计数改成相对 mount 基线。
+5. 第一版用了不存在的主题 token `C.stateOk`/`C.stateWarn`，被 `test/client-remote.test.js`
+   的主题 token 守卫当场抓住 → 改用真实的 `C.success`/`C.warn`。
+
+全量两次 1046/1046、40.4s / 40.4s；`node bin/check.mjs` → `checked 244 files`。

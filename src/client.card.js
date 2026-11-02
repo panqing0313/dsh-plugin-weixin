@@ -301,6 +301,11 @@ window.__ModuleLoader__.load({
 						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
 						createElement("path", { key: "b", d: "M12 11v5M12 8h.01" }),
 					],
+					// 上手：一个清单（三行带勾的选项），与「关于」的信息圈区分开。
+					start: [
+						createElement("path", { key: "a", d: "M4 7h3M11 7h9M4 12h3M11 12h9M4 17h3M11 17h9" }),
+						createElement("path", { key: "b", d: "M4.6 6.4 5.4 7.2 7 5.4" }),
+					],
 				};
 				return createElement("svg", common, ...(shapes[id] ?? shapes.about));
 			}
@@ -3047,6 +3052,104 @@ window.__ModuleLoader__.load({
 		}
 
 
+			/**
+			 * 上手清单：新装之后的第一个页签。
+			 *
+			 * 判断逻辑全在宿主的 `src/onboarding.js` 里（那份能单测、也不依赖 React），
+			 * 这里只负责把它画成一列可点的行：状态点 + 标题 + 一句说明 + 一句原因，
+			 * 需要动手的那几步带一个按钮，点了跳到对应页签。
+			 *
+			 * 全部做完之后这张卡片会收成一行「已经可以用了」，不再占地方——它存在的
+			 * 意义是第一次打开时知道该做什么，不是长期挂在设置页上。
+			 */
+			function OnboardingSection({ ctx, t, onGoTo }) {
+				const [state, setState] = react.useState({ status: "loading", checklist: null, error: "" });
+
+				const load = react.useCallback(() => {
+					setState({ status: "loading", checklist: null, error: "" });
+					callRemote(() => ctx.remote.weixin.onboarding())
+						.then((checklist) => setState({ status: "ready", checklist, error: "" }))
+						.catch((e) => setState({ status: "error", checklist: null, error: String(e?.message ?? e) }));
+				}, []);
+
+				react.useEffect(() => { load(); }, [load]);
+
+				if (state.status === "loading") {
+					return createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, color: C.labelTertiary, fontSize: 13 } },
+						createElement(Spinner, { size: 12 }), t("Checking what is set up…", "正在检查配置…"));
+				}
+
+				if (state.status === "error") {
+					// The checklist is a convenience, never the reason the settings page
+					// fails: say what went wrong and offer a retry.
+					return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+						createElement("p", { style: hintStyle }, t(`Could not read the setup state (${state.error}).`, `读不到配置状态（${state.error}）。`)),
+						createElement("button", { onClick: load, style: buttonStyleFor(false) }, t("Retry", "重试")));
+				}
+
+				const checklist = state.checklist;
+				const steps = Array.isArray(checklist?.steps) ? checklist.steps : [];
+				const todo = steps.filter((step) => step.state === "todo").length;
+
+				// 一次列清楚：没做的在前（那是要做的事），做完的和提示项在后。
+				const order = { todo: 0, blocked: 1, note: 2, done: 3 };
+				const sorted = [...steps].sort((a, b) => (order[a.state] ?? 9) - (order[b.state] ?? 9));
+
+				const dot = (stepState) => createElement("span", {
+					// A filled dot for done, a ring for todo, a dash for blocked,
+					// a hollow dot for "just so you know" — four states, no icons.
+					style: {
+						flex: "none",
+						width: 8,
+						height: 8,
+						marginTop: 6,
+						borderRadius: "50%",
+						background: stepState === "done" ? C.success : stepState === "todo" ? C.brand : stepState === "blocked" ? C.warn : "transparent",
+						border: stepState === "note" || stepState === "blocked" ? `1px solid ${C.labelTertiary}` : "none",
+					},
+				});
+
+				const goTo = (step) => {
+					const map = { login: "account", allowlist: "account", persona: "persona", options: "options", knowledge: "persona" };
+					const target = map[step.action];
+					if (target && typeof onGoTo === "function") onGoTo(target);
+				};
+
+				const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 } },
+					createElement("p", { style: panelTitleStyle }, checklist?.complete === true ? t("Ready to use", "已经可以用了") : t("Finish setup", "把剩下的配上")),
+					createElement("span", { style: captionStyle },
+						checklist?.complete === true
+							? t(`All ${checklist.done} steps seen`, `${checklist.done} 项已就绪`)
+							: t(`${todo} left`, `还差 ${todo} 步`)));
+
+				const rows = sorted.map((step) => createElement("div", {
+					key: step.id,
+					style: { display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderTop: `1px solid ${C.border}` },
+				},
+					dot(step.state),
+					createElement("div", { style: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 } },
+						createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+							createElement("span", { style: { fontSize: 13, lineHeight: "20px", fontWeight: 600, color: step.state === "done" ? C.labelSecondary : C.labelPrimary } },
+								t(step.titleEn, step.title)),
+							// One short primary action per row, only where the card can
+							// actually take the user somewhere useful.
+							step.action !== null && typeof onGoTo === "function"
+								? createElement("button", { onClick: () => goTo(step), style: { ...buttonStyleFor(false), height: 24, padding: "0 8px", fontSize: 12 } },
+									step.action === "login" ? t("Log in", "去登录") : step.action === "persona" ? t("Pick a persona", "去挑一个") : t("Open", "去看看"))
+								: null),
+						createElement("span", { style: { fontSize: 12, lineHeight: "18px", color: C.labelSecondary } }, t(step.detailEn, step.detail)),
+						createElement("span", { style: { fontSize: 12, lineHeight: "18px", color: C.labelTertiary } }, t(step.whyEn, step.why)))));
+
+				const footer = createElement("div", { key: "foot", style: { display: "flex", alignItems: "center", gap: 10 } },
+					createElement("button", { onClick: load, style: buttonStyleFor(false) }, t("Check again", "重新检查")),
+					createElement("span", { style: captionStyle },
+						checklist?.complete === true
+							? t("The remaining rows are optional suggestions.", "剩下的几项是可选项，做不做都不影响使用。")
+							: t("The first three decide whether it works at all.", "前三项决定它能不能用；后面几项是建议。")));
+
+				return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, head, rows, footer);
+			}
+
 			function WeixinSettingsCard() {
 				// A section heading sits outside its panel so the panel edge
 				// reads as the group boundary; an icon-free heading at 14/600
@@ -3068,7 +3171,15 @@ window.__ModuleLoader__.load({
 					setJournalFocus(conversationId);
 					setTab(TABS.findIndex((entry) => entry.id === "journal"));
 				};
+				// The shell needs to map a tab id back to an index so one section can
+				// send the operator to another; TABS is defined below, so the helper
+				// resolves lazily instead of at mount time.
+				const goToTab = (id) => {
+					const index = TABS.findIndex((entry) => entry.id === id);
+					if (index >= 0) setTab(index);
+				};
 				const TABS = [
+					{ id: "start", label: t("Getting started", "上手"), body: createElement(OnboardingSection, { ctx, t, onGoTo: goToTab }) },
 					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
