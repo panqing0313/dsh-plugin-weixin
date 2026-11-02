@@ -187,8 +187,14 @@ test('parseWhen reads natural Chinese times, without guessing', () => {
   const nextSunday = parseWhen('周天', sunday)
   assert.equal(nextSunday.ok, true)
   assert.equal(nextSunday.fireAt > sunday.getTime() + 6 * 86_400_000, true, 'next week, not today')
-  // 「这个周日」 may land later today, so it stays this week.
-  assert.equal(parseWhen('这个周日 15:00', sunday).label, '今天 15:00')
+  // 「这个周日」 may land later today, so it stays this week. The rendered
+  // label only says "今天" when the *real* clock agrees — a property of
+  // formatLabel, not of the parse — so assert the day and the clock instead of
+  // the word, which made this line a time bomb that went off the next day.
+  const thisSunday = parseWhen('这个周日 15:00', sunday)
+  assert.equal(new Date(thisSunday.fireAt).getDate(), 1, 'stays on the day it was spoken')
+  assert.equal(new Date(thisSunday.fireAt).getHours(), 15)
+  assert.match(thisSunday.label, /15:00$/)
   // The two-word quantifiers are the same thing as the one-word ones.
   assert.equal(new Date(parseWhen('下个周三 8点', now).fireAt).getDay(), 3)
 })

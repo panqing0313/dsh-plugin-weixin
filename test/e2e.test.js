@@ -682,8 +682,13 @@ test('a dangerous tool is announced in WeChat while the turn is still running', 
       }
       plugin.apply(ctx, config)
 
+      // With notices on there are two messages (warning, then the reply); with
+      // them off there is only the reply. Waiting for a fixed two made the off
+      // round spin out the whole 10s deadline and then assert against a count
+      // it could never reach — the single biggest cost in this file.
+      const expectedSends = expected ? 2 : 1
       const deadline = Date.now() + 10_000
-      while (sent.length < 2 && Date.now() < deadline) {
+      while (sent.length < expectedSends && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
       for (const d of disposers) await (await d)?.()
