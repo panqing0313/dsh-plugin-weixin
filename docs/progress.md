@@ -3504,3 +3504,22 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
   `2026-11-01 15:00`，测试当场变红。改成断言日期与小时，不再依赖今天是哪天。
 
 结果：`test/e2e.test.js` 21.0s → 14.5s，全量 1013/1013、40.6s（改动前 47.7s 起，且当天 cron 时段还会更慢）。
+
+## 发布 1.2.1（2026-11-02）
+
+这次走的是仓库已经配好 NPM_TOKEN 的 CI 发布路径（`v1.2.1` tag → `release.yml`），不需要在本机点
+一次性授权链接：
+
+- 本地 bump（`package.json` / `package-lock.json` 两处 version / `src/client.js` 的 `PLUGIN_VERSION` /
+  `README.md:96` 发布行）→ 提交 `10b3019 chore(release): 1.2.1` → 打 tag `v1.2.1` 并 push。
+- CI run `41459557110`：`npm ci` ✅、全量 suite ✅（含 761 条）、`npm pack` ✅、
+  `npm publish --provenance` ✅（带 OIDC provenance）、**`the registry now serves 1.2.1` ✅** ——
+  这一步正是本次 S3 把窗口从 100 秒放宽到 5 分钟的地方，这次一次就命中了。
+- 核验：`version = 1.2.1`、`dist.shasum 3853051671abc7b2bba4bad5982c49543a17f891`、
+  `dist.integrity sha512-a1vTFo7/tDEKBXFob8uXayccKR5MeSztenOz/uUIPUd1k0vEWJdTuwLhhJKNqQJH2sVU+5zJ/wwe8fBUDbnVAQ==`、
+  `gitHead 10b301952793a733b95ad3e020fe2833a58ec641`（= 本地 HEAD）。
+- `node bin/release.mjs --finish 1.2.1`：注册表可见 ✅、tag 已存在且 pushed ✅、GitHub release 创建 ✅、
+  profile `^1.2.0 → ^1.2.1` 且锁文件刷新 ✅。
+- `node bin/doctor.mjs` → `installed version 1.2.1`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.2.1)`。
+- 兼容表：`1.2.1` 只改了并发度、轮询间隔与测试/CI 等待，没有新增界面或命令；
+  仍需用户重启后确认一次，再决定是否单独记一行真机验证。
