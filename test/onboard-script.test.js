@@ -29,6 +29,38 @@ function run(stateDir) {
   }
 }
 
+test('a machine with no DSH installed still lets the other required steps pass', () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-onboard-'))
+  try {
+    fs.mkdirSync(path.join(stateDir, 'openclaw-weixin', 'accounts'), { recursive: true })
+    fs.writeFileSync(path.join(stateDir, 'config.json'), JSON.stringify({ allowedSenders: ['wxid_abc'] }))
+    fs.writeFileSync(
+      path.join(stateDir, 'openclaw-weixin', 'accounts', 'bot1@im.bot.json'),
+      JSON.stringify({ token: 'tok', baseUrl: 'http://127.0.0.1:1' }),
+    )
+    fs.writeFileSync(path.join(stateDir, 'accounts-registry.json'), JSON.stringify({ 'bot1@im.bot': {} }))
+    // A runner with no DSH looks like an unknown host to the script. Hide the
+    // app bundle it would otherwise read (`DSH_HOST_VERSION` must be empty too).
+    const stdout = (() => {
+      try {
+        return execFileSync(process.execPath, [SCRIPT], {
+          cwd: ROOT,
+          env: { ...process.env, DSH_WEIXIN_STATE_DIR: stateDir, DSH_HOST_VERSION: '', DSH_HOST_PLIST: '' },
+          encoding: 'utf8',
+        })
+      } catch (error) {
+        return String(error.stdout ?? '')
+      }
+    })()
+    assert.match(stdout, /微信BOT 上手清单/)
+    assert.match(stdout, /没有检测到 DSH 宿主|读不到宿主版本/)
+    // The host being unverifiable must not be reported as an unfinished task.
+    assert.equal(/□ 确认宿主版本/.test(stdout), false)
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a fresh install prints the checklist, the reason, and exits non-zero', () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-onboard-'))
   try {

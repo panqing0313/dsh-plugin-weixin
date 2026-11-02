@@ -80,7 +80,13 @@ function main() {
   const root = stateRoot()
   const config = readConfig()
   const list = accounts()
-  const hostVersion = detectHostVersion()
+  // `DSH_HOST_PLIST` lets a test (and an unusual install) point at the app it
+  // actually has; an explicitly empty value means "do not claim a host".
+  const plistFromEnv = process.env.DSH_HOST_PLIST
+  const hostVersion =
+    typeof plistFromEnv === 'string'
+      ? detectHostVersion(plistFromEnv === '' ? { plistPath: '/nonexistent/Info.plist' } : { plistPath: plistFromEnv })
+      : detectHostVersion()
   // 注册表里的账号只是「这台机器记得的账号」，真正的凭据在
   // `openclaw-weixin/accounts/<id>.json`。注册表是元数据，删掉凭据不会删它，
   // 所以「登录过」必须看凭据文件，否则一个删了账号的人会看到「已完成」。
@@ -131,7 +137,10 @@ function main() {
 
   process.stdout.write(`微信BOT 上手清单  数据目录：${root}\n\n`)
   for (const step of checklist.steps) {
-    process.stdout.write(`${icon[step.state]} ${step.title}${' '.repeat(width - columns(step.title))}  ${step.detail}\n`)
+    // An unverifiable host is a note, not an unfinished task: showing □ next to
+    // "2/7 步已就绪、没有必须做的了" reads like a bug.
+    const mark = step.id === 'host' && noHostToCheck ? icon.note : icon[step.state]
+    process.stdout.write(`${mark} ${step.title}${' '.repeat(width - columns(step.title))}  ${step.detail}\n`)
     if (step.state === 'todo' || step.state === 'blocked') {
       process.stdout.write(`  ${' '.repeat(width + 2)}  ${step.why}\n`)
     }
