@@ -77,7 +77,9 @@ export function buildOnboardingChecklist(input = {}) {
       titleEn: 'Check the host version is one we tested',
       state: input.hostVersion == null || input.hostVersion === ''
         ? 'note'
-        : input.hostTested === false ? 'todo' : 'done',
+        // An untested host is a caution, not an unfinished step: nothing the
+        // operator can do in this app changes the version of DSH it is running.
+        : input.hostTested === false ? 'note' : 'done',
       action: null,
       detail: input.hostVersion == null || input.hostVersion === ''
         ? '读不到宿主版本；功能能跑，出问题时会先排查这一项。'
@@ -185,7 +187,10 @@ export function buildOnboardingChecklist(input = {}) {
     done,
     total: steps.length,
     // 「完成」只要求前三个必须项都做完；其余是提示项。
-    complete: steps.filter((step) => ['account', 'host', 'allowlist'].includes(step.id)).every((step) => step.state === 'done'),
+    // Only steps the operator can actually finish here count. The host version is
+    // not one of them — you cannot upgrade DSH from inside the plugin, and a
+    // runner with no DSH at all must still be able to say "the rest is done".
+    complete: steps.filter((step) => ['account', 'allowlist'].includes(step.id)).every((step) => step.state === 'done'),
   }
 }
 

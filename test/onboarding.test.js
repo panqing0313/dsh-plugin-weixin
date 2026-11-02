@@ -62,9 +62,12 @@ test('an allowlist set only per account still counts as allowlisted', () => {
   assert.equal(checklist.complete, true)
 })
 
-test('an untested host is a todo, an unknown one is only a note', () => {
+test('an untested host is a caution, an unknown one is only a note', () => {
+  // Neither is something the operator can fix from inside this app — the host
+  // version is the host's business. Both are rendered as · with a reason, never
+  // as an unfinished step that would block the "you are ready" verdict.
   const untested = buildOnboardingChecklist({ hostVersion: '9.9.9', hostTested: false })
-  assert.equal(untested.steps.find((step) => step.id === 'host').state, 'todo')
+  assert.equal(untested.steps.find((step) => step.id === 'host').state, 'note')
   assert.match(untested.steps.find((step) => step.id === 'host').detail, /9\.9\.9/)
 
   const unknown = buildOnboardingChecklist({ hostVersion: null })

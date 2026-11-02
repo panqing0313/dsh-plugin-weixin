@@ -126,9 +126,10 @@ function main() {
 
   // On a machine with no DSH installed at all (a bare CI runner, a fresh Linux
   // box), the host step cannot be verified — that is not a reason to refuse to
-  // say the rest is ready. Say why instead of printing an unexplained □.
+  // say the rest is ready. The checklist already renders it as a note; this flag
+  // only decides whether a spare explanation line is worth printing.
   const hostNote = checklist.steps.find((step) => step.id === 'host')
-  const noHostToCheck = hostNote !== undefined && hostNote.state === 'todo'
+  const noHostToCheck = hostNote !== undefined && hostNote.state !== 'done'
 
   const icon = { done: '✓', todo: '□', blocked: '—', note: '·' }
   // 终端里中文占两列：按显示宽度算，否则说明那一列会参差不齐。
@@ -158,9 +159,9 @@ function main() {
     process.stdout.write('\n没有检测到 DSH 宿主：这一步等你装上 DSH 再回来跑一次就行，其余照上面做。\n')
   }
 
-  // Exit 0 when the required steps this script can verify are done. A missing
-  // host is reported above but must not block a fresh machine's setup.
-  process.exitCode = checklist.complete || noHostToCheck ? 0 : 1
+  // Exit 0 exactly when the required steps are done. The host is a note either
+  // way (see src/onboarding.js), so it never holds the exit code hostage.
+  process.exitCode = checklist.complete ? 0 : 1
 }
 
 main()
