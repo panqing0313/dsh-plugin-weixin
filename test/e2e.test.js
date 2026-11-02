@@ -161,7 +161,7 @@ async function startFakeILink(batches) {
   const fake = await startSharedFake({ batches })
   // `sent` is the raw request bodies, like the hand-rolled fake this replaced;
   // `outbound` (with its `text` field) stays reachable for teardown.
-  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies }
+  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies, seen: fake.seen }
 }
 
 /**
@@ -598,7 +598,7 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-weixin-e2e-journal-${messageJournal}-`))
     process.env.DSH_WEIXIN_STATE_DIR = stateRoot
     try {
-      const { server, baseUrl, sent } = await startFakeILink([
+      const { server, baseUrl, sent, seen } = await startFakeILink([
         [
           { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ctj', create_time_ms: 13, item_list: [{ type: 1, text_item: { text: 'journal me' } }] },
         ],
@@ -1440,7 +1440,7 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       // Two messages on one line: the first is a COLD line (the window is worth
       // injecting), the second is warm (the agent already has the first in its
       // own history, so the window must not be repeated).
-      const { server, baseUrl, sent } = await startFakeILink([
+      const { server, baseUrl, sent, seen } = await startFakeILink([
         [
           { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona', create_time_ms: 21, item_list: [{ type: 1, text_item: { text: '晚上吃啥好' } }] },
         ],
@@ -1453,7 +1453,12 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
       // Pacing off here: this test asserts the PROMPTS, and a split reply
       // would turn sent[1] into a second bubble instead of the next prompt.
-      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled, humanPacing: false })
+      // Stickers off too: a companion's reply text goes through `takeStickers`,
+      // which strips anything shaped like 【…】 — including the instruction
+      // fragments the plugin writes into a COLD line's prompt and the fake agent
+      // echoes back verbatim. Without this the second message would be answered
+      // by a sticker warning instead of the reply, and `sent` stays at one.
+      const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, personaDefaultMode: 'girlfriend', memoryEnabled, humanPacing: false, stickerEnabled: false })
 
       const disposers = []
       const warnings = []
@@ -1467,15 +1472,21 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       // The release script runs this file while the rest of the suite still
       // saturates the machine: 10s was enough on an idle laptop, and under
       // that load the second fake poll sometimes had not come back yet.
-      const deadline = Date.now() + 30_000
+      const startedWaiting = Date.now()
+      const deadline = startedWaiting + 60_000
       while (sent.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
+      // How long the second poll took to get an answer. If this ever climbs
+      // near the deadline again, the number says whether it was the machine or
+      // the plugin — a bare timeout hint cannot.
+      const waited = Math.round((Date.now() - startedWaiting) / 1000)
       for (const d of disposers) await (await d)?.()
       await new Promise((resolve) => setTimeout(resolve, 100))
       server.close()
 
-      assert.ok(sent.length >= 2, `expected two replies (memoryEnabled=${memoryEnabled}; warnings: ${warnings.join(' | ')})`)
+      const progress = `memoryEnabled=${memoryEnabled}; sent=${sent.length} after ${waited}s; getupdates=${seen.getupdates}; delivered=${seen.delivered}; warnings: ${warnings.join(' | ') || 'none'}`
+      assert.ok(sent.length >= 2, `expected two replies — ${progress}`)
       const prompt = sent[0].msg.item_list[0].text_item.text
       const warmPrompt = sent[1].msg.item_list[0].text_item.text
       if (memoryEnabled) {

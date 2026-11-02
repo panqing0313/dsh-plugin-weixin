@@ -3530,3 +3530,34 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
 所以兼容表新增一行 `1.2.1 / 0.2.1-rc.5` 并写明复核范围；宿主版本仍是 `0.2.1-rc.5`，
 `src/host-compat.js` 的 `TESTED_HOSTS` 因此不动（仍是 `['0.2.1-rc.3', '0.2.1-rc.5']`）。
 `test/host-compat.test.js` 5/5，`node bin/check.mjs` 通过。
+
+## 1.3.0-A 知识库（2026-11-02）
+
+用户的要求是「把这个功能做大做强，让更多人用起来」，网搜同类项目后选定的第一件事：**知识库**。
+chatgpt-on-wechat 一类项目里最被需要的能力，而这个插件此前只有「记忆」（模型抽出的一句话）和
+「recall」（自己说过的话），没有「用户给的资料」。
+
+### 做了什么
+
+- `src/message/knowledge.js`：切块（跟踪 `#` 标题、相邻块重叠 60 字）、正文抽取（复用
+  `extractDocumentTextAsync` 与 `htmlToText`）、BM25 检索（中文 bigram，与 recall 同一套
+  `tokenize` 与 K1/B 参数）、`describeKnowledgeHits` 生成带《文件名》· 小节的注入块。
+- `src/message/knowledge-refresh.js`：启动建一次、每 6 小时一次、`nudge()` 受 60 秒节流；
+  `knowledgeLooksStale` 只 stat 不读文件，用来判断要不要真重建。
+- `src/index.js`：检索在提示词拼装前跑，命中才注入；`knowledgeBlock` 也计入提示词构成统计。
+- 配置：`knowledgeEnabled`（默认开）、`knowledgeHits`（默认 3），设置卡「记忆」组可改，
+  `src/config-effect.js` 里两项都标 `live`。
+
+### 两个真坑
+
+1. **测试里主会话 mock 只记录 prompt、不产出 `turn/end`**，而 `#awaitReply` 是靠轮询事件判结束的
+   → `test/session-commands.test.js` 里 6 条用例全部 15–20 秒超时。修法：mock 的 `followup` 也
+   `ev('turn/start')` / `ev('turn/end')`，与 side session 同款。
+2. **`persona + memory` 在全量里稳定 60 秒超时、单跑 4 秒就过**。真因不是性能：该用例的假 agent
+   会把提示词原样回显，而冷启动提示词里有 `【状态】精力 12/100`、`【长期记忆 · 关于用户】` 这类
+   片段——陪聊模式的表情解析 `takeStickers` 会把 `【…】` 当成表情标记吃掉，整条回复被剥空，
+   于是只发出一个「表情没认出来」的替代气泡，`sent` 永远停在 1。修法：该用例关掉 `stickerEnabled`
+   （它断言的是提示词，不是表情）。顺带给失败信息加上 `sent / getupdates / delivered / 等待秒数`，
+   下次再红的时候不必猜。
+
+全量三次 1035/1035、40.7s / 41.1s / 40.7s；`node bin/check.mjs` → `checked 240 files`。

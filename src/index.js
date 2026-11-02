@@ -79,6 +79,7 @@ let hooks
 /** Counters the settings card reads (src/metrics.js); process lifetime only. */
 let metrics
 let metricsTimer
+let knowledgeRefresher
 /** ④ One audit line per unfamiliar shape per conversation, not one per message. */
 const unknownItemSeen = new Set()
 let outbox
@@ -141,6 +142,8 @@ import {
   openThreadLines,
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
+import { searchKnowledge, shouldSearchKnowledge, describeKnowledgeHits } from './message/knowledge.js'
+import { startKnowledgeRefresh } from './message/knowledge-refresh.js'
 import { planCompanionReply, buildHumanStyleBlock, isCompanionMode } from './message/human-pace.js'
 import { groupReplyPolicy, groupSharesMemory, isGroupMessage } from './message/groups.js'
 import { classifyToolCall, noticeText } from './message/tool-guard.js'
@@ -266,6 +269,10 @@ export const Config = z.object({
   ),
   memoryRecallDays: z.number().min(7).max(3650).default(180).description('How many days back the local recall index reaches. Older day files leave the index (the journal itself is still on disk).'),
   memoryRecallHits: z.number().min(1).max(8).default(3).description('How many matching original messages to inject at most, each truncated to 140 characters.'),
+  knowledgeEnabled: z.boolean().default(true).description(
+    '知识库：把文件放进 <state>/knowledge/<账号>/ 目录，聊天里问到相关内容时自动检索，并说清答案出自哪份文件。不需要任何命令。',
+  ),
+  knowledgeHits: z.number().min(1).max(8).default(3).description('一次最多注入几段知识库原文。'),
   humanPacing: z.boolean().default(true).description(
     '陪聊节奏：角色模式（女友/男友/朋友/贾维斯/小游戏等）回复时先停顿一下再发，并把一段话拆成两三条气泡；「默认助手」模式永远不受影响。',
   ),
@@ -724,6 +731,17 @@ export function apply(ctx, config) {
         }).catch((error) => errLog(`metrics snapshot failed: ${String(error?.message ?? error)}`))
       }, 30_000)
       metricsTimer.unref?.()
+
+      // 知识库：索引只在后台建，检索走热路径只读 index.json。启动先建一次，
+      // 之后每 6 小时一次；nudge 让刚放进目录的文件不必等到下一个周期。
+      if (withSavedConfig(config).knowledgeEnabled !== false) {
+        knowledgeRefresher = startKnowledgeRefresh({
+          stateRoot,
+          accountIds: () => [...transports.keys()],
+          warn,
+          log,
+        })
+      }
 
       const lock = acquireInstanceLock(stateRoot, { warn })
       if (lock.acquired === false) {
@@ -1378,6 +1396,7 @@ export function apply(ctx, config) {
       for (const timer of backupTimers) clearTimeout(timer)
       outbox?.stop()
       if (metricsTimer !== undefined) clearInterval(metricsTimer)
+      knowledgeRefresher?.stop()
       if (lockHeartbeat !== undefined) clearInterval(lockHeartbeat)
       releaseInstanceLock(stateRoot)
       if (loginController !== undefined && loginController.onAccountBound === onAccountBound) {
@@ -2684,6 +2703,18 @@ ${neutralizeTags(ocr.text)}
       })
       if (shouldRecall(message.text, recallHits)) recallBlock = buildRecallBlock(recallHits)
     }
+    // Knowledge base: files the operator put in <state>/knowledge/<account>/.
+    // Unlike recall (which reads what we said), these are facts the user handed
+    // us on purpose — a contract, a policy, household notes. The answer must be
+    // able to say which file it came from, so the block carries that.
+    let knowledgeBlock = ''
+    if (effectiveConfig.current.knowledgeEnabled !== false) {
+      const knowledgeHits = searchKnowledge(stateRoot, accountId, message.text, {
+        limit: Number(effectiveConfig.current.knowledgeHits ?? 3),
+        warn,
+      })
+      if (shouldSearchKnowledge(knowledgeHits)) knowledgeBlock = describeKnowledgeHits(knowledgeHits)
+    }
     // Prepend in ONE join so the order stays persona → memory → recall → user
     // text (a per-block prepend loop would silently reverse it).
     // ② 预演模式: a prompt-level agreement, not enforcement. The go-ahead check is
@@ -2692,7 +2723,7 @@ ${neutralizeTags(ocr.text)}
       ? buildDryRunBlock({ accountLabel: config.accountLabel ?? '' })
       : ''
     if (dryRunBlock !== '') log(describeDryRun())
-    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, dryRunBlock].filter((block) => block !== '')
+    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 统计页签的「提示词构成」：记下这一回合每段实际占了多少字符。各段之和
@@ -2707,6 +2738,7 @@ ${neutralizeTags(ocr.text)}
       { key: 'contact', chars: contactBlock.length },
       { key: 'memory', chars: memoryBlock.length },
       { key: 'recall', chars: recallBlock.length },
+      { key: 'knowledge', chars: knowledgeBlock.length },
       { key: 'dryRun', chars: dryRunBlock.length },
       { key: 'message', chars: Math.max(0, prompt.length - joinedBlocks.length - separators) },
     ], { total: prompt.length, at: journaledAt })

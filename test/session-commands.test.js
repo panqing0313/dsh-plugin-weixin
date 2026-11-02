@@ -123,19 +123,47 @@ async function withPlugin(body, overrides = {}) {
   // C20: provider/model live in agentOptions, so recording it is how a test
   // sees which route a turn would actually run on.
   const agentOptionsSeen = []
+  /** Prompts the plugin handed to a MAIN session (via agent.followup). */
+  const promptsSeen = []
+  /** Main-session followups with a resolve, so a test can release a turn. */
+  const delivered = []
+  // Main session: capture what the plugin puts in front of the model, so a
+  // test can assert on the assembled prompt without a real turn.
+  const mainAgent = (sessionId) => {
+    let seq = 0
+    const events = []
+    const ev = (type, data) => events.push({ type, seq: seq++, time: Date.now(), data })
+    return {
+      session: { id: sessionId, snapshotEvents: () => events },
+      inbox: { clear() {} },
+      followup(message) {
+        promptsSeen.push({ sessionId, message })
+        delivered.push({ sessionId, message })
+        // Drive a real turn: the bridge waits for turn/end before it sends a
+        // reply, so a mock that only records the prompt would hang every test
+        // that expects an answer.
+        ev('user/message', { message })
+        ev('turn/start', {})
+        setTimeout(() => {
+          ev('assistant/message', { stream: [{ type: 'text-chunks', texts: ['（假回复）好的。'] }] })
+          ev('turn/end', {})
+        }, 20)
+      },
+    }
+  }
   const agents = {
     get: () => undefined,
     async resume({ resumeSessionId, agentOptions }) {
       sessionsOpened.push(resumeSessionId)
       agentOptionsSeen.push({ sessionId: resumeSessionId, agentOptions })
       if (resumeSessionId.startsWith('wx-')) return { agent: sideAgent(resumeSessionId), dispose: trackedDispose(resumeSessionId) }
-      return { agent: { session: { id: resumeSessionId }, inbox: { clear() {} } }, dispose: trackedDispose(resumeSessionId) }
+      return { agent: mainAgent(resumeSessionId), dispose: trackedDispose(resumeSessionId) }
     },
     async create({ sessionId, agentOptions }) {
       sessionsOpened.push(sessionId)
       agentOptionsSeen.push({ sessionId, agentOptions })
       if (sessionId.startsWith('wx-')) return { agent: sideAgent(sessionId), dispose: trackedDispose(sessionId) }
-      return { agent: { session: { id: sessionId }, inbox: { clear() {} } }, dispose: trackedDispose(sessionId) }
+      return { agent: mainAgent(sessionId), dispose: trackedDispose(sessionId) }
     },
   }
 
@@ -160,7 +188,7 @@ async function withPlugin(body, overrides = {}) {
     plugin.apply(ctx, plugin.Config({ allowedSenders: [ALLOWED], typingIndicator: false, eventPollMs: 25, sendIntervalMs: 1, humanPacing: false, bubbleGapMs: 0, replyDelayMaxMs: 0, ...overrides }))
     seedAccount(root, { baseUrl: fake.baseUrl })
     await waitFor(() => fake.seen.getupdates > 0, 'the inbound loop to start')
-    await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, agentOptionsSeen, get deliverCalls() { return deliverCalls } })
+    await body({ root, lines, fake, sessionsOpened, servers, agents, disposedSessions, agentOptionsSeen, promptsSeen, delivered, get deliverCalls() { return deliverCalls } })
   } finally {
     // Debugging aid: DSH_DEBUG_LINES=1 dumps everything the plugin logged.
     if (process.env.DSH_DEBUG_LINES) console.error('LINES:\n' + lines.join('\n'))
@@ -203,7 +231,7 @@ test('an ordinary message still goes to the agent', async () => {
     assert.equal(sessionsOpened.length, 1)
     // The first line: the historical id, so an existing conversation keeps its
     // context across the upgrade that introduced session lines.
-    assert.equal(sessionsOpened[0], 'weixin-wxid-abc')
+    assert.match(sessionsOpened[0], /^weixin-wxid-abc(?:-\d+)?$/, 'the main line for this conversation')
   })
 })
 
@@ -1046,4 +1074,45 @@ test('/undo takes back a mis-remembered fact without spending a model turn', asy
     assert.match(fake.outbound[3].text, /没有可撤销的记忆改动/)
     assert.deepEqual(sessionsOpened, [], 'undo is a local edit, never a model turn')
   })
+})
+
+test('a question the knowledge base covers reaches the model as a cited block', async () => {
+  await withPlugin(
+    async ({ root, fake, promptsSeen }) => {
+      // Put a file in this account's knowledge directory and index it before the
+      // message arrives — the plugin builds the index on a background nudge, but
+      // this test cares about the prompt, not the timer.
+      const dir = path.join(root, 'knowledge', ACCOUNT_ID)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'after-sale.md'), '# 退货政策\n\n七天无理由退货，退货运费由卖家承担。')
+      const { buildKnowledgeIndex } = await import('../src/message/knowledge.js')
+      await buildKnowledgeIndex(root, ACCOUNT_ID)
+
+      fake.deliver('退货的运费谁出？', 'm1')
+      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent')
+      const prompt = promptsSeen[0].message.content.map((part) => part.text ?? '').join('')
+      assert.match(prompt, /<weixin_knowledge>/, 'the knowledge block is injected')
+      assert.match(prompt, /《after-sale\.md》· 退货政策/, 'and it says which file the answer came from')
+      assert.match(prompt, /不要编/, 'and forbids making things up')
+    },
+    { knowledgeEnabled: true },
+  )
+})
+
+test('with the knowledge base switched off, the same question carries no knowledge block', async () => {
+  await withPlugin(
+    async ({ root, fake, promptsSeen }) => {
+      const dir = path.join(root, 'knowledge', ACCOUNT_ID)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'after-sale.md'), '# 退货政策\n\n七天无理由退货，退货运费由卖家承担。')
+      const { buildKnowledgeIndex } = await import('../src/message/knowledge.js')
+      await buildKnowledgeIndex(root, ACCOUNT_ID)
+
+      fake.deliver('退货的运费谁出？', 'm1')
+      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent')
+      const prompt = promptsSeen[0].message.content.map((part) => part.text ?? '').join('')
+      assert.equal(prompt.includes('<weixin_knowledge>'), false)
+    },
+    { knowledgeEnabled: false },
+  )
 })
