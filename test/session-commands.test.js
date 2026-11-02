@@ -1076,7 +1076,7 @@ test('/undo takes back a mis-remembered fact without spending a model turn', asy
   })
 })
 
-test('a question the knowledge base covers reaches the model as a cited block', async () => {
+hostTest('a question the knowledge base covers reaches the model as a cited block', async () => {
   await withPlugin(
     async ({ root, fake, promptsSeen }) => {
       // Put a file in this account's knowledge directory and index it before the
@@ -1101,7 +1101,7 @@ test('a question the knowledge base covers reaches the model as a cited block', 
   )
 })
 
-test('with the knowledge base switched off, the same question carries no knowledge block', async () => {
+hostTest('with the knowledge base switched off, the same question carries no knowledge block', async () => {
   await withPlugin(
     async ({ root, fake, promptsSeen }) => {
       const dir = path.join(root, 'knowledge', ACCOUNT_ID)
