@@ -142,6 +142,18 @@ export class AgentBridge {
     // caller that only wants the answer (the tests, and any host callback that
     // re-reads events) can ask for a tighter loop.
     this.eventPollMs = Number.isFinite(options.eventPollMs) && options.eventPollMs > 0 ? options.eventPollMs : this.pollMs
+    // The host never pushes: the only way to learn a turn produced an answer is
+    // to look at its event snapshot. At the steady 1000ms cadence that means a
+    // reply that landed 5ms after a poll waits almost a second — on every single
+    // message. So the first moments of a turn are polled tightly and the loop
+    // relaxes to `eventPollMs` after that: an answer typically arrives in a few
+    // hundred ms, while a long tool run costs the same few snapshots as before.
+    this.eventPollFastMs = Number.isFinite(options.eventPollFastMs) && options.eventPollFastMs > 0
+      ? Math.min(options.eventPollFastMs, this.eventPollMs)
+      : Math.min(50, this.eventPollMs)
+    this.eventPollFastWindowMs = Number.isFinite(options.eventPollFastWindowMs) && options.eventPollFastWindowMs >= 0
+      ? options.eventPollFastWindowMs
+      : 400
     // Session lines: which of a conversation's sessions the next message goes
     // to. Injectable so tests do not touch the operator's real state root.
     this.lines = options.lines ?? new SessionLines({ warn: (message) => this.errLog(message) })
@@ -1042,7 +1054,9 @@ export class AgentBridge {
           await onProgress(note)
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, this.eventPollMs))
+      const sinceStart = Date.now() - startedAt
+      const interval = sinceStart < this.eventPollFastWindowMs ? this.eventPollFastMs : this.eventPollMs
+      await new Promise((resolve) => setTimeout(resolve, interval))
     }
 
     // The user was told the wait gave up — but the turn is still running and

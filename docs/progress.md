@@ -3471,3 +3471,19 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
   空列表、`limit < 1` 不死锁、失败停止派发且首个错误胜出。
 - `test/e2e.test.js` 新增一条：三个图片附件、假 CDN 每个延迟 120ms，断言**同时在飞 ≥ 2**、
   三个文件都落盘、prompt 里三处「已保存到本地：」。用并发峰值而不是墙钟时间断言，避免负载下变 flaky。
+
+## S2 事件轮询自适应（2026-11-02）
+
+宿主不推送会话事件，插件只能轮询 `agent.session.snapshotEvents()`。这个轮询的间隔是
+`eventPollMs`（生产默认 1000ms），于是**每一条回复**都可能刚好错过一次轮询，在日志里
+多躺将近一秒才被发现 —— 一个 20ms 就能答完的回合，用户要等 1 秒。
+
+现在改成两段式（`src/agent-bridge.js`）：
+
+- `eventPollFastMs`：默认 `min(50, eventPollMs)`，回合开始后的头
+  `eventPollFastWindowMs`（默认 400ms）按这个间隔轮询；
+- 之后回落到 `eventPollMs`，长工具运行的开销与以前完全一致（不是全程 50ms 轮询）。
+
+`test/event-poll.test.js` 3 条：20ms 的回复在 400ms 内被看到（改之前约 1000ms）；
+700ms 才落地的回复会在 400ms 后回到慢节奏（用快照读取时间戳数出 300ms 内的读取次数 ≤ 3）；
+两个旋钮可调，且快节奏永远不会超过 `eventPollMs`（调用方要 20ms 时不会被默认的 50 拉慢）。
