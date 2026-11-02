@@ -109,6 +109,7 @@ import { WeixinLoginController } from './login-remote.js'
 import { AsrController } from './asr-remote.js'
 import { ConfigController } from './config-remote.js'
 import { isAccountPaused, touchAccount, allowlistForAccount, readRegistry, enrolFirstContact } from './account-registry.js'
+import { mapWithConcurrency } from './concurrency.js'
 // `/cancel` is the one message the transport must be able to deliver while a
 // turn is still running; the predicate lives beside the parser so the two
 // cannot drift apart.
@@ -182,6 +183,22 @@ export const name = 'dsh-weixin'
  * directory the DSH host happened to be started in.
  */
 const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * 一条消息里的附件同时下载几个。
+ *
+ * 三张图串行是三次往返；并发到三能把它压到一次往返的量级。再高没有收益：
+ * 入站消息很少带更多附件，而且每个附件都要落盘。
+ */
+const INBOUND_DOWNLOAD_CONCURRENCY = 3
+
+/**
+ * 文档抽取与 OCR 同时跑几个。
+ *
+ * 这两个都可能起子进程（OCR 桥、pdftotext），比下载贵得多，所以故意低于
+ * 下载的并发度：宁可慢一点，也不要一次起十个进程把机器拖住。
+ */
+const INBOUND_EXTRACT_CONCURRENCY = 2
 
 /**
  * `agents` is required: without it there is no session to drive, so the plugin
@@ -2473,16 +2490,22 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       const saved = []
       /** @type {Array<{ kind: string, reason: string, code: string }>} */
       const failures = []
-      for (const media of message.media) {
-        const download = media.kind === 'voice' ? downloadInboundVoice : downloadInboundMedia
-        const result = await download({
+      // The attachments in one message have nothing to do with each other, so
+      // they download at the same time — three photos used to cost three round
+      // trips back to back. Bounded, because each one is a network request and
+      // (for voice) possibly an ASR process.
+      const downloads = await mapWithConcurrency(message.media, INBOUND_DOWNLOAD_CONCURRENCY, (media) =>
+        (media.kind === 'voice' ? downloadInboundVoice : downloadInboundMedia)({
           media,
           cdnBaseUrl,
           maxBytes: maxInboundMediaBytes,
           bridge: asrBridge,
           extractFrames: effectiveConfig.current.videoFrames !== false,
           warn,
-        })
+        }),
+      )
+      for (const [index, result] of downloads.entries()) {
+        const media = message.media[index]
         if (result.ok) {
           log(
             `saved inbound ${result.kind} to ${result.path} (${result.bytes} bytes)` +
@@ -2500,12 +2523,15 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       //    第三条写了什么" in the same turn. Anything unrecognised (pdf, images)
       //    falls back to the path-only description above.
       if (effectiveConfig.current.documentExtract !== false) {
-        const docs = []
-        for (const file of saved) {
-          if (file.kind !== 'file' && file.kind !== 'voice') continue
-          const extracted = await extractDocumentTextAsync(file.path, {
+        const docFiles = saved.filter((file) => file.kind === 'file' || file.kind === 'voice')
+        const extractedDocs = await mapWithConcurrency(docFiles, INBOUND_EXTRACT_CONCURRENCY, async (file) => ({
+          file,
+          extracted: await extractDocumentTextAsync(file.path, {
             maxChars: effectiveConfig.current.documentTextChars ?? DEFAULT_DOCUMENT_CHARS,
-          })
+          }),
+        }))
+        const docs = []
+        for (const { file, extracted } of extractedDocs) {
           if (extracted.ok) {
             docs.push(`<weixin_document path="${file.path}">
 ${neutralizeTags(extracted.text)}
@@ -2522,9 +2548,14 @@ ${neutralizeTags(extracted.text)}
       if (effectiveConfig.current.ocrEnabled === true) {
         const ocrSettings = resolveOcrSettings(effectiveConfig.current)
         if (ocrSettings !== undefined) {
-          for (const file of saved) {
-            if (file.kind !== 'image') continue
-            const ocr = await extractImageText(file.path, ocrSettings)
+          // OCR spawns a process per image, so the width here is lower than the
+          // download width on purpose.
+          const images = saved.filter((file) => file.kind === 'image')
+          const ocrResults = await mapWithConcurrency(images, INBOUND_EXTRACT_CONCURRENCY, async (file) => ({
+            file,
+            ocr: await extractImageText(file.path, ocrSettings),
+          }))
+          for (const { file, ocr } of ocrResults) {
             if (ocr.ok) {
               parts.push(`<weixin_ocr path="${file.path}">
 ${neutralizeTags(ocr.text)}

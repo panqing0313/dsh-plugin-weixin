@@ -3452,3 +3452,22 @@ secret 记录：`NPM_TOKEN`，创建于 `2026-11-01T01:57:47Z`（`gh api .../act
   profile `^1.1.0 → ^1.2.0` 且锁文件刷新 ✅。
 - `node bin/doctor.mjs` → `published version up to date (1.2.0)`、`host 0.2.1-rc.5 (tested)`、13 项检查 0 问题。
 - 兼容表：`1.2.0` 已装进 profile，2026-11-01 用户重启复核通过（「已验证」），已记入 `docs/compatibility.md` 真机验证行。
+
+## S1 入站附件并发下载（2026-11-02）
+
+一条消息可以带好几个附件（三张图、图片+文件、语音+文档），原来的处理是三个串行循环：
+
+- `src/index.js` 下载：`for (const media of message.media) { await download(...) }`；
+- 文档抽取：`for (const file of saved) { await extractDocumentTextAsync(...) }`；
+- OCR：`for (const file of saved) { await extractImageText(...) }`。
+
+三者彼此没有依赖，串行做等于把 N 次往返加在一起。现在改成有界并发：
+
+- 新增 `src/concurrency.js`：`mapWithConcurrency(items, limit, run)` —— 结果顺序与输入一致，
+  同时在飞的不超过 `limit`，**一个失败就停止派新任务**（已经跑着的无法取消，但不继续铺开）。
+- `INBOUND_DOWNLOAD_CONCURRENCY = 3`（网络请求，快）；`INBOUND_EXTRACT_CONCURRENCY = 2`
+  （文档抽取与 OCR 都可能起子进程，故意低于下载的并发度）。
+- `test/concurrency.test.js` 6 条：顺序保持、上限是硬上限、三件 60ms 的任务总耗时 < 150ms、
+  空列表、`limit < 1` 不死锁、失败停止派发且首个错误胜出。
+- `test/e2e.test.js` 新增一条：三个图片附件、假 CDN 每个延迟 120ms，断言**同时在飞 ≥ 2**、
+  三个文件都落盘、prompt 里三处「已保存到本地：」。用并发峰值而不是墙钟时间断言，避免负载下变 flaky。

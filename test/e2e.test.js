@@ -1938,3 +1938,90 @@ test('a daily per-sender quota stops one person without touching another', async
     delete process.env.DSH_WEIXIN_STATE_DIR
   }
 })
+
+test('three attachments in one message are downloaded at the same time', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-parallel-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  const { encryptAesEcb } = await import('../vendor/openclaw-weixin/cdn/aes-ecb.js')
+  const crypto = await import('node:crypto')
+
+  const plaintext = Buffer.from('\x89PNG\r\n\x1a\nparallel picture'.repeat(4), 'binary')
+  const key = crypto.randomBytes(16)
+  const ciphertext = encryptAesEcb(plaintext, key)
+
+  // Every download takes 120ms. Serial handling of three would therefore take
+  // >= 360ms; the assertion below is about overlap, not wall clock, so it does
+  // not turn into a flaky timing test on a loaded runner.
+  let inFlight = 0
+  let peak = 0
+  const cdn = http.createServer((req, res) => {
+    inFlight += 1
+    peak = Math.max(peak, inFlight)
+    setTimeout(() => {
+      inFlight -= 1
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      res.end(ciphertext)
+    }, 120)
+  })
+  await new Promise((resolve) => cdn.listen(0, '127.0.0.1', resolve))
+  const cdnBaseUrl = `http://127.0.0.1:${cdn.address().port}/c2c`
+
+  try {
+    const images = ['one', 'two', 'three'].map((name, index) => ({
+      type: 2,
+      image_item: { aeskey: key.toString('hex'), media: { encrypt_query_param: `img-${name}`, encrypt_type: 1 } },
+    }))
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        {
+          message_id: 2101,
+          from_user_id: ALLOWED,
+          group_id: '',
+          message_type: 1,
+          message_state: 2,
+          context_token: 'ctp',
+          create_time_ms: 5,
+          item_list: [...images, { type: 1, text_item: { text: '这三张分别是啥？' } }],
+        },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+    const accounts = path.join(stateRoot, 'openclaw-weixin', 'accounts', `${ACCOUNT_ID}.json`)
+    fs.writeFileSync(accounts, JSON.stringify({ token: 'tok', baseUrl, cdnBaseUrl }), { mode: 0o600 })
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({ eventPollMs: 25, sendIntervalMs: 1, allowedSenders: [ALLOWED], accountId: ACCOUNT_ID, cdnBaseUrl })
+
+    const disposers = []
+    const warnings = []
+    const ctx = {
+      logger: { info: () => {}, warn: (l) => warnings.push(l) },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + 10_000
+    while (sent.length < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    assert.ok(sent.length >= 1, `expected a reply, got none (warnings: ${warnings.join(' | ')})`)
+    assert.equal(peak >= 2, true, `downloads should overlap, peak in flight was ${peak}`)
+
+    const inbox = path.join(stateRoot, 'media', 'inbound')
+    const files = fs.readdirSync(inbox)
+    assert.equal(files.length, 3, `every attachment should be on disk: ${files.join(', ')}`)
+
+    const prompt = sent[0].msg.item_list[0].text_item.text
+    assert.equal(prompt.split('已保存到本地：').length - 1, 3, 'the prompt should name all three files')
+    assert.match(prompt, /这三张分别是啥？/)
+  } finally {
+    await new Promise((resolve) => cdn.close(resolve))
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
