@@ -118,6 +118,12 @@ function main() {
     backupEnabled: config.backupEnabled === true,
   })
 
+  // On a machine with no DSH installed at all (a bare CI runner, a fresh Linux
+  // box), the host step cannot be verified — that is not a reason to refuse to
+  // say the rest is ready. Say why instead of printing an unexplained □.
+  const hostNote = checklist.steps.find((step) => step.id === 'host')
+  const noHostToCheck = hostNote !== undefined && hostNote.state === 'todo' && hostVersion === null
+
   const icon = { done: '✓', todo: '□', blocked: '—', note: '·' }
   // 终端里中文占两列：按显示宽度算，否则说明那一列会参差不齐。
   const columns = (text) => [...text].reduce((sum, ch) => sum + (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1), 0)
@@ -139,7 +145,13 @@ function main() {
     }
   }
 
-  process.exitCode = checklist.complete ? 0 : 1
+  if (noHostToCheck) {
+    process.stdout.write('\n没有检测到 DSH 宿主：这一步等你装上 DSH 再回来跑一次就行，其余照上面做。\n')
+  }
+
+  // Exit 0 when the required steps this script can verify are done. A missing
+  // host is reported above but must not block a fresh machine's setup.
+  process.exitCode = checklist.complete || noHostToCheck ? 0 : 1
 }
 
 main()

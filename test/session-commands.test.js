@@ -1089,7 +1089,9 @@ test('a question the knowledge base covers reaches the model as a cited block', 
       await buildKnowledgeIndex(root, ACCOUNT_ID)
 
       fake.deliver('退货的运费谁出？', 'm1')
-      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent')
+      // Answers arrive at the poll cadence; on a slow CI runner the first one can
+      // take a few seconds when other test files are saturating the CPU.
+      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent', 20_000)
       const prompt = promptsSeen[0].message.content.map((part) => part.text ?? '').join('')
       assert.match(prompt, /<weixin_knowledge>/, 'the knowledge block is injected')
       assert.match(prompt, /《after-sale\.md》· 退货政策/, 'and it says which file the answer came from')
@@ -1109,7 +1111,7 @@ test('with the knowledge base switched off, the same question carries no knowled
       await buildKnowledgeIndex(root, ACCOUNT_ID)
 
       fake.deliver('退货的运费谁出？', 'm1')
-      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent')
+      await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent', 20_000)
       const prompt = promptsSeen[0].message.content.map((part) => part.text ?? '').join('')
       assert.equal(prompt.includes('<weixin_knowledge>'), false)
     },

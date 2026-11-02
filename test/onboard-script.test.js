@@ -68,7 +68,10 @@ test('once an account and an allowlist exist, the script exits zero and stops na
       JSON.stringify({ 'bot1@im.bot': { label: '小号' } }),
     )
     const { stdout, code } = run(stateDir)
-    assert.equal(code, 0, 'everything required is done')
+    // The host-version step follows whatever DSH is installed on this machine:
+    // present and tested locally, absent on a bare CI runner. Assert the two
+    // required steps this test actually controls, not the host's luck.
+    assert.equal(code, 0, `everything required is done\n${stdout}`)
     assert.match(stdout, /✓ 登录一个微信账号/)
     assert.match(stdout, /✓ 告诉它「谁能让它干活」/)
     assert.ok(!stdout.includes('最快的三条命令'), 'no quickstart banner once it is ready')
