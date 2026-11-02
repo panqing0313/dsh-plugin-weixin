@@ -128,7 +128,7 @@ function main() {
   // box), the host step cannot be verified — that is not a reason to refuse to
   // say the rest is ready. Say why instead of printing an unexplained □.
   const hostNote = checklist.steps.find((step) => step.id === 'host')
-  const noHostToCheck = hostNote !== undefined && hostNote.state === 'todo' && hostVersion === null
+  const noHostToCheck = hostNote !== undefined && hostNote.state === 'todo'
 
   const icon = { done: '✓', todo: '□', blocked: '—', note: '·' }
   // 终端里中文占两列：按显示宽度算，否则说明那一列会参差不齐。
