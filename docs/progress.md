@@ -3931,3 +3931,4 @@ release run `41485882140` success）。
   `published version up to date (1.4.3)`。
 - 全量 `npm test` **1070/1070、0 fail、0 skipped**、39.2s；`node bin/check.mjs` → `checked 249 files`。
 - 待办：重启 DSH 后按 5 步复核，并在聊天里发一条带 `[表情:…]` 的消息确认内置 68 张确实退场（本机默认 `stickerKeepBuiltins: false`）。
+- 复核：2026-11-03 用户重启后确认 1.4.3 通过（表情包优先顺序生效：自己的图存在时内置 68 张不再出现在名单里），已写进 `docs/compatibility.md` 表格首行。
