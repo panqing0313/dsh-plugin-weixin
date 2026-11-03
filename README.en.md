@@ -371,6 +371,8 @@ The `config` of that line in `cordis.patch.yml`:
 | `videoFrames` | `true` | On receiving a video, pull three still frames with the local ffmpeg and hand them to the model (the model cannot read video, but it can read images) |
 | `codeFileThreshold` | `1200` | Above how many characters a code block is sent as a file; shorter ones stay in the bubble |
 | `groupReplyWhen` | `'mention'` | When to reply in a group: `mention` answers only when addressed, `all` answers every message |
+| `groupSummaryEnabled` | `false` | Group context summary: after a batch of group messages, one background call compresses the recent talk into a few lines and folds them into the next prompt. Off by default — it spends a call each time |
+| `groupSummaryEvery` | `12` | How many group messages make a batch |
 | `groupShareMemory` | `false` | Whether to inject long-term memory, recall snippets and the closeness line in groups too. Off by default — those blocks are the owner's own private business |
 | `toolAudit` | `true` | Append every agent tool call to `<state dir>/audit/` (one JSONL per day): tool name, arguments truncated to 500 characters, which account/conversation/sender triggered it, whether the result carries an error |
 | `voiceOutbound` | `false` | Send audio attachments as WeChat voice notes instead of files (wav/silk transcoded in-process, everything else via ffmpeg). **Off** by default: in practice the server accepts bot voice (ret=0) but does not deliver it, so turning it on makes attachments disappear silently; a rejected send still degrades to a file automatically |
@@ -1258,3 +1260,5 @@ If this plugin has been useful to you, you are welcome to buy the author a coffe
 <p align="center"><sub>Left: WeChat &nbsp;·&nbsp; Right: Alipay</sub></p>
 
 Or open an Issue / PR: [github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)
+
+When you are mentioned in a group, the model sees only the message that mentioned you — what the previous twenty said is outside its window. With `groupSummaryEnabled` on (off by default, because it spends one background call per batch) the plugin collects group messages, summarizes them every `groupSummaryEvery` messages (12 by default), and folds those lines into the next mention's prompt. A summary older than three hours is not injected: three-day-old talk must not pass as today's context. It restates only what the messages say, never guesses, and the stats tab shows how much of the prompt it takes.

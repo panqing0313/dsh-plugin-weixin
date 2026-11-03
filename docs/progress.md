@@ -3963,3 +3963,13 @@ release run `41485882140` success）。
 - `src/index.js`：`candidates()` 每个账号每 tick 用 `learnActiveHours(readJournalRange(..., days: 14))` 现算一次（不落盘）；新增配置 `proactiveLearnedWindow`（默认 `true`）；`/diag` 增加「主动时段」一行。
 - 设置卡「主动开口」组加「按作息收窄时段」开关；`src/config-effect.js` 标 `live`。
 - 测试：`test/proactive-timing.test.js` 6 条（直方图只数入站与窗口、样本不足两种原因、最忙时段与跨零点、交集只收窄/不重合/跨零点两段、说明文案、真实两周作息）；`test/proactive.test.js` 新增 5 条（收窄与关闭开关、不重合照旧、夜猫子两半、数据未就绪不改、被无视两次代价更大）。
+
+## 群聊上下文摘要（2026-11-03，1.4.4 item 2）
+
+群里被叫到时模型只见那一条，前面聊什么它不知道。这一项在后台补上。
+
+- 新增 `src/message/group-summary.js`：`groupSummaryPrompt(lines)`（三句话、只复述、不推测）、`buildGroupSummaryBlock(entry,{now,ttlMinutes})`（过期返回空串，输出 `<weixin_group_summary at="20 分钟前">`）、`createGroupSummaries({stateRoot,warn,now})` → `{note,due,save}`；环形缓冲 40 条只在内存里，落盘的是 `group-summary.json`（按账号 → 会话存 `{summary,at,covered,sinceSummary}`）；摘要上限 600 字符。
+- `src/index.js`：群消息（`isGroupMessage`）在群策略判定后 `note()`，`due()` 到批次就 `bridge.summarize({sessionPrefix:'wx-grp-', route: sideRoute?.()})` 后台压缩并 `save()`（失败只 warn，受后台预算闸门约束）；拼提示词时若该会话有新鲜摘要就插入 `groupSummaryBlock`（排在记忆之后、往事检索之前），并计入「提示词构成」的新段 `group`。
+- 配置：`groupSummaryEnabled`（默认 `false`）、`groupSummaryEvery`（默认 12）；设置卡「群聊」组两个字段；`src/config-effect.js` 标 `live`；`COMPOSITION_LABELS` 加 `group: ['群里在聊什么', 'Group talk']`。
+- 测试：`test/group-summary.test.js` 5 条（提示词、块的新鲜/过期/空、批次累计与环形上限、保存后重置与重载、空结果不覆盖、超长截断）；`test/e2e.test.js` 新增 1 条（群里被叫到时提示词含摘要块；一天前的摘要不出现）。
+- 顺带修掉 `persona + memory` 那条老 flake 的两个来源：它原来断言**出站气泡**（要活过节奏、贴纸、outbox）并靠两条脚本批次按顺序被轮询取走。现在断言**假 agent 收到的提示词**，第二条消息在第一条到位后按需投递。

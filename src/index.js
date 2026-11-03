@@ -83,6 +83,8 @@ let knowledgeRefresher
 /** ④ One audit line per unfamiliar shape per conversation, not one per message. */
 const unknownItemSeen = new Set()
 let outbox
+/** 群聊摘要：内存里攒群消息，够一批就后台压成几行。 */
+let groupSummaries
 import { MessageDeduper } from './message/dedupe.js'
 import { markdownToPlainText, resolveMarkdownMode } from './message/markdown.js'
 import { extractUrls, fetchLinkText, describeLinkResults } from './message/links.js'
@@ -161,6 +163,7 @@ import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
 import { describeLearnedHours, learnActiveHours } from './message/proactive-timing.js'
+import { buildGroupSummaryBlock, createGroupSummaries, groupSummaryPrompt, readGroupSummary } from './message/group-summary.js'
 import { recordPromptComposition } from './message/prompt-composition.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './message/style-feedback.js'
@@ -300,6 +303,8 @@ export const Config = z.object({
   proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
   proactiveLearnedWindow: z.boolean().default(true).description('从消息流水里学「对方通常几点在线」，把主动消息的时间窗收窄到那段（只收窄，不放宽；样本不够时不启用）。'),
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
+  groupSummaryEnabled: z.boolean().default(false).description('群聊上下文摘要：群里攒够 groupSummaryEvery 条消息后，用一次后台调用把最近聊的压成几行，下次被叫到时折进提示词。默认关闭——它每次都要花一次调用。'),
+  groupSummaryEvery: z.number().min(4).max(100).default(12).description('攒多少条群消息做一次摘要（默认 12）。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
   groupKeywords: z.string().default('').description('群关键词自动回复，每行一条：正则 => 回复。例如「^打卡$ => 打卡成功」。只在群里、只对白名单内的人生效；同一群同一条规则 60 秒内最多应一次；免打扰时段沉默。回复是模板，不走模型。'),
@@ -679,7 +684,8 @@ export function apply(ctx, config) {
       // writes are atomic, so the damage is bounded to last-writer-wins).
       // The outbox: a reply that could not be delivered is written to disk and
       // retried, because a reminder nobody receives is worse than one sent late.
-      outbox = createOutbox({
+      groupSummaries = createGroupSummaries({ stateRoot, warn })
+    outbox = createOutbox({
         stateRoot,
         transportFor: (accountId) => transports.get(accountId),
         warn,
@@ -2270,6 +2276,31 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         ...String(config.groupBotNames ?? '').split(',').map((name) => name.trim()),
       ],
     })
+
+    // 群聊上下文（C14-bis）：记下每一条群消息（不管有没有被点到），够一批就在
+    // 后台压成几行；下次被叫到时那几行会折进提示词。默认关闭，因为一次后台调用
+    // 就是一次钱。
+    if (isGroupMessage(message) && effectiveConfig.current.groupSummaryEnabled === true && groupSummaries !== undefined) {
+      groupSummaries.note(accountId, message.conversationId, { sender: message.senderId, text: message.text, at: Date.now() })
+      const batch = groupSummaries.due(accountId, message.conversationId, Number(effectiveConfig.current.groupSummaryEvery ?? 12))
+      if (batch.due && bridge !== undefined && batch.lines.length > 0) {
+        const lines = batch.lines
+        void bridge
+          .summarize({
+            conversationId: message.conversationId,
+            accountId,
+            prompt: groupSummaryPrompt(lines),
+            sessionPrefix: 'wx-grp-',
+            route: sideRoute?.(),
+          })
+          .then((result) => {
+            if (result?.ok !== true || typeof result.text !== 'string' || result.text.trim() === '') return
+            groupSummaries?.save(accountId, message.conversationId, { summary: result.text, covered: lines.length })
+            fileLog.info(`group summary for ${message.conversationId} covers ${lines.length} messages`)
+          })
+          .catch((error) => warn(`group summary failed: ${error?.message ?? error}`))
+      }
+    }
     if (groupDecision.reply === false) {
       // 1a-ter. Group keyword auto-reply: the third group policy. It lives in
       // the declined branch (mention/all did not fire), still inside the group
@@ -2783,7 +2814,12 @@ ${neutralizeTags(ocr.text)}
       ? buildDryRunBlock({ accountLabel: config.accountLabel ?? '' })
       : ''
     if (dryRunBlock !== '') log(describeDryRun())
-    const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
+    // 群里被叫到时，把最近群聊的摘要一起给它（过期的不给）：这样它知道大家在
+    // 聊哪件事，而不是只看见被点名的那一条。
+    const groupSummaryBlock = isGroupMessage(message) && effectiveConfig.current.groupSummaryEnabled === true
+      ? buildGroupSummaryBlock(readGroupSummary(stateRoot, accountId, message.conversationId, { warn }), { now: journaledAt })
+      : ''
+    const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, contactBlock, memoryBlock, groupSummaryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 统计页签的「提示词构成」：记下这一回合每段实际占了多少字符。各段之和
@@ -2797,6 +2833,7 @@ ${neutralizeTags(ocr.text)}
       { key: 'life', chars: lifeBlockText.length },
       { key: 'contact', chars: contactBlock.length },
       { key: 'memory', chars: memoryBlock.length },
+      { key: 'group', chars: groupSummaryBlock.length },
       { key: 'recall', chars: recallBlock.length },
       { key: 'knowledge', chars: knowledgeBlock.length },
       { key: 'dryRun', chars: dryRunBlock.length },

@@ -68,6 +68,7 @@ export const COMPOSITION_LABELS = Object.freeze({
     recall: ['往事检索', 'Recall'],
     knowledge: ['知识库', 'Knowledge'],
     dryRun: ['预演约定', 'Dry run'],
+    group: ['群里在聊什么', 'Group talk'],
     source: ['来源说明', 'Source'],
     message: ['这条消息与附件', 'Message & attachments'],
 })

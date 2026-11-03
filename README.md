@@ -366,6 +366,8 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `codeFileThreshold` | `1200` | 代码块超过多少字改发文件；更短的留在气泡里 |
 | `groupReplyWhen` | `'mention'` | 群里什么时候回：`mention` 只答被叫到的时候，`all` 每条都答 |
 | `groupBotNames` | `''` | 群里的额外称呼（逗号分隔）。iLink 不给机器人的群昵称，想认「@小助手」就写在这里 |
+| `groupSummaryEnabled` | `false` | 群聊上下文摘要：群里攒够一批消息后，用一次后台调用把最近聊的压成几行，下次被叫到时折进提示词。默认关闭——它每次都要花一次调用 |
+| `groupSummaryEvery` | `12` | 攒多少条群消息做一次摘要 |
 | `groupShareMemory` | `false` | 群里是否也注入长期记忆、回忆片段与亲密度行。默认关闭——那些块是主人自己的私事 |
 | `toolAudit` | `true` | 把 agent 每次工具调用追加到 `<状态目录>/audit/`（按天一个 JSONL）：工具名、截断到 500 字符的参数、哪个账号/会话/发送者触发、结果是否带错 |
 | `voiceOutbound` | `false` | 音频附件按微信语音发出而不是文件（wav/silk 进程内转码，其余走 ffmpeg）。**默认关**：实测服务端接受机器人语音（ret=0）但不投递，开着会让附件无声消失；发送被拒时仍会自动降级为文件 |
@@ -1311,3 +1313,5 @@ node bin/release.mjs --finish 0.9.11   # 补齐 tag / Release / 核验 / 装本�
 <p align="center"><sub>左：微信 &nbsp;·&nbsp; 右：支付宝</sub></p>
 
 也可以提 Issue / PR：[github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)
+
+群里被叫到时，模型默认只看见被点名的那一条消息：前面二十条说过什么，它在自己的窗口之外。把 `groupSummaryEnabled` 打开（默认关闭，因为它每次都要花一次后台调用）之后，插件会悄悄攒群消息，每 `groupSummaryEvery` 条（默认 12）做一次摘要，下次被叫到时把那几行折进提示词 —— 摘要超过 3 小时就不再注入，三天前聊的事不该冒充今天的上下文。摘要只从群消息本身来，不发散、不推测；`/diag` 与统计页签里的「群里在聊什么」一段能看出它占了多少提示词。

@@ -167,8 +167,10 @@ function seedAccount(stateRoot, baseUrl) {
 async function startFakeILink(batches) {
   const fake = await startSharedFake({ batches })
   // `sent` is the raw request bodies, like the hand-rolled fake this replaced;
-  // `outbound` (with its `text` field) stays reachable for teardown.
-  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies, seen: fake.seen }
+  // `outbound` (with its `text` field) stays reachable for teardown. `deliver`
+  // is exposed so a test can hand over the NEXT message on demand instead of
+  // scripting a batch and hoping the poll loop picks it up in order.
+  return { server: fake.server, baseUrl: fake.baseUrl, sent: fake.bodies, seen: fake.seen, deliver: fake.deliver }
 }
 
 /**
@@ -1447,12 +1449,9 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       // Two messages on one line: the first is a COLD line (the window is worth
       // injecting), the second is warm (the agent already has the first in its
       // own history, so the window must not be repeated).
-      const { server, baseUrl, sent, seen } = await startFakeILink([
+      const { server, baseUrl, sent, seen, deliver } = await startFakeILink([
         [
           { message_id: 5001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona', create_time_ms: 21, item_list: [{ type: 1, text_item: { text: '晚上吃啥好' } }] },
-        ],
-        [
-          { message_id: 5002, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct-persona-2', create_time_ms: 22, item_list: [{ type: 1, text_item: { text: '那吃点啥' } }] },
         ],
       ])
       seedAccount(stateRoot, baseUrl)
@@ -1483,7 +1482,13 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       // minutes while the plugin itself is long done. The prompt is the thing
       // under test, and it is in hand as soon as the inbound path runs.
       const startedWaiting = Date.now()
-      const deadline = startedWaiting + 20_000
+      const deadline = startedWaiting + 90_000
+      while (fakeAgents.prompts.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      // The second line is handed over only once the first prompt is in hand, so
+      // this test never depends on two scripted polls being consumed in order.
+      deliver('那吃点啥', '5002', { from: ALLOWED, contextToken: 'ct-persona-2' })
       while (fakeAgents.prompts.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
@@ -2049,5 +2054,79 @@ test('three attachments in one message are downloaded at the same time', async (
     await new Promise((resolve) => cdn.close(resolve))
     fs.rmSync(stateRoot, { recursive: true, force: true })
     delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
+test('a group mention carries the recent group summary; a stale one stays out', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  for (const ageMinutes of [5, 24 * 60]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-group-sum-'))
+    process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+    try {
+      // What a background summarization would have written: a summary of the
+      // recent group talk, five minutes old in the first pass and a day old in
+      // the second (past the 3-hour freshness bound).
+      fs.writeFileSync(path.join(stateRoot, 'group-summary.json'), JSON.stringify({
+        schemaVersion: 1,
+        accounts: {
+          [ACCOUNT_ID]: {
+            conversations: {
+              room_e2e: { summary: '大家在约周五打球，小红说要加班。', at: Date.now() - ageMinutes * 60_000, covered: 12, sinceSummary: 0 },
+            },
+          },
+        },
+      }))
+      const { server, baseUrl, sent, seen } = await startFakeILink([
+        [
+          { message_id: 6001, from_user_id: ALLOWED, group_id: 'room_e2e', message_type: 1, message_state: 2, context_token: 'ct-group', create_time_ms: 31, item_list: [{ type: 1, text_item: { text: '小助手 周五几点打球' } }] },
+        ],
+      ])
+      seedAccount(stateRoot, baseUrl)
+
+      const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+      const config = plugin.Config({
+        eventPollMs: 25,
+        sendIntervalMs: 1,
+        allowedSenders: [ALLOWED],
+        accountId: ACCOUNT_ID,
+        groupChatEnabled: true,
+        groupBotNames: '小助手',
+        groupSummaryEnabled: true,
+        humanPacing: false,
+        stickerEnabled: false,
+      })
+
+      const fakeAgents = createFakeAgents({ reply: 'pong: ' })
+      const disposers = []
+      const warnings = []
+      const ctx = {
+        logger: { info: () => {}, warn: (l) => warnings.push(l) },
+        effect(fn) { disposers.push(fn()); return { dispose() {} } },
+        get: (name) => (name === 'agents' ? fakeAgents : undefined),
+      }
+      plugin.apply(ctx, config)
+
+      const deadline = Date.now() + 20_000
+      while (fakeAgents.prompts.length < 1 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      for (const d of disposers) await (await d)?.()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      server.close()
+
+      const progress = `age=${ageMinutes}min; prompts=${fakeAgents.prompts.length}; sent=${sent.length}; getupdates=${seen.getupdates}; warnings: ${warnings.join(' | ') || 'none'}`
+      assert.ok(fakeAgents.prompts.length >= 1, `the group mention reached the model — ${progress}`)
+      const prompt = fakeAgents.prompts[0]
+      if (ageMinutes < 180) {
+        assert.match(prompt, /<weixin_group_summary/, `a fresh summary is context — ${progress}`)
+        assert.match(prompt, /大家在约周五打球/)
+      } else {
+        assert.doesNotMatch(prompt, /<weixin_group_summary/, `a day-old summary is not context — ${progress}`)
+      }
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true })
+      delete process.env.DSH_WEIXIN_STATE_DIR
+    }
   }
 })
