@@ -3874,3 +3874,24 @@ release run `41485882140` success）。
   `source.path` 不跳出仓库、别名指向本清单里的名字、别名不等于本名）、清单目录里只允许 json
   （图片不许进 git）、`fetch --list` 的输出、`--from` 离线装进临时数据目录并合并别名、未知/穿越式
   包 id 被拒绝。全量见提交时的测试数字。
+
+## 发布 1.4.2（2026-11-03）
+
+「借来的画」（`bin/stickers.mjs fetch` + `assets/sticker-packs/bluefish.json`）随这一版发出去。
+
+- 版本提交 `416ab4e docs: 1.4.2 — borrowed art, installed locally`（CHANGELOG + `package.json`/`package-lock.json`/`src/client.js`/两份 README 的发布行）。
+- **第一次 tag 发布失败在 CI 的测试上**（run `41576862282`，`1014 pass / 1 fail / 54 skip`）：
+  `test/session-commands.test.js` 的「/export … spills to a file when long」报
+  `timed out waiting for the spill reply` —— 那条 `waitFor` 默认 5 秒，本机这条用例 0.6 秒，
+  冷 runner 上不够。修法提交 `e35eb61 fix(test): the long export needs more than five seconds on a cold runner`
+  （长导出那两处等待改用 20 秒，并写明这是防误报的安全网、不是性能断言；单文件 45/45）。
+- 重打 tag 后 CI 发布成功（release run `41577169237`，`NPM_TOKEN` + `id-token: write` 带 provenance）；
+  main 的 CI `41577154854` 同时 success。
+- `node bin/release.mjs --finish 1.4.2` 四步全绿：registry 可见、tag `v1.4.2` 已在、pushed main+tag、
+  [GitHub release v1.4.2](https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.4.2) 已创建、
+  profile `^1.4.1 → ^1.4.2` 且锁文件刷新。
+- 核验：`dist-tags.latest = 1.4.2`、`dist.shasum fcbb478b3a349cc2bda879e802abd8387765fbfc`、
+  `dist.integrity sha512-mxICuS9TGf0OjpXWF7FmNJFYkQu0/vXijghLJINrRIr886TPhCe0LBGyc3SlqM0HhGh26u78to2H9SAObpwSbg==`、
+  `gitHead e35eb61d1a553d309c0ca62000a1488e30b5c3fc`、`dist.unpackedSize 7511558`；
+  `doctor` → `installed version 1.4.2`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.4.2)`。
+- 待办：重启 DSH 后按 5 步复核（本版只加了一条 fetch 子命令与清单文件，界面与内置表情未动），通过后写进兼容表。
