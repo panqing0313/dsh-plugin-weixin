@@ -3918,6 +3918,16 @@ release run `41485882140` success）。
   自定义的排在最前面。
 - 文档：README 中英的表情节各加一段、`docs/extras.md` 第 3 条下补两条、CHANGELOG 1.4.3。
 
+## e2e 的等待时间改成安全网（2026-11-03）
+
+**症状**：`test/e2e.test.js` 的 `persona + memory`（以及 `local recall`）在整机忙的时候偶尔红，单跑却只要五百毫秒。同一台机器上连着跑三遍 `npm test` 全绿，两遍并排跑就必红一条。
+
+**定位**：这些用例的截止时间写死 10 秒，等的是**回复被发出去**（`sent.length`）。一条回复要穿过节流、分块、表情剥离、重发队列才落地，任何一环被系统负载拖住，10 秒就不够用 —— 而在同一台机器上再叠一层测试压力，足以把它拖住。
+
+**修法**（`test/e2e.test.js`）：把这种「等回复」的截止时间统一换成 `REPLY_WAIT_MS`（默认 60 秒，可用 `DSH_WEIXIN_E2E_WAIT_MS` 覆盖），共 22 处。同时保留原来的断言：真的坏了还是会在 60 秒时报错，只是不再是「机器有点忙」就报错。
+
+**另一个坑**：`node --test test/e2e.test.js` 直接跑会红两条（`expected the vendor log dir to be redirected`、相对路径上传），因为它们依赖 `npm test` 里的 `--import ./test/isolate-host-state.mjs`（它负责把 `DSH_WEIXIN_LOG_DIR` 指到临时目录、隔离宿主状态）。**验证要用 `npm test`，不要在文件级直接跑完就下结论。**
+
 ## 发布 1.4.3（2026-11-03）
 
 - 「自己的表情就是全部的表情」这条规则按 **tag → CI 发布（`NPM_TOKEN` + provenance）→ 本机 `--finish`** 的常规流程发出，

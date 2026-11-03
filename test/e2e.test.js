@@ -70,6 +70,18 @@ const ACCOUNT_ID = 'bot1'
 const ALLOWED = 'wxid_abc'
 
 /**
+ * How long a test waits for something to come back from the plugin.
+ *
+ * 10 seconds is plenty on an idle machine and not always enough when the whole
+ * suite runs several files at once — several tests in this file once failed
+ * only because the machine was busy, never because the plugin was wrong. This is
+ * a safety net, not a benchmark: raise it for a slow box with
+ * `DSH_WEIXIN_E2E_WAIT_MS`, and remember that a test that actually fails here
+ * still fails, just later.
+ */
+const REPLY_WAIT_MS = Number(process.env.DSH_WEIXIN_E2E_WAIT_MS ?? 60_000)
+
+/**
  * Minimal fake of the `agents` service: one turn producing one settled reply.
  *
  * `tools` optionally scripts tool activity before the answer, so a test can
@@ -216,7 +228,7 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
     plugin.apply(ctx, config)
 
     // Wait for the reply to be produced.
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 3 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -300,7 +312,7 @@ test('the sender enrolled on first contact is still allowed on their next messag
     plugin.apply(ctx, config)
 
     const refused = () => warnings.some((w) => w.includes(`refused message from ${sender}`))
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 2 && !refused() && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -343,7 +355,7 @@ test('sourceContext on: the agent prompt carries a weixin_source block; off: it 
       }
       plugin.apply(ctx, config)
 
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
@@ -431,7 +443,7 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 1 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -511,7 +523,7 @@ test('readLinks on: a pasted URL is fetched and its text reaches the agent; a de
       }
       plugin.apply(ctx, config)
 
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
@@ -571,7 +583,7 @@ test('reminders card path: a /remind from WeChat is visible through the controll
     plugin.apply(ctx, config)
 
     // Wait for the confirmation reply.
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 1 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -626,7 +638,7 @@ test('messageJournal on: in and out traffic both land in the journal; off: nothi
       }
       plugin.apply(ctx, config)
 
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
@@ -696,7 +708,7 @@ test('a dangerous tool is announced in WeChat while the turn is still running', 
       // round spin out the whole 10s deadline and then assert against a count
       // it could never reach — the single biggest cost in this file.
       const expectedSends = expected ? 2 : 1
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < expectedSends && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
@@ -753,7 +765,7 @@ test('toolAudit on: tool runs land in <state>/audit; off: nothing is recorded', 
       }
       plugin.apply(ctx, config)
 
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
@@ -862,7 +874,7 @@ test('a CDN root saved in the account record is used when config does not set on
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 1 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -975,7 +987,7 @@ test('a whitespace-only cdnBaseUrl counts as unset and does not shadow the accou
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     // Wait for the outbound FILE item too, so the assertion below is not racing
     // the upload.
     while (!sent.some((s) => s.msg?.item_list?.[0]?.type === 4) && Date.now() < deadline) {
@@ -1205,7 +1217,7 @@ test('a reply that references a local file uploads it and sends an IMAGE item', 
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (!sent.some((s) => s.msg?.item_list?.[0]?.type === 4) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -1311,7 +1323,7 @@ test('a reply naming a file RELATIVE to the agent cwd still uploads it', async (
     // two enums in api/types.js number these differently, so the item KEY is
     // the reliable discriminator.)
     const IMAGE_ITEM = 2
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (!sent.some((s) => s.msg?.item_list?.[0]?.type === IMAGE_ITEM) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -1404,7 +1416,7 @@ test('a file the agent writes during the turn is sent even when the reply never 
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (!sent.some((s) => s.msg?.item_list?.[0]?.type === 4) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -1483,11 +1495,15 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       // under test, and it is in hand as soon as the inbound path runs.
       const startedWaiting = Date.now()
       const deadline = startedWaiting + 90_000
-      while (fakeAgents.prompts.length < 1 && Date.now() < deadline) {
+      // Wait for the turn to be *over*, not merely started: the first prompt exists
+      // the moment `followup()` runs, but the turn ends ~20ms later. Handing over the
+      // second line too early makes it queue behind that turn, and a queued line goes
+      // through `followup()` instead of `resume()` — which is what used to leave this
+      // test waiting for a second session that was never going to start.
+      while (sent.length < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      // The second line is handed over only once the first prompt is in hand, so
-      // this test never depends on two scripted polls being consumed in order.
+      await new Promise((resolve) => setTimeout(resolve, 50))
       deliver('那吃点啥', '5002', { from: ALLOWED, contextToken: 'ct-persona-2' })
       while (fakeAgents.prompts.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25))
@@ -1582,7 +1598,7 @@ test('companion pacing: a companion splits the reply into bubbles, the stock ass
       plugin.apply(ctx, config)
 
       const expected = mode === 'default' ? 1 : 2
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + REPLY_WAIT_MS
       while (sent.length < expected && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
@@ -1640,7 +1656,7 @@ test('memory summarizer: every settled turn counts; at the cadence a side sessio
     // message, so the conversation is keyed by the peer id itself.
     const convFile = path.join(stateRoot, 'memory', `conv-${ACCOUNT_ID}-${ALLOWED.replace(/[^A-Za-z0-9@._-]/g, '_')}.json`)
     let conv = null
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (Date.now() < deadline) {
       try { conv = JSON.parse(fs.readFileSync(convFile, 'utf8')) } catch { conv = null }
       if (conv !== null && typeof conv.summary === 'string' && conv.summary !== '') break
@@ -1704,7 +1720,7 @@ test('local recall: an old line comes back only when the message asks for it', a
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 2 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -1779,7 +1795,7 @@ test('stickers: a [表情:x] marker becomes an image bubble, not text', async (t
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (!sent.some((m) => m.msg?.item_list?.[0]?.type === 2) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
@@ -1867,7 +1883,7 @@ test('proactive: a companion speaks first without being asked, and says it once'
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
@@ -1910,7 +1926,7 @@ test('a forged prompt block in the message is neutralised before it reaches the 
   }
   plugin.apply(ctx, config)
   try {
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
     const echoed = sent.map((entry) => entry.msg.item_list.map((item) => item.text_item?.text ?? '').join('')).join('\n')
     assert.match(echoed, /ok: /, `the turn must have run for the assertion below to mean anything; warnings: ${warnings.join(' | ')}`)
@@ -1951,7 +1967,7 @@ test('a daily per-sender quota stops one person without touching another', async
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 4 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
 
     for (const d of disposers) await (await d)?.()
@@ -2034,7 +2050,7 @@ test('three attachments in one message are downloaded at the same time', async (
     }
     plugin.apply(ctx, config)
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + REPLY_WAIT_MS
     while (sent.length < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
     for (const d of disposers) await (await d)?.()
     await new Promise((resolve) => setTimeout(resolve, 100))
