@@ -3939,6 +3939,28 @@ release run `41485882140` success）。
 
 **测试**：`test/tts.test.js` 10 条（朗读文本清洗与截断、只有 macOS 声称支持、带/不带音色参数、空文本不启动进程、`say` 失败与「成功但没产出文件」都变成 reason、afconvert 参数、成功路径删掉 AIFF、转换失败也删掉 AIFF）；`test/session-commands.test.js` 加一条 `/say` 空参数的用法回复且不开会话。
 
+## ⑥ 群成员名片自动补全（1.4.5）
+
+**为什么**：1.4.4 给名片加了「超过 45 天没更新就注明可能过时」，但注明只是提醒，事实还是旧的。批里的第 ⑥ 项要的是**自动刷新**。
+
+**做成什么**：`src/message/contact-refresh.js`
+
+- `recentLinesForSender(entries, senderId, {days=14, limit=12})`：只取入站、只看最近 14 天、每句截 80 字、尾部对齐（最近的靠后）；
+- `pickRefreshCandidates(stateRoot, accountId, entries, {staleDays, max=2})`：过时 + 至少 3 句话，按账号取前 `max` 个；
+- `buildContactRefreshPrompt({contact, lines})`：把「现在这张名片（N 天没更新）」+「他最近说过的话」摆清楚，要求输出一行 JSON，并明写「看不出来的字段留空；不要编造没出现在话里的信息」；
+- `parseContactRefresh(text)`：裸 JSON / ```json 围栏 / 夹在句子里三种形态都认，再过 `sanitizeProfile`（字段与主人档案同一套，人物日期必须是 `YYYY-MM-DD`）；读出来是空名片就返回 `undefined`，宁可什么都不写；
+- `applyContactRefresh(...)` 走 `saveContact({profile})` —— 它会顺手把 `profileUpdatedAt` 推到现在，于是这张名片立刻不再「过时」；`firstSeenAt` 不动。
+
+**接线**：`src/index.js` 里新增 6 小时检查一次的 `contactRefreshTimer`（每账号 20 小时最多跑一次，`contactRefreshDue`/`markContactRefreshRun` 记在 `contact-refresh.json`），逐个候选调 `bridge.summarize({sessionPrefix:'wx-card-', route: sideRoute('memory')})` —— 于是它自动受 `backgroundDailyLimit` 约束。新增配置 `contactRefreshEnabled`（默认开）与 `contactRefreshPerDay`（默认 2，0 = 关），设置卡「群聊」组有两行，`config-effect` 标 `live`。
+
+**测试**：`test/contact-refresh.test.js` 8 条（只取这个人最近的入站话、长句截断与只留最新 12 句、候选=过时+说话够多、每次上限、提示词含已知字段/原话/JSON 形状、三种 JSON 形态都能读、读不出返回 undefined、写回后不再过时且 `firstSeenAt` 不变）。
+
+## 测试并发改 4（1.4.5）
+
+**现象**：全量跑到 1100+ 条时，`persona + memory`、`local recall` 这类 e2e 偶发撞 60 秒等待上限（单跑都是几百毫秒）。查下来不是功能错，而是 `node --test` 默认按 **CPU 数（这台 10）**并行跑 46 个测试文件，每个 e2e 文件都要加载宿主包、起假 iLink、跑 25ms 事件轮询；10 路并行 + 我自己同时在跑别的命令时，等待被 CPU 饿死。
+
+**做法**：`package.json` 的 `test` / `test:watch` 加 `--test-concurrency=4`。实测 1138 条 **55 秒**（10 路并行约 60 秒且偶发红），既更稳也不更慢 —— 这些测试大部分时间在等 I/O 与定时器，不是等 CPU。CI runner 核少，本来就没跑满，改后行为一致。
+
 ## 发布 1.4.4（2026-11-03）
 
 这一版是六件事，每一件都回答「它到底在想什么」。按实现顺序：

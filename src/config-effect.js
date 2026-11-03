@@ -44,7 +44,7 @@ export const CONFIG_EFFECTS = Object.freeze({
   'ttsVoice': 'live', 'voiceReplies': 'live', 'voiceReplyMaxChars': 'live',
   'proactiveEnabled': 'live', 'proactiveMinGapMinutes': 'live', 'proactiveMaxPerDay': 'live', 'proactiveWindowStart': 'live', 'proactiveWindowEnd': 'live', 'proactiveLearnedWindow': 'live',
   'groupChatEnabled': 'live', 'groupReplyWhen': 'live', 'groupBotNames': 'live', 'groupKeywords': 'live', 'packsIndexUrl': 'live',
-  'groupSummaryEnabled': 'live', 'groupSummaryEvery': 'live', 'contactStaleDays': 'live',
+  'groupSummaryEnabled': 'live', 'groupSummaryEvery': 'live', 'contactStaleDays': 'live', 'contactRefreshEnabled': 'live', 'contactRefreshPerDay': 'live',
   'groupShareMemory': 'live', 'videoFrames': 'live', 'richContent': 'live', 'codeFileThreshold': 'live', 'locale': 'live',
   'toolNotices': 'live', 'quietHoursEnabled': 'live', 'quietHoursStart': 'live', 'quietHoursEnd': 'live', 'senderRatePerMinute': 'live',
   'senderDailyLimit': 'live', 'maxQueuedPerConversation': 'live', 'retentionJournalDays': 'live', 'retentionAuditDays': 'live', 'retentionMediaDays': 'live',

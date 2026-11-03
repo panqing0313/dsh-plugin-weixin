@@ -91,6 +91,7 @@ import { extractUrls, fetchLinkText, describeLinkResults } from './message/links
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { buildDateReminderText, dateReminderDue, markDateReminderSent, upcomingDates } from './message/dates.js'
+import { CONTACT_REFRESH_DAYS, applyContactRefresh, buildContactRefreshPrompt, contactRefreshDue, markContactRefreshRun, parseContactRefresh, pickRefreshCandidates } from './message/contact-refresh.js'
 import { buildDraft, composeReminder, createDraftCommands, readDraft, saveDraft } from './message/drafts.js'
 import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
@@ -314,6 +315,8 @@ export const Config = z.object({
   groupSummaryEnabled: z.boolean().default(false).description('群聊上下文摘要：群里攒够 groupSummaryEvery 条消息后，用一次后台调用把最近聊的压成几行，下次被叫到时折进提示词。默认关闭——它每次都要花一次调用。'),
   groupSummaryEvery: z.number().min(4).max(100).default(12).description('攒多少条群消息做一次摘要（默认 12）。'),
   contactStaleDays: z.number().min(0).max(3650).default(45).description('群成员名片多久算「旧」：超过这么多天没更新过内容时，注入时会注明「可能已过时」。0 表示不做这个判断。'),
+  contactRefreshEnabled: z.boolean().default(true).description('群成员名片自动补全：过时且最近说过话的名片，交给后台模型从他说过的话里补一遍（受后台预算与每天张数上限约束）。'),
+  contactRefreshPerDay: z.number().min(0).max(20).default(2).description('每次最多补几张名片（`contactRefreshEnabled` 打开时生效，0 等于关）。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
   groupKeywords: z.string().default('').description('群关键词自动回复，每行一条：正则 => 回复。例如「^打卡$ => 打卡成功」。只在群里、只对白名单内的人生效；同一群同一条规则 60 秒内最多应一次；免打扰时段沉默。回复是模板，不走模型。'),
@@ -571,6 +574,7 @@ export function apply(ctx, config) {
     let notifyBridge
     let awayTimer
     let dateTimer
+    let contactRefreshTimer
     /** @type {Array<() => void>} */
     const offWebhook = []
     const backupTimers = []
@@ -1189,6 +1193,67 @@ export function apply(ctx, config) {
       }, 60_000)
       dateTimer.unref?.()
 
+      /**
+       * 给这个账号补名片：只挑「过时 + 最近说过话」的人，只写模型从话里读出来的字段。
+       * 每次最多 max 张；跑完（或没得跑）都记一次时间，避免坏账号每轮重试。
+       */
+      const refreshContactCards = async (id, max) => {
+        let entries = []
+        try {
+          entries = readJournalRange(stateRoot, { accountId: id, days: CONTACT_REFRESH_DAYS })
+        } catch (error) {
+          warn(`contact refresh read failed for ${id}: ${String(error)}`)
+          markContactRefreshRun(stateRoot, id, { warn })
+          return
+        }
+        const now = Date.now()
+        const candidates = pickRefreshCandidates(stateRoot, id, entries, { now, max, staleDays: withSavedConfig(config).contactStaleDays, warn })
+        if (candidates.length === 0) {
+          markContactRefreshRun(stateRoot, id, { warn })
+          return
+        }
+        const conversationId = pickConversation(listConvMemories(stateRoot, id)) ?? String(candidates[0].contact.contactId)
+        let changed = 0
+        for (const candidate of candidates) {
+          const prompt = buildContactRefreshPrompt({ contact: candidate.contact, lines: candidate.lines, now })
+          let result
+          try {
+            result = await bridge.summarize({ conversationId, accountId: id, prompt, sessionPrefix: 'wx-card-', route: sideRoute('memory') })
+          } catch (error) {
+            warn(`contact refresh call failed for ${candidate.contact.contactId}: ${String(error)}`)
+            continue
+          }
+          const profile = parseContactRefresh(typeof result?.text === 'string' ? result.text : '')
+          if (profile === undefined) {
+            fileLog.info(`contact refresh for ${candidate.contact.contactId} produced nothing readable`)
+            continue
+          }
+          const saved = applyContactRefresh(stateRoot, id, candidate.contact.contactId, profile, { warn })
+          if (saved.ok === true) {
+            changed += 1
+            fileLog.info(`contact card refreshed for ${candidate.contact.contactId}`)
+          } else {
+            warn(`contact card write failed for ${candidate.contact.contactId}: ${saved.reason}`)
+          }
+        }
+        markContactRefreshRun(stateRoot, id, { warn })
+        if (changed > 0) fileLog.info(`contact refresh: ${changed} card(s) for ${id}`)
+      }
+
+      // 群成员名片：过时 + 最近说过话的人，交给后台模型从话里补一遍。
+      // 走 bridge.summarize（因此受 backgroundDailyLimit 约束），每 20 小时最多跑一次。
+      contactRefreshTimer = setInterval(() => {
+        const live = withSavedConfig(config)
+        if (live.contactRefreshEnabled !== true) return
+        const max = Math.max(0, Math.floor(Number(live.contactRefreshPerDay ?? 0)))
+        if (max <= 0) return
+        for (const [id] of transports) {
+          if (!contactRefreshDue(stateRoot, id, { now: Date.now(), warn })) continue
+          refreshContactCards(id, max).catch((error) => warn(`contact refresh failed for ${id}: ${String(error)}`))
+        }
+      }, 6 * 60 * 60_000)
+      contactRefreshTimer.unref?.()
+
     })()
 
     // Bring the loop up for one account (or every account on disk), replacing a
@@ -1437,6 +1502,7 @@ export function apply(ctx, config) {
       await notifyBridge?.stop()
       if (awayTimer !== undefined) clearInterval(awayTimer)
       if (dateTimer !== undefined) clearInterval(dateTimer)
+      if (contactRefreshTimer !== undefined) clearInterval(contactRefreshTimer)
       for (const off of offWebhook.splice(0)) off()
       if (retentionTimer !== undefined) clearInterval(retentionTimer)
       for (const timer of backupTimers) clearTimeout(timer)
