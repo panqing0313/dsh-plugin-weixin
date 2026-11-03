@@ -1120,3 +1120,39 @@ hostTest('with the knowledge base switched off, the same question carries no kno
     { knowledgeEnabled: false },
   )
 })
+
+test('/bad, /good and /style record feedback without opening a session', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/bad 太长了', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the bad reply')
+    assert.match(fake.outbound[0].text, /记下了：别「太长了」/)
+
+    fake.deliver('/good 多用点表情', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the good reply')
+    assert.match(fake.outbound[1].text, /记下了：保持「多用点表情」/)
+
+    fake.deliver('/style', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the list reply')
+    assert.match(fake.outbound[2].text, /- 别这样：太长了/)
+    assert.match(fake.outbound[2].text, /- 保持：多用点表情/)
+
+    fake.deliver('/style clear', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the clear reply')
+    assert.match(fake.outbound[3].text, /清掉了 2 条/)
+
+    assert.equal(sessionsOpened.length, 0, 'feedback never needs the model')
+  })
+})
+
+hostTest('the feedback the user typed rides along in the next prompt', async () => {
+  await withPlugin(async ({ fake, promptsSeen }) => {
+    fake.deliver('/bad 太长了', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the bad reply')
+
+    fake.deliver('今天过得怎么样', 'm2')
+    await waitFor(() => promptsSeen.length > 0, 'the prompt to reach the agent', 20_000)
+    const prompt = promptsSeen[0].message.content.map((part) => part.text ?? '').join('')
+    assert.match(prompt, /<style_feedback>/, 'the preference block is injected')
+    assert.match(prompt, /- 别这样：太长了/, 'and it carries what was actually said')
+  })
+})

@@ -424,6 +424,9 @@ Send commands directly in WeChat (they only take effect when the whole message i
 | `/remind <time> <content>` | Scheduled reminder: at the set time the bot sends the content straight into the current conversation (e.g. `/remind 10m standup`, `/remind 18:30 clock out`, `/remind 2026-10-20 09:00 weekly report`) |
 | `/remindlist` | List this account's reminders that have not fired yet (with indices) |
 | `/remindcancel <index>` | Cancel a reminder that has not fired yet |
+| `/bad too long` | Say what was wrong with that reply (up to 60 chars): recorded as a “stop doing this” rule that applies **from the next reply on**, kept per mode |
+| `/good keep it up` | Say what worked: recorded as a “keep doing this” rule |
+| `/style` | List the preferences recorded for this mode (12 at most); `/style clear` wipes them |
 
 **Switching preserves, it does not reset**: the line you switch away from is not ended or cleared, and its earlier context is all there when you
 switch back. The indices in `/list` are **absolute** (counting from 1), so even when only the latest 10 are shown the indices never shift

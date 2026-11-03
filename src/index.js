@@ -161,6 +161,7 @@ import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
 import { recordPromptComposition } from './message/prompt-composition.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
+import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './message/style-feedback.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
@@ -992,6 +993,10 @@ export function apply(ctx, config) {
             : null
           const personaBlock = buildPersonaBlock(candidate.mode)
           const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id, stateRoot, keepBuiltins: live.stickerKeepBuiltins === true })
+          // 对方亲口提过的偏好（`/bad`、`/good`）：它跟模式走，主动开口时也一样认。
+          const feedbackBlock = buildStyleFeedbackBlock(
+            readStyleRules(stateRoot, candidate.accountId, { modeId: candidate.mode?.id, warn }),
+          )
           const lifeBlockText = life === null ? '' : lifeBlock(life)
           const globalMemory = readGlobalMemory(stateRoot, candidate.accountId, { warn })
           const memoryBlock = live.memoryEnabled === true
@@ -1013,6 +1018,7 @@ export function apply(ctx, config) {
           const prompt = [
             personaBlock,
             styleBlock,
+            feedbackBlock,
             lifeBlockText,
             memoryBlock,
             '<weixin_proactive>',
@@ -1708,6 +1714,10 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       const active = resolveMode(modes, activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }))
       return isCompanionMode(active)
     }
+    const activeModeHere = () => {
+      const modes = readPersonaStore(stateRoot, { warn })
+      return resolveMode(modes, activeModeFor(stateRoot, accountId, conversationId, effectiveConfig.current.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }))
+    }
     return {
       // `/usage`：今天花了什么。不调模型，数字全部来自已有状态文件。
       usage: () => {
@@ -2139,6 +2149,13 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
       ...createHabitCommands({ stateRoot, accountId, warn }),
+      ...createStyleCommands({
+        stateRoot,
+        accountId,
+        modeId: () => activeModeHere()?.id,
+        modeLabel: () => activeModeHere()?.label,
+        warn,
+      }),
       ...createMediaCommands({
         dir: inboxDir(),
         conversationId,
@@ -2636,6 +2653,9 @@ ${neutralizeTags(ocr.text)}
     const styleBlock = companion
       ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id, stateRoot, keepBuiltins: effectiveConfig.current.stickerKeepBuiltins === true })
       : ''
+    // Feedback is NOT companion-only: `/bad 太长了` is just as valid for the
+    // stock assistant, so this section is built whatever the mode is.
+    const feedbackBlock = buildStyleFeedbackBlock(readStyleRules(stateRoot, accountId, { modeId: activeMode?.id, warn }))
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
     // those messages in its own history, and the inbound journal write above
@@ -2726,7 +2746,7 @@ ${neutralizeTags(ocr.text)}
       ? buildDryRunBlock({ accountLabel: config.accountLabel ?? '' })
       : ''
     if (dryRunBlock !== '') log(describeDryRun())
-    const blocks = [personaBlock, styleBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
+    const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, contactBlock, memoryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 统计页签的「提示词构成」：记下这一回合每段实际占了多少字符。各段之和

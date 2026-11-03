@@ -3932,3 +3932,14 @@ release run `41485882140` success）。
 - 全量 `npm test` **1070/1070、0 fail、0 skipped**、39.2s；`node bin/check.mjs` → `checked 249 files`。
 - 待办：重启 DSH 后按 5 步复核，并在聊天里发一条带 `[表情:…]` 的消息确认内置 68 张确实退场（本机默认 `stickerKeepBuiltins: false`）。
 - 复核：2026-11-03 用户重启后确认 1.4.3 通过（表情包优先顺序生效：自己的图存在时内置 68 张不再出现在名单里），已写进 `docs/compatibility.md` 表格首行。
+
+## 回复风格反馈：`/bad` `/good` `/style`（2026-11-03，1.4.4 item 1）
+
+用户的抱怨是：「它老是写那么长」——这种话不该只在脑子里记着。以前要改只能去翻配置、改模式定义，或者干脆忍着。
+
+- 新增 `src/message/style-feedback.js`：`style-rules.json` 按账号 + 模式存 `{kind:'bad'|'good', text, modeId?, at}`，上限 12 条 × 60 字，同一句话重复说只更新时间。
+- `buildStyleFeedbackBlock(rules)` 在一条都没有时返回空串：新装机器上提示词里不会多出这一段。
+- 接线：`src/index.js` 的回复路径与**主动开口路径**都拼进 `feedbackBlock`（主动开口也要认对方提过的偏好）；位置在 `styleBlock` 之后、生活状态之前，块内写明「这是对方本人的要求，优先于上面对风格的通用描述」。
+- 命令：`/bad <话>`、`/good <话>`、`/style`、`/style clear`，都在 persona bundle 里，本地读写，不调模型；`helpRank` 29–31。
+- 边界：不改历史消息、不改模式定义、不跨模式传播（无 modeId 的老规则除外）。
+- 测试：`test/style-feedback.test.js` 9 条（模式隔离、去重、上限淘汰最旧、截断、清空只清当前模式、空块、列表文案、命令）；`test/session-commands.test.js` 两条端到端——命令不开会话，以及 `/bad` 之后的下一条消息提示词里确实带着 `<style_feedback>` 与那句话。
