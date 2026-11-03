@@ -8,8 +8,12 @@
 //
 // This prints one line per check, in the order a human would ask, and exits
 // non-zero only for things that are actually broken (a missing optional feature
-// is a note, not a failure). It is read-only: nothing is created except the
-// state directory itself, which the plugin would create anyway.
+// is a note, not a failure). The diagnosis itself is read-only: nothing is
+// created except the state directory itself, which the plugin would create
+// anyway. `--fix` then repairs the problems that have one right answer (missing
+// plugin directories, too-permissive state files, temp files a dead process left
+// behind, a state file that is not JSON at all) and reports each change;
+// `--dry-run` lists the same repairs without making them.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -17,8 +21,9 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { verifyAuditChain } from '../src/message/audit.js'
-import { listBackups } from '../src/backup.js'
+import { backupsDir, listBackups, stampFor } from '../src/backup.js'
 import { describeHost, detectHostVersion, hostStatus } from '../src/host-compat.js'
+import { statePath } from '../src/state-layout.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const results = []
@@ -214,7 +219,235 @@ function checkRegistryVersion() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// --fix: the repairs a diagnostic can safely make on its own
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A doctor that only reports leaves the operator to do the easy parts by hand:
+// the plugin's own directories, a state file the umask left at 0644, a temp file
+// a killed process never renamed away. Those have one right answer, so `--fix`
+// does them and says what it changed. What it deliberately will not do:
+//
+//   * delete anything a human wrote. Memory, journal lines, media and exports are
+//     never removed; a state file that is not JSON at all is renamed aside as
+//     `<name>.broken-<stamp>`, so its bytes survive for whoever wants to look;
+//   * clean up `instance.lock`. The plugin already takes a stale lock over, and
+//     removing a live one is exactly how two pollers end up on one account;
+//   * follow a symlink. A link planted in the state root must not be able to aim
+//     this at `~/.ssh`, so links are skipped and every path is checked to be
+//     inside the state root before it is acted on;
+//   * walk `asr-models/`. Those are hundreds of MB of third-party model files the
+//     plugin did not write, and a permission pass over them buys nothing.
+
+/** A `.tmp` file older than this was left by a dead process, not a live one. */
+const STALE_TMP_MS = 24 * 60 * 60 * 1000
+/** Upper bound on the mode walk, so a huge state root cannot hang the doctor. */
+const WALK_LIMIT = 20_000
+/** Top-level directories the walk does not descend into. */
+const WALK_SKIP = new Set(['asr-models'])
+
+function parseArgs(argv) {
+  const args = argv.slice(2)
+  const dryRun = args.includes('--dry-run')
+  return { repairing: args.includes('--fix') || dryRun, dryRun }
+}
+
+/** A `.broken-<stamp>` name no existing file is using, so a rename never overwrites. */
+function brokenSibling(file) {
+  const stamp = stampFor(Date.now())
+  let target = `${file}.broken-${stamp}`
+  for (let n = 2; fs.existsSync(target); n += 1) target = `${file}.broken-${stamp}-${n}`
+  return target
+}
+
+/**
+ * The plugin's own state files: the single-file stores at the root and the
+ * account credentials. Only these are inspected for malformed JSON — memory,
+ * journal and media files further down are the user's content, and the plugin
+ * already reads a broken one as empty.
+ */
+function stateJsonFiles(root) {
+  const files = []
+  try {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) files.push(path.join(root, entry.name))
+    }
+  } catch {
+    // An unreadable root is already reported by the state-directory check.
+  }
+  const index = path.join(root, 'openclaw-weixin', 'accounts.json')
+  if (fs.existsSync(index)) files.push(index)
+  const accounts = path.join(root, 'openclaw-weixin', 'accounts')
+  try {
+    for (const name of fs.readdirSync(accounts)) {
+      if (name.endsWith('.json')) files.push(path.join(accounts, name))
+    }
+  } catch {
+    // No accounts directory means there is nothing to inspect here.
+  }
+  return files
+}
+
+/**
+ * Apply (or, with `dryRun`, only list) the safe repairs.
+ *
+ * @returns {{ changes: string[], failed: string[] }}
+ */
+function applyFixes(root, { dryRun }) {
+  const changes = []
+  const failed = []
+  const rootPath = path.resolve(root)
+  const rel = (full) => path.relative(rootPath, full) || root
+  const insideRoot = (candidate) => {
+    const full = path.resolve(candidate)
+    return full === rootPath || full.startsWith(`${rootPath}${path.sep}`)
+  }
+  const act = (description, run) => {
+    if (dryRun) {
+      changes.push(description)
+      return
+    }
+    try {
+      run()
+      changes.push(description)
+    } catch (error) {
+      failed.push(`${description} — ${String(error?.message ?? error)}`)
+    }
+  }
+
+  // 1. Directories the plugin owns. Created 0700: the state root holds live
+  //    account tokens and nothing the plugin writes needs group access.
+  const ownedDirs = [
+    [root, 'state root'],
+    [statePath(root, 'memoryDir'), 'memory/'],
+    [statePath(root, 'mediaInboundDir'), 'media/inbound/'],
+    // knowledgeDir() lives in src/message/knowledge.js as <root>/knowledge/<account>.
+    [path.join(root, 'knowledge'), 'knowledge/'],
+    [backupsDir(root), 'backups/'],
+  ]
+  for (const [dir, label] of ownedDirs) {
+    if (!insideRoot(dir)) {
+      failed.push(`${label} resolves outside the state root: ${dir}`)
+      continue
+    }
+    if (fs.existsSync(dir)) continue
+    act(`created ${label}`, () => fs.mkdirSync(dir, { recursive: true, mode: 0o700 }))
+  }
+
+  // 2/3. One walk for both: the modes of what is there, and the temp files that
+  //      were never renamed into place.
+  const staleTemps = []
+  let seen = 0
+  let truncated = false
+  const queue = [root]
+  while (queue.length > 0 && truncated === false) {
+    const dir = queue.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      failed.push(`could not read ${rel(dir)}: ${String(error?.message ?? error)}`)
+      continue
+    }
+    for (const entry of entries) {
+      seen += 1
+      if (seen > WALK_LIMIT) {
+        truncated = true
+        break
+      }
+      const full = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) {
+        if (dir === root && WALK_SKIP.has(entry.name)) continue
+        queue.push(full)
+        let dirMode
+        try {
+          dirMode = fs.statSync(full).mode & 0o777
+        } catch {
+          continue
+        }
+        // A directory the owner cannot enter hides everything under it.
+        if ((dirMode & 0o500) !== 0o500) {
+          act(`chmod ${(dirMode | 0o700).toString(8)} ${rel(full)}/ (owner could not enter it)`, () =>
+            fs.chmodSync(full, dirMode | 0o700))
+        }
+        continue
+      }
+      if (entry.isFile() !== true) continue
+      let stat
+      try {
+        stat = fs.statSync(full)
+      } catch {
+        continue
+      }
+      if (entry.name.endsWith('.tmp')) {
+        if (Date.now() - stat.mtimeMs > STALE_TMP_MS) staleTemps.push(full)
+        continue
+      }
+      const mode = stat.mode & 0o777
+      const top = rel(full).split(path.sep)[0]
+      // `atomicWriteJson` writes state files 0600, and a backup copy is 0600 for
+      // the same reason (it carries live tokens). A `.json`, or anything under
+      // those two trees, is therefore either a token store or a copy of one.
+      const sensitive = entry.name.endsWith('.json') || top === 'openclaw-weixin' || top === 'backups'
+      if (sensitive) {
+        if (mode !== 0o600) {
+          act(`chmod 0600 ${rel(full)} (was ${mode.toString(8).padStart(4, '0')})`, () => fs.chmodSync(full, 0o600))
+        }
+      } else if ((mode & 0o400) !== 0o400) {
+        // Anything else the owner cannot read is unusable, whatever it holds.
+        act(`chmod ${(mode | 0o400).toString(8).padStart(4, '0')} ${rel(full)} (owner could not read it)`, () =>
+          fs.chmodSync(full, mode | 0o400))
+      }
+    }
+  }
+  if (truncated) failed.push(`mode/temp pass stopped after ${WALK_LIMIT} entries — run it again to continue`)
+
+  if (staleTemps.length > 0) {
+    // Reported as one line with a count, because "how many" is the question.
+    act(
+      `removed ${staleTemps.length} temp file(s) older than 24h: ${staleTemps.map(rel).join(', ')}`,
+      () => {
+        for (const file of staleTemps) fs.rmSync(file, { force: true })
+      },
+    )
+  }
+
+  // 4. A state file that is not JSON at all: move it aside, never delete it.
+  for (const file of stateJsonFiles(root)) {
+    let text
+    try {
+      text = fs.readFileSync(file, 'utf8')
+    } catch (error) {
+      if (error?.code !== 'ENOENT') failed.push(`could not read ${rel(file)}: ${String(error?.message ?? error)}`)
+      continue
+    }
+    try {
+      JSON.parse(text)
+      continue
+    } catch {
+      // Malformed — renamed below so the bytes are kept.
+    }
+    const target = brokenSibling(file)
+    act(`moved ${rel(file)} → ${path.basename(target)} (not valid JSON; kept aside)`, () => fs.renameSync(file, target))
+  }
+
+  return { changes, failed }
+}
+
+function printFixes({ changes, failed }, dryRun) {
+  const label = dryRun ? 'would fix' : 'fixed'
+  if (changes.length === 0 && failed.length === 0) {
+    process.stdout.write(`\n${label}: nothing to repair.\n`)
+    return
+  }
+  process.stdout.write(`\n${dryRun ? 'would fix (dry run):' : 'fixed:'}\n`)
+  for (const line of changes) process.stdout.write(`  + ${line}\n`)
+  for (const line of failed) process.stdout.write(`  ✗ ${line}\n`)
+}
+
 function main() {
+  const { repairing, dryRun } = parseArgs(process.argv)
   const root = stateRoot()
   checkNode()
   checkPackage()
@@ -239,6 +472,7 @@ function main() {
   }
   const failures = results.filter((entry) => entry.level === 'bad').length
   process.stdout.write(`\n${results.length} checks, ${failures} problem(s). state: ${root}\n`)
+  if (repairing) printFixes(applyFixes(root, { dryRun }), dryRun)
   process.exitCode = failures > 0 ? 1 : 0
 }
 

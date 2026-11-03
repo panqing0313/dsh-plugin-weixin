@@ -58,6 +58,7 @@ To check it over after installing:
 ```bash
 npm run onboard     # onboarding checklist: what is still missing, what to do next (exit code 0 = usable)
 npm run doctor      # 13 checks: accounts / allowlist / instance lock / backlog / logs / host version
+npm run doctor -- --fix     # checks, then repairs what it can: dirs, permissions, stale temp files, broken JSON moved aside
 ```
 
 ## What it is, and what it is not
@@ -104,7 +105,7 @@ Details and the threat model are in [docs/security.md](docs/security.md).
 
 ## When something is wrong
 
-1. **`npm run doctor`** — 13 checks; start with the rows that are red. The `host app` row tells you whether the host version is in the [verified-on-real-devices table](docs/compatibility.md).
+1. **`npm run doctor`** — 13 checks, and `npm run doctor -- --fix` also repairs what it can (creates the dirs it owns, tightens permissions back to 0600, sweeps `*.tmp` older than a day, renames broken JSON to `.broken-<stamp>` rather than deleting it). `-- --dry-run` lists the repairs without touching anything, and without `--fix` the behaviour is exactly what it was. Start with the rows that are red. The `host app` row tells you whether the host version is in the [verified-on-real-devices table](docs/compatibility.md).
 2. **Send `/diag` in WeChat** — a self-check that costs no model calls: connection, mode, switches, pending reminders, proactive budget, today's journal, quiet-hours state. To show it to someone else, send `/diag export`.
 3. **Common symptoms, matched against the logs**:
    - The phone says "cannot connect to openclaw for now" → is there `listening as account <id>` in the logs? If not, the inbound loop did not start (`~/.dsh/weixin/logs/`).

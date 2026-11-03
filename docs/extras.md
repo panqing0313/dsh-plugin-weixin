@@ -1075,3 +1075,17 @@ node bin/stickers.mjs fetch bluefish --force  # 已存在的重装
 `voiceReplies` 打开后，陪聊模式下短于 `voiceReplyMaxChars`（默认 60 字）的回复会额外念一遍；合成失败只记一行日志，文字已经发出去了。
 
 配置：`ttsVoice`（音色名，留空用系统默认）、`voiceReplies`（默认关）、`voiceReplyMaxChars`（默认 60）。
+
+## `doctor --fix`：它能自己修的，就别让人动手（1.4.5）
+
+`npm run doctor -- --fix` 先照旧跑 13 项体检（一个字都不变），然后打印一段 `fixed:`：
+
+- 建出缺的插件目录（state root、`memory/`、`media/inbound/`、`knowledge/`、`backups/`，0700）；
+- 把宽于 0600 的 `.json`、`openclaw-weixin/**`、`backups/**` 收回到 0600，把 owner 读不了/进不去的东西恢复成 owner 可读；
+- 清掉超过 24 小时的 `*.tmp`（报告条数）；
+- 顶层状态文件或账号文件坏掉时，改名成 `<名字>.broken-<时间戳>` 放在旁边 —— **不删**；
+- 顺带一提不做的事：`instance.lock` 永不删（插件自己会接管陈旧锁），`asr-models/` 目录不扫（几百 MB 的第三方模型），`memory/**`/`journal/**` 里坏掉的 JSON 不动（那是用户内容，插件已经会降级为空）。
+
+`-- --dry-run`（单独用或配合 `--fix`）只列 `would fix (dry run):` 什么都不改。所有能改的路径都从 state root 推导并做过 `path.resolve` 前缀校验；符号链接既不跟随也不改权限（手工验证过：指向 root 外的链接原样保留，外部文件的权限与字节未动）。
+
+没有 `--fix` 时行为与以前逐字一致（测试里拿 `fixed:` 之前的输出做字节比对）。
