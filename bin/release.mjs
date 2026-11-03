@@ -441,6 +441,24 @@ function bumpVersion(previousVersion) {
 		ok(`README version line ${seen[1]} → ${version}`)
 	}
 
+	// The English README carries the same fact in its own words, and it drifted
+	// all the way to 0.9.9 because only the Chinese file was in this script's
+	// path — the two READMEs are one document, so they get bumped together.
+	const readmeEnPath = path.join(ROOT, 'README.en.md')
+	const readmeEn = fs.readFileSync(readmeEnPath, 'utf8')
+	const enVersionLine = new RegExp(
+		'Currently published version: \\[`' + PKG_NAME + '@([\\d.]+)`\\]\\(https://www\\.npmjs\\.com/package/' + PKG_NAME + '\\)',
+	)
+	const seenEn = enVersionLine.exec(readmeEn)
+	if (seenEn === null) {
+		warn('README.en.md has no "Currently published version" line to update — add one by hand')
+	} else if (seenEn[1] === version) {
+		ok('README.en.md already names this version')
+	} else {
+		fs.writeFileSync(readmeEnPath, readmeEn.replace(enVersionLine, `Currently published version: [\`${PKG_NAME}@${version}\`](https://www.npmjs.com/package/${PKG_NAME})`))
+		ok(`README.en.md version line ${seenEn[1]} → ${version}`)
+	}
+
 	// The release list lives in CHANGELOG.md (the README names features, not
 	// versions), and it must gain a bullet, or the newest version silently has
 	// no description of what it contains. New bullets go on top.
@@ -903,7 +921,7 @@ function main() {
  * forgot `src/client.js`, so a dry run reported "tree unchanged" while leaving
  * the card's PLUGIN_VERSION bumped.
  */
-export const VERSION_FILES = ['package.json', 'package-lock.json', 'src/client.js', 'README.md', 'CHANGELOG.md']
+export const VERSION_FILES = ['package.json', 'package-lock.json', 'src/client.js', 'README.md', 'README.en.md', 'CHANGELOG.md']
 
 /** Read the files the version bump rewrites, so a dry run can put them back. */
 export function snapshotTextFiles(root = ROOT) {

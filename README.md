@@ -1,34 +1,93 @@
-# dsh-plugin-weixin
+<div align="center">
 
-<p>
-  <b>简体中文</b> ｜ <a href="README.en.md">English</a>
-</p>
+# 微信BOT · dsh-plugin-weixin
 
-[![npm](https://img.shields.io/npm/v/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
+**把你的个人微信，变成 DeepSeek Harness 的远程控制面。**
+
+在微信里说一句话，DSH Agent 在你自己的机器上开一个会话执行，把结果回给你 —— 文字、图片、文件、语音，双向都能走。
+
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
 [![CI](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml/badge.svg)](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/dsh-plugin-weixin.svg)](package.json)
 [![license](https://img.shields.io/npm/l/dsh-plugin-weixin.svg)](LICENSE)
 [![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)](https://dsh.market/)
 
-<img src="assets/icon-128.png" width="72" alt="dsh-plugin-weixin 图标" />
+**简体中文** ｜ [English](README.en.md)
 
-把**个人微信**变成 DeepSeek Harness（DSH）的远程控制面：在微信里发一句话，DSH Agent 在本地开一个会话执行，把结果回给你。
+<img src="assets/icon-128.png" width="88" alt="微信BOT 图标" />
 
-- **你想在微信里干活** → [安装](#安装) → [登录](#登录) → [授权](#授权重要) ，三步之后就能发消息了。
-- **想改行为** → [配置](#配置)（逐项见下表，设置卡里也有同样的表）。
-- **想知道某个版本改了什么** → [CHANGELOG.md](CHANGELOG.md)。
-- **想用通知桥、离开模式、共享清单这些开关** → [docs/extras.md](docs/extras.md)。
-- **出问题了** → `npm run doctor`（11 项体检），再看 [文档](#文档) 里的排障顺序。
+</div>
 
-## 目录
+<img src="assets/hero.png" alt="微信BOT：在微信里与 DSH Agent 对话" />
 
-- [亮点](#亮点) · [当前状态](#当前状态) · [目录结构](#目录结构)
-- [安装](#安装) · [登录](#登录) · [授权（重要）](#授权重要) · [配置](#配置)
-- [会话](#会话一个微信会话可以用多条-dsh-会话) · [出站附件](#出站附件插件发给你的图片视频文件) · [入站媒体](#入站媒体微信发来的图片文件语音视频)
-- [定时提醒](#定时提醒remind-与设置卡) · [定时主动消息](#定时主动消息subscribe) · [消息流水](#消息流水messagejournal) · [本地回忆检索](#本地回忆检索recall) · [即时总结与导出](#即时总结与导出summary--export)
-- [免打扰时段](#免打扰时段quiethours) · [统计页签](#统计页签stats) · [个性化与记忆](#个性化与记忆mode--remember--forget--memory) · [陪聊节奏与生活状态](#陪聊节奏与生活状态humanpacing--lifestate) · [记忆改口](#记忆改口remember-旧--新--自动纠错)
-- [语言](#语言locale) · [模型路由](#模型路由chatprovider--sideprovider--memoryprovider) · [记忆模型](#记忆模型结构化档案--事件--人物小传--独立模型) · [表情图片](#表情图片stickerenabled) · [主动开口](#主动开口proactiveenabled) · [语音与视频](#语音与视频voiceoutbound--videoframes)
-- [富内容](#富内容richcontent--codefilethreshold) · [危险工具提醒](#危险工具提醒toolnotices) · [群聊](#群聊groupchatenabled--groupreplywhen--groupsharememory) · [工具审计](#工具审计toolaudit) · [语音识别](#语音识别asr)
-- [Markdown 处理](#markdown-处理) · [开发](#开发) · [发布](#发布) · [文档](#文档)
+## 为什么是它
+
+| | |
+| --- | --- |
+| **不用公网、不用服务器** | Agent 在你自己的机器上跑，微信只是入口。凭证以 `0600` 存在本机 `~/.dsh/weixin/`，不上传任何第三方。 |
+| **默认拒绝所有人** | `allowedSenders` 默认为**空**，等于谁都不能驱动你的 Agent；扫码后的第一条消息自动登记你本人，之后要加人再逐个放行。 |
+| **双向都通** | 文字、图片、文件、语音（SILK → WAV → 本地 ASR）、视频抽帧、表情图；长回复自动分气泡，超长代码块改发文件。 |
+| **多账号互不干扰** | 几个微信号可以同时接入，各有自己的长轮询、白名单与会话线；一个号登录、暂停或退出，不影响其他号。 |
+| **不花模型也能用** | 命令、提醒、日报、`/diag`、`/usage`、`/outbox` 都由插件直接回答，不消耗模型对话。 |
+| **看得见、查得到** | `npm run doctor`（13 项体检）、`npm run onboard`（上手清单）、聊天内 `/diag`、消息流水、统计页签、工具审计、备份与恢复。 |
+
+## 30 秒上手
+
+**第 1 步 · 安装**（三种任选其一）
+
+```bash
+npx dsh-plugin-weixin --profile desktop          # 不需要先 clone
+node bin/install.mjs --profile desktop --pin     # 从源码安装并钉住版本
+```
+
+也可以在 DSH 的插件页（侧边栏 **Plugins**）填 `dsh-plugin-weixin`。装完**重启 DSH** 生效。
+
+**第 2 步 · 登录**
+
+打开「设置 → 插件 → 微信BOT」，点**扫码登录微信**，用手机微信扫卡片上的二维码（终端党也可以 `npm run login`）。扫码成功后**不需要重载 DSH**。
+
+**第 3 步 · 授权**
+
+`allowedSenders` 默认是空的，等于拒绝所有人。新账号的**第一条消息**的发信人会被自动登记并放行 —— 扫码时只知道 bot id，人的微信 id 要等第一条消息才出现。所以拿自己的微信发一句话，它就开始干活了；要加别人，在卡片的「微信账号 → Allowlist」里填。
+
+装完想确认一遍：
+
+```bash
+npm run onboard     # 上手清单：还差什么、下一步做什么（退出码 0 = 能用了）
+npm run doctor      # 13 项体检：账号 / 白名单 / 实例锁 / 积压 / 日志 / 宿主版本
+```
+
+## 它是什么，不是什么
+
+| | |
+| --- | --- |
+| **是** | 个人微信 ↔ DSH 的双向通道插件。微信侧走官方 **iLink Bot API**（`ilinkai.weixin.qq.com`），传输层是腾讯官方开源插件 [`@tencent-weixin/openclaw-weixin`](https://github.com/Tencent/openclaw-weixin)（MIT）的 vendor 副本；DSH 侧直接绑定 `agents` 服务。 |
+| **不是** | 不是微信官方产品，也不是企业微信 / 公众号方案。用的是个人微信的机器人绑定通道，账号风控与可用性由微信侧决定。 |
+| **不旁路权限** | 真实的文件修改与命令执行仍由 DSH 自己的权限层与确认流程决定，插件不绕过、不代批。 |
+| **目前做不到** | 出站语音气泡（实测服务端接受但不投递，`voiceOutbound` 默认关）；原生贴纸 / 表情包（微信没给 bot 这类消息类型）；原生图像理解（入站图片以本地路径交给 Agent，能否读懂取决于你的模型与工具链）；发送视频（需要视频编码）。 |
+
+## 功能地图
+
+按「你要做什么」分组，每组直接跳到对应章节。
+
+**接入与账号** —— [安装](#安装) ｜ [登录](#登录) ｜ [授权（重要）](#授权重要) ｜ [多账号管理](#多账号管理) ｜ [配置](#配置)
+
+**会话控制** —— [会话线](#会话一个微信会话可以用多条-dsh-会话) ｜ [在设置页管理](#在设置页管理) ｜ [会话列表里怎么认出微信会话](#会话列表里怎么认出微信会话)
+
+**消息与媒体** —— [出站附件](#出站附件插件发给你的图片视频文件) ｜ [入站媒体](#入站媒体微信发来的图片文件语音视频) ｜ [出站语音](#出站语音voiceoutbound) ｜ [语音识别](#语音识别asr) ｜ [表情图片](#表情图片stickerenabled) ｜ [视频抽帧](#语音与视频voiceoutbound--videoframes) ｜ [Markdown 处理](#markdown-处理)
+
+**主动与时间** —— [定时提醒](#定时提醒remind-与设置卡) ｜ [定时主动消息](#定时主动消息subscribe) ｜ [主动开口](#主动开口proactiveenabled) ｜ [日报与记忆核对](#日报与记忆核对digestenabled--memoryreviewenabled) ｜ [免打扰时段](#免打扰时段quiethours)
+
+**记忆与个性化** —— [个性化与记忆](#个性化与记忆mode--remember--forget--memory) ｜ [知识库](#知识库把你交给它的资料变成答案knowledgeenabled) ｜ [陪聊节奏与生活状态](#陪聊节奏与生活状态humanpacing--lifestate) ｜ [记忆改口](#记忆改口remember-旧--新--自动纠错) ｜ [本地回忆检索](#本地回忆检索recall) ｜ [关系曲线与联系人](#关系曲线与群里的人affinity--contacts)
+
+**群聊** —— [群聊](#群聊groupchatenabled--groupreplywhen--groupsharememory)
+
+**运维与可观测** —— [命令速查](#会话一个微信会话可以用多条-dsh-会话) ｜ [统计页签](#统计页签stats) ｜ [消息流水](#消息流水messagejournal) ｜ [指标与长稳](#指标与长稳metricsexport--npm-run-metrics--npm-run-soak) ｜ [备份与恢复](#备份与恢复backupenabled) ｜ [工具审计](#工具审计toolaudit) ｜ [危险工具提醒](#危险工具提醒toolnotices) ｜ [兼容性](#兼容性)
+
+**集成与进阶** —— [模型路由](#模型路由chatprovider--sideprovider--memoryprovider) ｜ [记忆模型](#记忆模型结构化档案--事件--人物小传--独立模型) ｜ [语言](#语言locale) ｜ [ASR 桥](#仓库自带一个桥binasr-bridgepy) ｜ [模型目录可以自定义](#模型目录可以自定义) ｜ [模板包](#模板包npm-run-pack--packexport--packimport) ｜ [预演模式](#预演模式dryrun)
+
+**完整目录** —— [亮点](#亮点) · [当前状态](#当前状态) · [目录结构](#目录结构) · [安装](#安装) · [登录](#登录) · [授权（重要）](#授权重要) · [配置](#配置) · [会话](#会话一个微信会话可以用多条-dsh-会话) · [出站附件](#出站附件插件发给你的图片视频文件) · [入站媒体](#入站媒体微信发来的图片文件语音视频) · [定时提醒](#定时提醒remind-与设置卡) · [定时主动消息](#定时主动消息subscribe) · [消息流水](#消息流水messagejournal) · [本地回忆检索](#本地回忆检索recall) · [即时总结与导出](#即时总结与导出summary--export) · [免打扰时段](#免打扰时段quiethours) · [统计页签](#统计页签stats) · [个性化与记忆](#个性化与记忆mode--remember--forget--memory) · [陪聊节奏与生活状态](#陪聊节奏与生活状态humanpacing--lifestate) · [记忆改口](#记忆改口remember-旧--新--自动纠错) · [语言](#语言locale) · [模型路由](#模型路由chatprovider--sideprovider--memoryprovider) · [记忆模型](#记忆模型结构化档案--事件--人物小传--独立模型) · [表情图片](#表情图片stickerenabled) · [主动开口](#主动开口proactiveenabled) · [语音与视频](#语音与视频voiceoutbound--videoframes) · [富内容](#富内容richcontent--codefilethreshold) · [危险工具提醒](#危险工具提醒toolnotices) · [群聊](#群聊groupchatenabled--groupreplywhen--groupsharememory) · [工具审计](#工具审计toolaudit) · [语音识别](#语音识别asr) · [Markdown 处理](#markdown-处理) · [兼容性](#兼容性) · [开发](#开发) · [发布](#发布) · [文档](#文档)
 
 ## 亮点
 
@@ -41,15 +100,36 @@
 - **会话按账号隔离** —— 每个账号的微信会话有独立的 DSH 会话线（`/new`、`/list`、`/use`），互不串上下文；新会话标题带 `备注名:` 前缀并镜像成宿主侧栏会话名，多账号一眼分得清；不需要的会话线随时删。
 - **一键暂停** —— 某个账号先静默：Pause 立即停掉它的入站轮询（其余账号照常收发），Resume 无缝恢复，都不用重启。
 - **语音开箱即用** —— 入站语音 SILK → WAV 本地转码，ASR 桥识别成文字交给 Agent（热调用约 300ms），识别不了自动降级存文件；音频附件也能转成语音气泡（`voiceOutbound`，默认**关**——实测 iLink 服务端会接受机器人语音 `ret=0` 但不投递，打开前请读[出站语音](#出站语音voiceoutbound)一节）。
-- **管理都在设置卡，也在左侧栏** —— 账号、会话、29 项配置、语音模型、消息流水 / 统计 / 提醒 / 个性化 / 关于（版本/检查更新/项目链接）全部在 DSH 设置页的「微信BOT」卡片里完成；**同一张卡片还挂在左侧栏的「微信BOT」页**（`sidebar.panellist` 一行 + `main` 面板），不用翻设置就能看账号状态、消息流水与统计。配置项按界面语言显示（中文界面全中文；分组默认折叠，点开才展开字段）。
+- **管理都在设置卡，也在左侧栏** —— 账号、会话、全部一百多项配置、语音模型、消息流水 / 统计 / 提醒 / 个性化 / 关于（版本/检查更新/项目链接）全部在 DSH 设置页的「微信BOT」卡片里完成；**同一张卡片还挂在左侧栏的「微信BOT」页**（`sidebar.panellist` 一行 + `main` 面板），不用翻设置就能看账号状态、消息流水与统计。配置项按界面语言显示（中文界面全中文；分组默认折叠，点开才展开字段）。
 
 底层用的是微信 **iLink Bot API**（`ilinkai.weixin.qq.com`），传输层来自腾讯官方开源插件
 [`@tencent-weixin/openclaw-weixin`](https://github.com/Tencent/openclaw-weixin)（MIT，2.4.10），
 本项目把它 vendor 进 `vendor/openclaw-weixin/`，剥掉 OpenClaw 的耦合后直接绑定到 DSH 的 `agents` 服务。
 
-![dsh-plugin-weixin：在微信里与 DSH Agent 对话](assets/hero.png)
-
 ![一条语音的旅程：SILK 转码、本地 ASR、逐级降级](assets/voice-pipeline.png)
+
+## 安全与隐私
+
+- **默认拒绝所有人。** `allowedSenders` / `allowedChats` 默认空；不在名单里的发信人只写一条 warn，不建会话、不回消息。每个账号可以覆盖全局名单，规则是「账号优先，留空回退全局」。
+- **首联系人只登记一次。** 自动登记只在账号白名单为空且从未登记过时发生；之后任何陌生人都照旧被拒（被拒的记录留在设置卡的「陌生人」里，可一键加白）。
+- **凭证只在本机。** 写入 `~/.dsh/weixin/openclaw-weixin/accounts/<id>.json`，权限 `0600`；登录过程不接收密码，vendor 自带 redact，token 不会进日志。退出登录只删本机凭证（微信侧仍需在手机上解绑，原因见[退出登录与重新绑定](#退出登录与重新绑定)）。
+- **不旁路 DSH 的权限层。** 插件只是把消息送进 Agent；真正改文件、跑命令仍由 DSH 的权限与确认流程说了算。危险工具的启动会在微信里收到一条提醒（`toolNotices`）。
+- **网络出口是可数的。** iLink Bot API、图片/文件 CDN；`readLinks` 会把消息里的链接正文抓来给 Agent 参考（可关）；出站 webhook 只 POST 到你自己的地址（带 HMAC 签名）；本地通知桥只绑 `127.0.0.1` 并要求 token。
+- **留痕与体检。** 工具审计（`toolAudit`）按天写 `<状态目录>/audit/*.jsonl`（工具名、截断 500 字的参数、触发者、是否带错）；`/diag export` 导出一份**脱敏**体检包，贴给维护者前不用手工删敏感信息。
+
+细节与威胁模型见 [docs/security.md](docs/security.md)。
+
+## 出问题时，按这个顺序看
+
+1. **`npm run doctor`** —— 13 项体检，先看哪几行是红的；`host app` 那一行会告诉你宿主版本是否在[真机验证表](docs/compatibility.md)里。
+2. **在微信里发 `/diag`** —— 一条不花模型的自检：连接、模式、开关、待发提醒、主动开口额度、今天流水、免打扰状态。要贴给别人看就发 `/diag export`。
+3. **常见症状对照**：
+   - 手机提示「暂时无法连接 openclaw」→ 日志里有没有 `listening as account <id>`；没有就是入站循环没起来（`~/.dsh/weixin/logs/`）。
+   - 日志有 `settings login service unavailable` → 登录服务没挂上：扫码能成功、凭证会写盘，但没人接「登录已完成」，循环不会切到新凭证。
+   - `getUpdates errcode=-14` → 登录已过期，重新扫码。
+   - 消息发不出去 → 聊天里发 `/outbox` 看待重发队列，`/outbox retry` 立即重试；带过期回执票的会写明原因并停在那里（[issue #9](https://github.com/panqing0313/dsh-plugin-weixin/issues/9)）。
+   - 重启前后功能不一样、侧边栏入口消失 → profile 声明的版本范围和你装进去的不一致，App 启动时的 `pnpm install` 把副本换回去了，见[安装](#安装)一节的注意与 `--pin`。
+4. **仍然不对** → [docs/architecture.md](docs/architecture.md) 有消息进出的完整链路与排障顺序；也可以用 `/diag export` 的体检包开 issue。
 
 ## 当前状态
 
@@ -246,6 +326,9 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 ## 配置
 
 `cordis.patch.yml` 里那行的 `config`：
+
+> 下表是**常用项**，不是全部：schema 里一共一百多项，设置卡的「配置项」页签把每一项都渲染出来，
+> 每项都带默认值、当前值和它从哪来（`default` / 来自 `config` / 已保存）。
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -696,7 +779,7 @@ npx dsh-plugin-weixin onboard      # 或者 node bin/onboard.mjs
 聊天里问到相关内容时它就会去查，并在回答里说清答案出自哪份文件。
 
 - 支持 `.md` / `.txt` / `.html` / `.pdf` / `.docx`（PDF 与 docx 需要先装上可选依赖：
-  `npm i pdfjs-dist` / `npm i mammoth`，见[文档理解](#文档理解documentextract)）。
+  `npm i pdfjs-dist` / `npm i mammoth`，见[文档理解](docs/extras.md#文档理解发进来的文件能直接问0914-起pdf从0915起)）。
 - 索引在你重启 DSH 时建一次，之后每 `6` 小时检查一次有没有新文件；重建不影响聊天。
 - 只看目录**第一层**，不进子目录——「不小心把整个下载文件夹指过来」不会变成灾难。
 - 只有检索命中足够多（至少两个词面命中）才会注入，闲聊不额外花钱；一次最多注入
@@ -1074,7 +1157,7 @@ stdin，从 stdout 逐行读 JSON。任何满足「读一行 `{"wav": "..."}` �
 ```bash
 npm test                       # node --test "test/**/*.test.js"
 npm run check                  # 语法 + 打包元数据（CI 先跑这个）
-npm run doctor                 # 十项体检：账号/白名单/锁/积压/日志/版本
+npm run doctor                 # 13 项体检：账号/白名单/实例锁/积压/日志/宿主版本
 npm run vendor                 # 校验 vendor/ 是否仍等于记录的 tarball
 node bin/login.js              # 真实扫码登录
 ```
@@ -1169,10 +1252,13 @@ node bin/release.mjs --finish 0.9.11   # 补齐 tag / Release / 核验 / 装本�
 ## 文档
 
 - [架构与排障](docs/architecture.md) —— 消息怎么进来、怎么出去，出问题先看哪里
-- [实施方案](docs/plan.md)
-- [移植审查清单](docs/hermes-port-audit.md)
-- [进度记录](docs/progress.md)
+- [扩展功能手册](docs/extras.md) —— 通知桥、离开模式、共享清单、稍后读、习惯打卡、知识库、备份恢复等开关的用法
+- [宿主版本兼容表](docs/compatibility.md) —— 哪些「插件 + 宿主」组合真机验证过
+- [真机核对清单](docs/manual-checks.md) —— 出站视频、引用消息、语音这些只能上手验的项怎么测
+- [投递语义](docs/delivery.md) —— 一条回复在什么情况下算送达、失败后会发生什么
 - [安全策略](docs/security.md)
+- [进度记录](docs/progress.md) —— 每个功能的来龙去脉与踩过的坑
+- [实施方案](docs/plan.md) · [移植审查清单](docs/hermes-port-audit.md)
 - [第三方代码](THIRD-PARTY-NOTICES.md)
 
 ## 打赏作者

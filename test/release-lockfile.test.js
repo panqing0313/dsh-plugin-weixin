@@ -99,6 +99,19 @@ test('the dry-run snapshot covers every file the version bump rewrites', () => {
   // bullet behind precisely because this list had not grown with them.
   assert.ok(VERSION_FILES.includes('CHANGELOG.md'), 'CHANGELOG.md gains the release bullet')
   assert.match(snapshot.find((f) => f.path === 'CHANGELOG.md').text, /\n- \*\*\d+\.\d+\.\d+\*\* —— /)
+  // Both READMEs name the published version, and the release script rewrites
+  // both lines. The English one had drifted to 0.9.9 while Chinese was current,
+  // because it was not in this list; a missing or reformatted line there would
+  // silently stop the bump, so pin the shape each file must carry.
+  assert.ok(VERSION_FILES.includes('README.en.md'), 'README.en.md names the published version too')
+  assert.match(
+    snapshot.find((f) => f.path === 'README.md').text,
+    /当前已发布版本：\[`dsh-plugin-weixin@\d+\.\d+\.\d+`\]\(https:\/\/www\.npmjs\.com\/package\/dsh-plugin-weixin\)/,
+  )
+  assert.match(
+    snapshot.find((f) => f.path === 'README.en.md').text,
+    /Currently published version: \[`dsh-plugin-weixin@\d+\.\d+\.\d+`\]\(https:\/\/www\.npmjs\.com\/package\/dsh-plugin-weixin\)/,
+  )
 })
 
 /**
