@@ -1469,11 +1469,14 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       }
       plugin.apply(ctx, config)
 
-      // The release script runs this file while the rest of the suite still
-      // saturates the machine: 10s was enough on an idle laptop, and under
-      // that load the second fake poll sometimes had not come back yet.
+      // Waiting for the second answer is only a safety net: the assertions below
+      // are about what the PROMPT contains, not about how fast the machine is.
+      // The whole file runs beside a dozen other files that each spin up real
+      // host sessions, so the wall clock here is a measure of the runner, not of
+      // the plugin — 10s was enough idle, 60s was not always enough loaded, and
+      // the failure message prints `waited` so a real slowdown stays visible.
       const startedWaiting = Date.now()
-      const deadline = startedWaiting + 60_000
+      const deadline = startedWaiting + 150_000
       while (sent.length < 2 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
