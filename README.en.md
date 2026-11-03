@@ -1,33 +1,118 @@
-# dsh-plugin-weixin
+<div align="center">
+
+# WeChat BOT · dsh-plugin-weixin
+
+**Turn your personal WeChat into a remote control surface for DeepSeek Harness.**
+
+Say one line in WeChat; the DSH Agent opens a session on your own machine, runs it, and hands the result back to you — text, images, files and voice, in both directions.
+
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
+[![CI](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml/badge.svg)](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/dsh-plugin-weixin.svg)](package.json)
+[![license](https://img.shields.io/npm/l/dsh-plugin-weixin.svg)](LICENSE)
+[![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)](https://dsh.market/)
 
 <p>
   <a href="README.md">简体中文</a> ｜ <b>English</b>
 </p>
 
-[![npm](https://img.shields.io/npm/v/dsh-plugin-weixin.svg)](https://www.npmjs.com/package/dsh-plugin-weixin)
-[![CI](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml/badge.svg)](https://github.com/panqing0313/dsh-plugin-weixin/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/dsh-plugin-weixin.svg)](LICENSE)
-[![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)](https://dsh.market/)
+<img src="assets/icon-128.png" width="88" alt="WeChat BOT icon" />
 
-<img src="assets/icon-128.png" width="72" alt="dsh-plugin-weixin icon" />
+</div>
 
-Turn **personal WeChat** into a remote control surface for DeepSeek Harness (DSH): send one line in WeChat, the DSH Agent opens a session locally, runs it, and sends the result back to you.
+<img src="assets/hero.png" alt="WeChat BOT: talking to a DSH Agent inside WeChat" />
 
-- **You want to get work done from WeChat** → [Install](#install) → [Login](#login) → [Authorization](#authorization-important); three steps and you can send messages.
-- **You want to change behavior** → [Configuration](#configuration) (29 items; the settings card carries the same table).
-- **You want to know what changed in a release** → [CHANGELOG.md](CHANGELOG.md).
-- **Something is broken** → `npm run doctor` (11 checks), then the troubleshooting order in [Documentation](#documentation).
+## Why this one
 
-## Contents
+| | |
+| --- | --- |
+| **No public endpoint, no server** | The Agent runs on your own machine; WeChat is only the entry point. Credentials live locally in `~/.dsh/weixin/` with `0600` permissions, and nothing is uploaded to any third party. |
+| **Denies everyone by default** | `allowedSenders` defaults to **empty**, which means nobody can drive your Agent; the first message after a QR scan registers you automatically, and anyone else is let in one by one afterwards. |
+| **Both directions work** | Text, images, files, voice (SILK → WAV → local ASR), video frame extraction and stickers; long replies are split into bubbles automatically, and over-long code blocks go out as files. |
+| **Several accounts, no interference** | Several WeChat accounts can be connected at the same time, each with its own long poll, allowlist and session line; logging in, pausing or logging out one account does not affect the others. |
+| **Usable without spending model calls** | Commands, reminders, the daily digest, `/diag`, `/usage` and `/outbox` are answered by the plugin itself and consume no model conversation. |
+| **Visible and checkable** | `npm run doctor` (13 checks), `npm run onboard` (onboarding checklist), in-chat `/diag`, the message journal, the Stats tab, the tool audit, and backup and restore. |
 
-- [Highlights](#highlights) · [Current status](#current-status) · [Repository layout](#repository-layout)
-- [Install](#install) · [Login](#login) · [Authorization (important)](#authorization-important) · [Configuration](#configuration)
-- [Sessions](#sessions-one-wechat-conversation-can-have-multiple-dsh-sessions) · [Outbound attachments](#outbound-attachments-imagesvideosfiles-the-plugin-sends-you) · [Inbound media](#inbound-media-imagesfilesvoicevideo-from-wechat)
-- [Scheduled reminders](#scheduled-reminders-remind-and-the-settings-card) · [Scheduled proactive messages](#scheduled-proactive-messages-subscribe) · [Message journal](#message-journal-messagejournal) · [Local recall search](#local-recall-search-recall) · [Immediate summary and export](#immediate-summary-and-export-summary--export)
-- [Quiet hours](#quiet-hours-quiethours) · [The Stats tab](#the-stats-tab-stats) · [Persona and memory](#persona-and-memory-mode--remember--forget--memory) · [Companion pacing and life state](#companion-pacing-and-life-state-humanpacing--lifestate) · [Memory corrections](#memory-corrections-remember-old--new--automatic-correction)
-- [Language](#language-locale) · [Model routing](#model-routing-chatprovider--sideprovider--memoryprovider) · [The memory model](#the-memory-model-structured-profile--events--person-digest--standalone-model) · [Stickers](#stickers-stickerenabled) · [Speaking first](#speaking-first-proactiveenabled) · [Voice and video](#voice-and-video-voiceoutbound--videoframes)
-- [Rich content](#rich-content-richcontent--codefilethreshold) · [Dangerous-tool notices](#dangerous-tool-notices-toolnotices) · [Group chat](#group-chat-groupchatenabled--groupreplywhen--groupsharememory) · [Tool audit](#tool-audit-toolaudit) · [Speech recognition](#speech-recognition-asr)
-- [Markdown handling](#markdown-handling) · [Development](#development) · [Release](#release) · [Documentation](#documentation)
+## Up and running in 30 seconds
+
+**Step 1 · Install** (pick any one of the three)
+
+```bash
+npx dsh-plugin-weixin --profile desktop          # no clone needed
+node bin/install.mjs --profile desktop --pin     # install from source and pin the version
+```
+
+You can also enter `dsh-plugin-weixin` on DSH's plugin page (sidebar **Plugins**). **Restart DSH** after installing for it to take effect.
+
+**Step 2 · Log in**
+
+Open "Settings → Plugins → WeChat BOT" and click **Scan to log in to WeChat**, then scan the QR code shown on the card with WeChat on your phone (terminal users can run `npm run login` instead). After a successful scan, **no DSH reload is needed**.
+
+**Step 3 · Authorize**
+
+`allowedSenders` is empty by default, which equals denying everyone. The sender of a new account's **first message** is registered and let through automatically — at scan time only the bot id is known, and a person's WeChat id only appears with the first message. So send one line from your own WeChat and it starts working; to add other people, fill them in under "WeChat accounts → Allowlist" on the card.
+
+To check it over after installing:
+
+```bash
+npm run onboard     # onboarding checklist: what is still missing, what to do next (exit code 0 = usable)
+npm run doctor      # 13 checks: accounts / allowlist / instance lock / backlog / logs / host version
+```
+
+## What it is, and what it is not
+
+| | |
+| --- | --- |
+| **It is** | a two-way bridge between personal WeChat and DSH. The WeChat side speaks the official **iLink Bot API** (`ilinkai.weixin.qq.com`), over a vendored copy of Tencent's official open-source transport plugin [`@tencent-weixin/openclaw-weixin`](https://github.com/Tencent/openclaw-weixin) (MIT); the DSH side binds directly to the `agents` service. |
+| **It is not** | an official WeChat product, and not an Enterprise WeChat / Official Account solution. It uses the bot binding channel of personal WeChat, so account risk control and availability are decided by WeChat. |
+| **It does not bypass permissions** | Real file modifications and command execution are still decided by DSH's own permission layer and confirmation flow; the plugin neither bypasses them nor approves on your behalf. |
+| **Not yet possible** | Outbound voice bubbles (in practice the server accepts but does not deliver them; `voiceOutbound` is off by default); native stickers / emoji packs (WeChat does not give bots this message type); native image understanding (inbound images are handed to the Agent as local paths, and whether it can read them depends on your model and toolchain); sending video (needs video encoding). |
+
+## Feature map
+
+Grouped by what you want to do; each group jumps straight to its section.
+
+**Access and accounts** — [Install](#install) | [Login](#login) | [Authorization (important)](#authorization-important) | [Managing multiple accounts](#managing-multiple-accounts) | [Configuration](#configuration)
+
+**Session control** — [Sessions](#sessions-one-wechat-conversation-can-have-multiple-dsh-sessions) | [Managing from the settings page](#managing-from-the-settings-page) | [Spotting WeChat sessions in the session list](#spotting-wechat-sessions-in-the-session-list)
+
+**Messages and media** — [Outbound attachments](#outbound-attachments-imagesvideosfiles-the-plugin-sends-you) | [Inbound media](#inbound-media-imagesfilesvoicevideo-from-wechat) | [Outbound voice](#outbound-voice-voiceoutbound) | [Speech recognition](#speech-recognition-asr) | [Stickers](#stickers-stickerenabled) | [Voice and video](#voice-and-video-voiceoutbound--videoframes) | [Markdown handling](#markdown-handling)
+
+**Proactive and time** — [Scheduled reminders](#scheduled-reminders-remind-and-the-settings-card) | [Scheduled proactive messages](#scheduled-proactive-messages-subscribe) | [Speaking first](#speaking-first-proactiveenabled) | [Daily digest and memory review](#daily-digest-and-memory-review-digestenabled--memoryreviewenabled) | [Quiet hours](#quiet-hours-quiethours)
+
+**Memory and persona** — [Persona and memory](#persona-and-memory-mode--remember--forget--memory) | [Companion pacing and life state](#companion-pacing-and-life-state-humanpacing--lifestate) | [Memory corrections](#memory-corrections-remember-old--new--automatic-correction) | [Local recall search](#local-recall-search-recall) | [Relationship curves and contacts](#relationship-curves-and-the-people-in-a-group-affinity--contacts)
+
+**Group chat** — [Group chat](#group-chat-groupchatenabled--groupreplywhen--groupsharememory)
+
+**Operations and observability** — [Command reference](#sessions-one-wechat-conversation-can-have-multiple-dsh-sessions) | [The Stats tab](#the-stats-tab-stats) | [Message journal](#message-journal-messagejournal) | [Metrics and soak](#metrics-and-soak-metricsexport--npm-run-metrics--npm-run-soak) | [Backups and restore](#backups-and-restore-backupenabled) | [Tool audit](#tool-audit-toolaudit) | [Dangerous-tool notices](#dangerous-tool-notices-toolnotices) | [Compatibility](#compatibility)
+
+**Integration and advanced** — [Model routing](#model-routing-chatprovider--sideprovider--memoryprovider) | [The memory model](#the-memory-model-structured-profile--events--person-digest--standalone-model) | [Language](#language-locale) | [ASR bridge](#a-bridge-ships-in-the-repo-binasr-bridgepy) | [Custom model directory](#the-model-directory-is-configurable) | [Template packs](#template-packs-npm-run-pack--packexport--packimport) | [Dry run](#dry-run-dryrun)
+
+**Full contents** — [Highlights](#highlights) · [Current status](#current-status) · [Repository layout](#repository-layout) · [Install](#install) · [Login](#login) · [Authorization (important)](#authorization-important) · [Configuration](#configuration) · [Sessions](#sessions-one-wechat-conversation-can-have-multiple-dsh-sessions) · [Outbound attachments](#outbound-attachments-imagesvideosfiles-the-plugin-sends-you) · [Inbound media](#inbound-media-imagesfilesvoicevideo-from-wechat) · [Scheduled reminders](#scheduled-reminders-remind-and-the-settings-card) · [Scheduled proactive messages](#scheduled-proactive-messages-subscribe) · [Message journal](#message-journal-messagejournal) · [Local recall search](#local-recall-search-recall) · [Immediate summary and export](#immediate-summary-and-export-summary--export) · [Quiet hours](#quiet-hours-quiethours) · [The Stats tab](#the-stats-tab-stats) · [Persona and memory](#persona-and-memory-mode--remember--forget--memory) · [Companion pacing and life state](#companion-pacing-and-life-state-humanpacing--lifestate) · [Memory corrections](#memory-corrections-remember-old--new--automatic-correction) · [Language](#language-locale) · [Model routing](#model-routing-chatprovider--sideprovider--memoryprovider) · [The memory model](#the-memory-model-structured-profile--events--person-digest--standalone-model) · [Stickers](#stickers-stickerenabled) · [Speaking first](#speaking-first-proactiveenabled) · [Voice and video](#voice-and-video-voiceoutbound--videoframes) · [Rich content](#rich-content-richcontent--codefilethreshold) · [Dangerous-tool notices](#dangerous-tool-notices-toolnotices) · [Group chat](#group-chat-groupchatenabled--groupreplywhen--groupsharememory) · [Tool audit](#tool-audit-toolaudit) · [Speech recognition](#speech-recognition-asr) · [Markdown handling](#markdown-handling) · [Compatibility](#compatibility) · [Development](#development) · [Release](#release) · [Documentation](#documentation)
+
+## Security and privacy
+
+- **Denies everyone by default.** `allowedSenders` / `allowedChats` default to empty; a sender who is not on the list only gets one warn line — no session is opened and no reply is sent. Each account can override the global lists, and the rule is "account first, empty falls back to the global list".
+- **The first contact is registered only once.** Auto-registration happens only when the account's own allowlist is empty and has never registered anyone; after that every stranger is refused as before (refusals stay in the card's "Strangers the allowlist refused" list and can be allowed with one click).
+- **Credentials stay on this machine.** They are written to `~/.dsh/weixin/openclaw-weixin/accounts/<id>.json` with permissions `0600`; the login flow takes no password, the vendor redacts, and the token never reaches the log. Logging out deletes this machine's credentials only (WeChat still needs the unbind on your phone, for the reason in [Logging out and re-binding](#logging-out-and-re-binding)).
+- **It does not bypass DSH's permission layer.** The plugin only hands messages to the Agent; actually changing files or running commands is still up to DSH's permission and confirmation flow. A dangerous tool starting produces one notice in WeChat (`toolNotices`).
+- **Network egress is countable.** The iLink Bot API and the image/file CDN; `readLinks` fetches the page text of links in messages for the Agent to reference (it can be turned off); outbound webhooks only POST to your own address (with an HMAC signature); the local notification bridge binds only to `127.0.0.1` and requires a token.
+- **Traces and health checks.** The tool audit (`toolAudit`) writes `<state dir>/audit/*.jsonl` per day (tool name, arguments truncated to 500 characters, who triggered it, whether it carried an error); `/diag export` produces a **redacted** health-check bundle, so you do not have to strip sensitive information by hand before pasting it to a maintainer.
+
+Details and the threat model are in [docs/security.md](docs/security.md).
+
+## When something is wrong
+
+1. **`npm run doctor`** — 13 checks; start with the rows that are red. The `host app` row tells you whether the host version is in the [verified-on-real-devices table](docs/compatibility.md).
+2. **Send `/diag` in WeChat** — a self-check that costs no model calls: connection, mode, switches, pending reminders, proactive budget, today's journal, quiet-hours state. To show it to someone else, send `/diag export`.
+3. **Common symptoms, matched against the logs**:
+   - The phone says "cannot connect to openclaw for now" → is there `listening as account <id>` in the logs? If not, the inbound loop did not start (`~/.dsh/weixin/logs/`).
+   - The log has `settings login service unavailable` → the login service is not mounted: the scan can succeed and credentials do get written, but nobody receives "login complete", so the loop never switches to the new credentials.
+   - `getUpdates errcode=-14` → the login has expired; scan again.
+   - Messages will not go out → send `/outbox` in the chat to see the resend queue, and `/outbox retry` to retry immediately; an item whose receipt ticket has expired states the reason and stops there ([issue #9](https://github.com/panqing0313/dsh-plugin-weixin/issues/9)).
+   - Features differ before and after a restart, or the sidebar entry disappears → the version range declared in the profile disagrees with the copy you installed, and the `pnpm install` at app startup put the old copy back; see the note in [Install](#install) and `--pin`.
+4. **Still wrong** → [docs/architecture.md](docs/architecture.md) has the full path messages take in and out, and the troubleshooting order; you can also open an issue with the `/diag export` bundle.
 
 ## Highlights
 
@@ -91,7 +176,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@0.9.9`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.3.1`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 - **0.8.0** — **First-contact auto-registration**: after a new account scans, the sender of its first message is automatically added to that account's allowlist and let through (previously a new account denied everyone, so the second account looked "dead" after scanning, with the reason only in the logs); below the account row on the login card there is now an allowlist summary (ids listed when there is a list, otherwise a note that the first message is auto-registered).
 - **0.7.0** — the sidebar knows its accounts: new session titles carry a `备注名: ` prefix and are mirrored as host session names; session-line deletion is opened up (lines in use and the last line can both be deleted); the settings card gains an **About** tab: current version, check for updates (compared against the npm registry, and it says so when the network is unreachable), project links and the data location.
@@ -999,7 +1084,7 @@ The plugin rides on the host app's own slot names, its client module loader, and
 ```bash
 npm test                       # node --test "test/**/*.test.js"
 npm run check                  # syntax + packaging metadata (CI runs this first)
-npm run doctor                 # ten checks: accounts / allowlist / lock / backlog / logs / version
+npm run doctor                 # 13 checks: accounts / allowlist / instance lock / backlog / logs / host version
 npm run vendor                 # verify vendor/ still equals the recorded tarball
 node bin/login.js              # a real QR code login
 ```
