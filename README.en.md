@@ -81,7 +81,7 @@ Grouped by what you want to do; each group jumps straight to its section.
 
 **Proactive and time** — [Scheduled reminders](#scheduled-reminders-remind-and-the-settings-card) | [Scheduled proactive messages](#scheduled-proactive-messages-subscribe) | [Speaking first](#speaking-first-proactiveenabled) | [Daily digest and memory review](#daily-digest-and-memory-review-digestenabled--memoryreviewenabled) | [Quiet hours](#quiet-hours-quiethours)
 
-**Memory and persona** — [Persona and memory](#persona-and-memory-mode--remember--forget--memory) | [Companion pacing and life state](#companion-pacing-and-life-state-humanpacing--lifestate) | [Memory corrections](#memory-corrections-remember-old--new--automatic-correction) | [Local recall search](#local-recall-search-recall) | [Relationship curves and contacts](#relationship-curves-and-the-people-in-a-group-affinity--contacts)
+**Memory and persona** — [Persona and memory](#persona-and-memory-mode--remember--forget--memory) | [Knowledge base](#knowledge-base-turn-the-files-you-hand-it-into-answers-knowledgeenabled) | [Companion pacing and life state](#companion-pacing-and-life-state-humanpacing--lifestate) | [Memory corrections](#memory-corrections-remember-old--new--automatic-correction) | [Local recall search](#local-recall-search-recall) | [Relationship curves and contacts](#relationship-curves-and-the-people-in-a-group-affinity--contacts)
 
 **Group chat** — [Group chat](#group-chat-groupchatenabled--groupreplywhen--groupsharememory)
 
@@ -717,6 +717,49 @@ text adventure (second person, choice based). In WeChat:
 - With memory on there is also a **closeness** line: which day you met, how many messages in total, the mood right now (late night / lively / quiet for a while / calm,
   produced by deterministic rules, no model cost). It appears at the very front of the prompt (`【我们】…`), in `/status`, in `/memory` and in the settings card,
   giving the tone a sense of accumulated relationship.
+
+#### Getting started: follow the checklist instead of memorising commands
+
+The first tab in the settings card is **Getting started**: it lays out "what is still missing before this works" as seven steps, and every step you finish gets ticked off.
+Only the first three are required — log in one WeChat account, confirm the host version, decide who may drive it; the remaining four (choose how it talks,
+whether it may start a conversation, hand it your files, turn on backups) are prompts, and skipping them will not block you.
+
+If you would rather not open the UI, the same checklist is on the command line:
+
+```bash
+npx dsh-plugin-weixin onboard      # or: node bin/onboard.mjs
+```
+
+It is **read-only**: it changes no configuration and writes no state; the only side effect is creating the knowledge directory, so you know where files should go.
+Exit code 0 means "usable", 1 means something required is still pending — which is also why it works as a gate in an install script.
+
+#### Three built-in templates: from "a working bot" to "a decent one"
+
+At the top of the **Persona** tab in the settings card sit three packs that work out of the box, with no index URL to fill in:
+
+| Template | Best for | What it changes |
+| --- | --- | --- |
+| Companion | One person who wants to be cared about | A companion tone, two daily subscriptions, daytime proactive messages |
+| Assistant | Using WeChat as a pocket to-do list | A restrained tone, stickers and proactive messages off, a to-do check-in at 9:00 |
+| Group host | Livening up a group chat | Speaks only when @-mentioned or called by name, and only joins in when a keyword hits |
+
+Installing is **additive only**: it adds persona modes, schedules subscriptions under the current account, and merges a few behaviour switches;
+it never overwrites modes you already have, and never carries memory, the allowlist or credentials with it. Install the same pack twice and the second time adds nothing.
+If a pack contains "good night at 22:30" and it is already 23:00, that subscription is moved to tomorrow — firing a reminder the second you install is a bad first impression.
+
+#### Knowledge base: turn the files you hand it into answers (`knowledgeEnabled`)
+
+Long-term memory holds "who you are"; the knowledge base holds "the material you handed over" — manuals at home, company policy, contract clauses, warranty records.
+**There is no command**: put files into `knowledge/<account>/` under the plugin's data directory, and after the next index rebuild it will look things up
+when a chat touches on them, naming in the answer which file the answer came from.
+
+- `.md` / `.txt` / `.html` / `.pdf` / `.docx` are supported (PDF and docx need their optional dependency first:
+  `npm i pdfjs-dist` / `npm i mammoth`, see [document understanding](docs/extras.md)).
+- The index is built once when you restart DSH, then checked every `6` hours for new files; rebuilding does not disturb the chat.
+- Only the **first level** of the directory is read, never subdirectories — "accidentally pointing a whole Downloads folder at it" cannot become a disaster.
+- It is injected only when retrieval hits enough (at least two word-level hits), so idle chat costs nothing extra; at most `knowledgeHits`
+  (3 by default) passages go in.
+- The 《filename》 in an answer is not decoration: the prompt requires it to say "the material does not cover that" when it has no basis, and forbids inventing one.
 
 When sending a message the plugin folds three things into the prompt (all before your text): the current mode's persona block,
 the `<weixin_memory>` memory block (long-term memory + this conversation's summary + recent messages on a cold start), and only then what you said.
