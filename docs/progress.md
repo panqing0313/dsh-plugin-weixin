@@ -3943,3 +3943,13 @@ release run `41485882140` success）。
 - 命令：`/bad <话>`、`/good <话>`、`/style`、`/style clear`，都在 persona bundle 里，本地读写，不调模型；`helpRank` 29–31。
 - 边界：不改历史消息、不改模式定义、不跨模式传播（无 modeId 的老规则除外）。
 - 测试：`test/style-feedback.test.js` 9 条（模式隔离、去重、上限淘汰最旧、截断、清空只清当前模式、空块、列表文案、命令）；`test/session-commands.test.js` 两条端到端——命令不开会话，以及 `/bad` 之后的下一条消息提示词里确实带着 `<style_feedback>` 与那句话。
+
+## 重要日子附草稿：`/draft`（2026-11-03，1.4.4 item 4）
+
+`dates.js` 只提醒事实，到那天还得自己现想那句话。这一项把「那句话」也准备好，同时守住「不替用户说话」这条线。
+
+- 新增 `src/message/drafts.js`：`drafts.json` 每账号一条草稿（`text/forLabel/kind/conversationId/at/turns`），36 小时过期；`draftVariants()` 按 `date/event` 与标签关键词（生日、纪念/结婚/周年）给说法，`buildDraft(item,{who,turn})` 轮换，`cleanDraft()` 单向清理引号与「草稿：」前缀、超 120 字拒绝（宁可没有也不发半句）。
+- `src/index.js` 的重要日子定时器：命中后先按模板拟一句、存盘，再把 `composeReminder()` 的结果发出去（提醒正文 + 「要不要发这句」+ 引用行）。这条路仍然不调模型。
+- `/draft` 命令（persona bundle）：不带参数只念草稿、`send` 发出去并清空、`换一句` 轮换、`skip` 丢掉；发送失败时草稿保留并说明原因。`helpRank` 32。
+- 关键取舍：`/draft` 不带参数**不重拟**——「看一眼」和「换一句」是两个意图，混在一起会让你正要看的那句被换掉。
+- 测试：`test/drafts.test.js` 7 条（模板分支、轮换回环、清理与超长拒绝、36 小时过期与账号隔离、`composeReminder` 有/无草稿、命令四态含发送失败保留、无日子时不臆造）；`test/session-commands.test.js` 一条端到端（种子草稿 → `/draft` 念出 → `/draft send` 收到同一句 → 再 send 提示没有草稿，全程不开会话）。

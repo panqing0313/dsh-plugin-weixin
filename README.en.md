@@ -427,6 +427,7 @@ Send commands directly in WeChat (they only take effect when the whole message i
 | `/bad too long` | Say what was wrong with that reply (up to 60 chars): recorded as a “stop doing this” rule that applies **from the next reply on**, kept per mode |
 | `/good keep it up` | Say what worked: recorded as a “keep doing this” rule |
 | `/style` | List the preferences recorded for this mode (12 at most); `/style clear` wipes them |
+| `/draft` | The important-date reminder also drafts the line you meant to write: `/draft send` sends it, `/draft again` rewrites it, `/draft skip` drops it. Never sent on its own, expires after 36 h |
 
 **Switching preserves, it does not reset**: the line you switch away from is not ended or cleared, and its earlier context is all there when you
 switch back. The indices in `/list` are **absolute** (counting from 1), so even when only the latest 10 are shown the indices never shift

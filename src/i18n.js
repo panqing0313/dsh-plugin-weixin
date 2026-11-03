@@ -55,6 +55,7 @@ export const CATALOG = Object.freeze({
     'help.back': { zh: '/back 结束离开模式，并看这段时间谁找过你', en: '/back end away mode and see who asked while you were out' },
     'help.diag': { zh: '/diag 一条不花模型的自检：连接、模式、开关、待发提醒、主动开口额度、今天流水', en: '/diag a model-free self-check: connection, mode, switches, pending reminders, proactive quota, today\'s traffic' },
     'help.outbox': { zh: '/outbox 看待重发的消息，retry 立即重试，drop <id> 丢弃一条', en: '/outbox shows undelivered messages; retry resends now; drop <id> discards one' },
+    'help.draft': { zh: '/draft 看/换/发重要日子的草稿（/draft send 发，/draft skip 丢）', en: '/draft shows, rotates, or sends the greeting drafted for an important date' },
     'help.bad': { zh: '/bad 太长了 —— 记下「别这样」，下一条回复起生效', en: '/bad too long — remember what to stop doing, live on the next reply' },
     'help.good': { zh: '/good 就这样 —— 记下「保持这样」', en: '/good keep it up — remember what to keep doing' },
     'help.style': { zh: '/style 看记下的偏好，/style clear 清空', en: '/style lists the feedback rules; /style clear wipes them' },

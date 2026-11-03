@@ -89,6 +89,7 @@ import { extractUrls, fetchLinkText, describeLinkResults } from './message/links
 import { ReminderScheduler, parseWhen } from './message/scheduler.js'
 import { createAwayCommands, readAway, noteMissed, buildAwayReply, awaySummary, clearAway } from './message/away.js'
 import { buildDateReminderText, dateReminderDue, markDateReminderSent, upcomingDates } from './message/dates.js'
+import { buildDraft, composeReminder, createDraftCommands, readDraft, saveDraft } from './message/drafts.js'
 import { createWebhookSender } from './webhook.js'
 import { backgroundBudget, recordBackgroundCall } from './budget.js'
 import { createListCommands } from './message/lists.js'
@@ -1131,8 +1132,10 @@ export function apply(ctx, config) {
           const live = withSavedConfig(config)
           if (!dateReminderDue(stateRoot, id, { now: Date.now(), at: live.dateReminderWhen, enabled: live.dateReminderEnabled, warn })) continue
           let items = []
+          let memory
           try {
-            items = upcomingDates(readGlobalMemory(stateRoot, id, { warn }), new Date(), {
+            memory = readGlobalMemory(stateRoot, id, { warn })
+            items = upcomingDates(memory, new Date(), {
               leadDays: Number(live.dateReminderLeadDays ?? 0),
             })
           } catch (error) {
@@ -1142,7 +1145,16 @@ export function apply(ctx, config) {
           if (items.length === 0) continue
           const conversationId = pickConversation(listConvMemories(stateRoot, id))
           if (conversationId === undefined) continue
-          sendChunked(t, live, { conversationId, text: buildDateReminderText(items) })
+          // The reminder says what day it is; the draft saves you the typing. It is
+          // never sent on its own — a wrong greeting reads worse than none.
+          const named = typeof memory?.profile?.name === 'string' ? memory.profile.name.trim() : ''
+          const draft = saveDraft(stateRoot, id, {
+            text: buildDraft(items[0], { who: named === '' ? undefined : named }),
+            item: items[0],
+            conversationId,
+            warn,
+          })
+          sendChunked(t, live, { conversationId, text: composeReminder(buildDateReminderText(items), draft) })
             .then(() => {
               markDateReminderSent(stateRoot, id, { warn })
               fileLog.info(`date reminder sent to ${conversationId}`)
@@ -2149,6 +2161,20 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),
       ...createListCommands({ stateRoot, accountId, warn }),
       ...createHabitCommands({ stateRoot, accountId, warn }),
+      ...createDraftCommands({
+        stateRoot,
+        accountId,
+        item: () => {
+          const held = readDraft(stateRoot, accountId, { warn })
+          return held === undefined ? undefined : { kind: held.kind, label: held.forLabel }
+        },
+        who: () => {
+          const person = readGlobalMemory(stateRoot, accountId, { warn })?.profile?.name
+          return typeof person === 'string' && person.trim() !== '' ? person.trim() : undefined
+        },
+        send: (text) => sendChunked(transport, effectiveConfig.current, { conversationId, text }),
+        warn,
+      }),
       ...createStyleCommands({
         stateRoot,
         accountId,

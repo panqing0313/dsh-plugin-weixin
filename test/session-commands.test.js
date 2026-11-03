@@ -1156,3 +1156,32 @@ hostTest('the feedback the user typed rides along in the next prompt', async () 
     assert.match(prompt, /- 别这样：太长了/, 'and it carries what was actually said')
   })
 })
+
+test('/draft sends the greeting it drafted for the day, without opening a session', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fs.writeFileSync(
+      path.join(root, 'drafts.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        accounts: {
+          [ACCOUNT_ID]: { text: '生日快乐！🎂 今天别忘了许愿。', forLabel: '她的生日', kind: 'date', at: Date.now(), turns: 0 },
+        },
+      }),
+    )
+
+    fake.deliver('/draft', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the draft reply')
+    assert.match(fake.outbound[0].text, /待发的草稿（她的生日）/)
+    assert.match(fake.outbound[0].text, /生日快乐！🎂/)
+
+    fake.deliver('/draft send', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the sent draft')
+    assert.equal(fake.outbound[1].text, '生日快乐！🎂 今天别忘了许愿。')
+    const afterSend = fake.outbound.length
+    fake.deliver('/draft send', 'm3')
+    await waitFor(() => fake.outbound.length > afterSend, 'the empty reply')
+    assert.match(fake.outbound.at(-1).text, /现在没有草稿可发/)
+
+    assert.equal(sessionsOpened.length, 0, 'drafts never need the model')
+  })
+})

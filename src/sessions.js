@@ -603,6 +603,7 @@ const COMMANDS = [
   { id: 'bad', pattern: /^\/bad(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 29, helpKey: 'help.bad' },
   { id: 'good', pattern: /^\/good(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 30, helpKey: 'help.good' },
   { id: 'style', pattern: /^\/style(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 31, helpKey: 'help.style' },
+  { id: 'draft', pattern: /^\/draft(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 32, helpKey: 'help.draft' },
   { id: 'snooze', pattern: /^\/snooze(?:\s+(\S+))?$/, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 25, helpKey: 'help.snooze' },
   { id: 'habit', pattern: /^\/habit(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 26, helpKey: 'help.habit' },
   { id: 'media', pattern: /^\/media(?:\s+([\s\S]+))?$/i, build: (m) => ({ arg: m[1] ?? '' }), helpRank: 27, helpKey: 'help.media' },
@@ -675,7 +676,7 @@ const COMMANDS = [
 ]
 
 /** Commands answered by the inbound handler's persona bundle (state root lives there). */
-const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'undo', 'import', 'keyword', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag', 'outbox', 'quiet', 'usage', 'habit', 'media', 'digest', 'config', 'bad', 'good', 'style',])
+const PERSONA_COMMANDS = new Set(['mode', 'remember', 'forget', 'memory', 'undo', 'import', 'keyword', 'summary', 'export', 'recall', 'away', 'back', 'todo', 'later', 'send', 'diag', 'outbox', 'quiet', 'usage', 'habit', 'media', 'digest', 'config', 'bad', 'good', 'style', 'draft',])
 
 /**
  * The help text in one locale (C33). Command rules carry a `helpKey` into the
