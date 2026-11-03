@@ -77,15 +77,19 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           # npm's read side is eventually consistent: by now the publish has
-          # succeeded, but the version can take a couple of minutes to appear.
-          # 1.2.0 was published and then failed this step inside a 100s window,
-          # which made a working release look broken.
-          for attempt in $(seq 1 30); do
+          # succeeded, but the version can take minutes to appear. Two releases
+          # were published successfully and still failed this step inside a
+          # window that was too short — 1.2.0 in 100s, and 1.4.1 in 5 minutes
+          # once the sticker set pushed the tarball past 5MB (it showed up at
+          # 7m30s). The window is therefore 15 minutes: this step is a
+          # diagnostic, not the publish itself, and a false red here is worse
+          # than a slow green.
+          for attempt in $(seq 1 60); do
             if [ "$(npm view dsh-plugin-weixin@$version version 2>/dev/null)" = "$version" ]; then
               echo "registry now serves $version (attempt $attempt)"
               exit 0
             fi
-            sleep 10
+            sleep 15
           done
-          echo "::error::the registry never served $version after 5 minutes"
+          echo "::error::the registry never served $version after 15 minutes — check npm's status page before re-running; a re-run is safe while the version is absent"
           exit 1
