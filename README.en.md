@@ -178,15 +178,6 @@ You can also enter a git URL or an absolute path. After installation DSH mounts 
 
 Currently published version: [`dsh-plugin-weixin@1.3.1`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
-- **0.8.0** — **First-contact auto-registration**: after a new account scans, the sender of its first message is automatically added to that account's allowlist and let through (previously a new account denied everyone, so the second account looked "dead" after scanning, with the reason only in the logs); below the account row on the login card there is now an allowlist summary (ids listed when there is a list, otherwise a note that the first message is auto-registered).
-- **0.7.0** — the sidebar knows its accounts: new session titles carry a `备注名: ` prefix and are mirrored as host session names; session-line deletion is opened up (lines in use and the last line can both be deleted); the settings card gains an **About** tab: current version, check for updates (compared against the npm registry, and it says so when the network is unreachable), project links and the data location.
-- **0.6.0** — **files the agent produces are delivered automatically**: files the agent writes into the working directory during a turn (screenshots, converted PDFs, ...) are sent to WeChat even when the reply never mentions them (`autoSendFiles` turns this off); **a failed model call no longer wedges the session**: the reason comes back immediately and the next message is handled normally at once (previously it waited 20 minutes and piled every following message into the queue).
-- **0.5.0** — new `/clear` to wipe the current session and start over; fix for outbound attachment recipients being dropped to `to=undefined` at the handoff (plugin-driven attachment upload had been failing that way since 0.1.0); a watchdog for inbound long-poll bodies that hang (the root cause of the phone showing "cannot connect to openclaw"); PDF/Word and other documents written as markdown links are delivered too; schema defaults no longer overwrite the ASR command saved in the settings page.
-- **0.4.0** — one WeChat conversation can carry multiple DSH sessions (`/new`, `/list`, `/use`, switching away does not destroy them); **every config item can be viewed and edited in the settings page**; sessions opened by this plugin get a WeChat icon in the session list; the QR code no longer depends on python or undeclared packages (Windows fix); outbound relative paths resolve against the agent working directory.
-- **0.3.0** — the repo ships an ASR bridge, so speech recognition works out of the box (see [Speech recognition](#speech-recognition-asr)).
-- **0.2.0** — queueing / interjecting while busy, resend on timeout, source blocks, the settings card enters the host Settings.
-- **0.1.0 / 0.1.1** — first release: QR polling, the inbound loop started automatically after login, allowlist merging, automatic recovery of archived sessions.
-
 ### With `npx` (no clone needed)
 
 ```bash
