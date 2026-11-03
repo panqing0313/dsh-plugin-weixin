@@ -632,6 +632,22 @@ The "Stats" tab of the settings card reports send/receive volume for the last 7/
 and the most active conversations. Every number is **computed on the spot** from the local message journal (no caching, no upload), so it is always consistent with the "Message journal" tab.
 `test/stats.test.js` and the stats cases in `test/login-remote.test.js` guard this behavior.
 
+### The Bill tab (usage)
+
+The "Bill" tab keeps a per-conversation ledger: which models a conversation used, how many turns, roughly how many tokens, and roughly how much that costs
+(the prices are yours to set: `pricePer1kInputYuan` / `pricePer1kOutputYuan`). The top row shows today and this-account totals; the list below is ordered by most recent use.
+The ledger lives in `~/.dsh/weixin/usage-ledger.json` (per account, last 30 daily buckets, at most 50 conversations).
+
+All three numbers are **estimates**, and the tab says so:
+
+- **Tokens** are derived from the character counts of the prompt and the reply (`estimateTokens` in `src/message/usage-ledger.js`). The host's own system prompt, tool output and history are not counted, so the number is always lower than the real bill.
+- **Yuan** uses the price you set. With no price configured, only tokens are shown and the money column reads "—".
+- **The model column** names the route we asked for (`chatProvider/chatModel`, or `sideProvider/sideModel` for background work), not necessarily the one the host finally picked.
+
+Recording costs nothing: when a turn really settles, `AgentBridge` reports the prompt and reply through `onUsage`, and the plugin folds them into the ledger.
+With `usageAwarenessEnabled` (on by default) the persona also sees one estimated line at the end of the prompt — how many turns and tokens this conversation has used — so it knows whose money it is spending.
+`test/usage-ledger.test.js` and the ledger case in `test/e2e.test.js` guard this.
+
 ### Daily digest and memory review (digestEnabled · memoryReviewEnabled)
 
 Two messages that arrive without you asking:

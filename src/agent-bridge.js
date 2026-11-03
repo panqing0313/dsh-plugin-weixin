@@ -167,6 +167,10 @@ export class AgentBridge {
     // here instead of in six call sites.
     this.allowBackground = options.allowBackground
     this.onBackgroundCall = options.onBackgroundCall
+    // 用量账本：每一次真正跑完的模型回合都从这两个入口（deliver / summarize）
+    // 报一次字符数。token 由调用方折算 —— 桥知道「说了什么、回了什么」，不知道
+    // 真实 usage（宿主不给），所以这里只提供素材，不下结论。
+    this.onUsage = options.onUsage
     // C15: fired for every tool/call the audit scan sees, with the conversation
     // attached, so the caller can warn the owner in WeChat without parsing the
     // audit log. Separate from onToolAudit because it must run even when the
@@ -665,7 +669,15 @@ export class AgentBridge {
       record.agent.followup(
         createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
       )
-      return await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
+      const settled = await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
+      this.onUsage?.({
+        kind: 'chat',
+        accountId,
+        conversationId,
+        prompt: text,
+        reply: typeof settled?.text === 'string' ? settled.text : '',
+      })
+      return settled
     } finally {
       record.busy = false
       // The turn is over, so a stale cancel flag would suppress the NEXT
@@ -730,7 +742,16 @@ export class AgentBridge {
         createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }),
       )
       // No onProgress / onLateReply: a summary must stay silent toward WeChat.
-      return await this.#awaitReply({ record, before })
+      const settled = await this.#awaitReply({ record, before })
+      this.onUsage?.({
+        kind: 'summarize',
+        accountId,
+        conversationId,
+        prompt,
+        reply: typeof settled?.text === 'string' ? settled.text : '',
+        route,
+      })
+      return settled
     } finally {
       record.busy = false
       record.cancelled = false

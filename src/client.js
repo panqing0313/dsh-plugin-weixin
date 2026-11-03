@@ -246,6 +246,18 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/usageLedger`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "usageLedger",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/usageLedger:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/usageLedger:result`, create: _statusResult },
+				},
+
+				{
 					id: `${PKG}#weixin/onboarding`,
 					service: "weixinLoginController",
 					namespace: "weixin",

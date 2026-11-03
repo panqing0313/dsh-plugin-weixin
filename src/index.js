@@ -166,6 +166,7 @@ import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
 import { describeLearnedHours, learnActiveHours } from './message/proactive-timing.js'
 import { buildGroupSummaryBlock, createGroupSummaries, groupSummaryPrompt, readGroupSummary } from './message/group-summary.js'
 import { recordPromptComposition } from './message/prompt-composition.js'
+import { conversationRows, ledgerTotals, recordUsage, usageAwarenessLine } from './message/usage-ledger.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 import { cleanSpeechText, synthesizeVoiceFile, ttsPlatformSupported } from './media/tts.js'
 import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './message/style-feedback.js'
@@ -317,6 +318,9 @@ export const Config = z.object({
   contactStaleDays: z.number().min(0).max(3650).default(45).description('群成员名片多久算「旧」：超过这么多天没更新过内容时，注入时会注明「可能已过时」。0 表示不做这个判断。'),
   contactRefreshEnabled: z.boolean().default(true).description('群成员名片自动补全：过时且最近说过话的名片，交给后台模型从他说过的话里补一遍（受后台预算与每天张数上限约束）。'),
   contactRefreshPerDay: z.number().min(0).max(20).default(2).description('每次最多补几张名片（`contactRefreshEnabled` 打开时生效，0 等于关）。'),
+  pricePer1kInputYuan: z.number().min(0).default(0).description('估算花费用：每千输入 token 多少元（0 表示不算钱，只显示 token）。'),
+  pricePer1kOutputYuan: z.number().min(0).default(0).description('估算花费用：每千输出 token 多少元。'),
+  usageAwarenessEnabled: z.boolean().default(true).description('把人设自己这个会话的消耗（估算 token / 元）写进提示词，让它有「我在花钱」的意识。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
   groupKeywords: z.string().default('').description('群关键词自动回复，每行一条：正则 => 回复。例如「^打卡$ => 打卡成功」。只在群里、只对白名单内的人生效；同一群同一条规则 60 秒内最多应一次；免打扰时段沉默。回复是模板，不走模型。'),
@@ -444,6 +448,46 @@ export const Config = z.object({
  * @param {any} ctx
  * @param {z.infer<typeof Config>} config
  */
+/**
+ * 记一次模型回合的消耗（估算）。
+ *
+ * token 由提示词与回复的字符数折算 —— 插件不在模型请求链路上，宿主的 usage
+ * 分片不会经过我们，所以这是估不完的估算，只会小于账单；卡片的「账单」页签也
+ * 必须这么写。模型名是「我们请求的那条路由」，不是宿主最终选用的那个。
+ *
+ * @param {string} stateRoot
+ * @param {object} live  运行时配置（单价、路由都由使用者填写）
+ * @param {(line: string) => void} warn
+ * @param {{ kind: string, accountId: string, conversationId: string, prompt?: string,
+ *   reply?: string, route?: { provider?: string, model?: string } }} usage
+ */
+function recordModelUsage(stateRoot, live, warn, { kind, accountId, conversationId, prompt, reply, route }) {
+  // 一条路由只有 provider 与 model 都填了才真的生效（同 schema 的说明），
+  // 所以账本也按同样的规则写名字：只填一半等于没填，记成「默认」。
+  const pair = (provider, model) =>
+    typeof provider === 'string' && provider !== '' && typeof model === 'string' && model !== ''
+      ? `${provider}/${model}`
+      : ''
+  const requested = typeof route?.model === 'string' && route.model !== ''
+    ? pair(route.provider ?? live.sideProvider, route.model)
+    : kind === 'chat'
+      ? pair(live.chatProvider, live.chatModel)
+      : pair(live.sideProvider, live.sideModel)
+  try {
+    recordUsage(stateRoot, {
+      accountId,
+      conversationId,
+      route: kind,
+      model: requested === '' ? '默认' : requested,
+      prompt: typeof prompt === 'string' ? prompt : '',
+      reply: typeof reply === 'string' ? reply : '',
+      warn,
+    })
+  } catch (error) {
+    warn(`usage ledger write failed: ${String(error)}`)
+  }
+}
+
 export function apply(ctx, config) {
 
   // Must precede any credential/sync-buffer path resolution in the vendored
@@ -609,6 +653,9 @@ export function apply(ctx, config) {
       bridge = new AgentBridge({
         ctx,
         cwd,
+        // 账本：桥每完成一个真正跑完的回合就报一次（谁会调用由它决定，写去哪
+        // 由这里决定 —— 桥不认识 stateRoot）。
+        onUsage: (usage) => recordModelUsage(stateRoot, withSavedConfig(config), warn, usage),
         progressAfterMs: config.progressAfterMs,
         progressToolAfterMs: config.progressToolAfterMs,
         progressEveryMs: config.progressEveryMs,
@@ -2924,7 +2971,16 @@ ${neutralizeTags(ocr.text)}
     const groupSummaryBlock = isGroupMessage(message) && effectiveConfig.current.groupSummaryEnabled === true
       ? buildGroupSummaryBlock(readGroupSummary(stateRoot, accountId, message.conversationId, { warn }), { now: journaledAt })
       : ''
-    const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, contactBlock, memoryBlock, groupSummaryBlock, recallBlock, knowledgeBlock, dryRunBlock].filter((block) => block !== '')
+    // 让人设知道自己的消耗（估算值；读不到账本时这一块是空的）。
+    const usageBlock = effectiveConfig.current.usageAwarenessEnabled !== false
+      ? usageAwarenessLine(stateRoot, accountId, message.conversationId, {
+        now: journaledAt,
+        priceInPer1k: Number(effectiveConfig.current.pricePer1kInputYuan ?? 0),
+        priceOutPer1k: Number(effectiveConfig.current.pricePer1kOutputYuan ?? 0),
+        warn,
+      })
+      : ''
+    const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, contactBlock, memoryBlock, groupSummaryBlock, recallBlock, knowledgeBlock, dryRunBlock, usageBlock].filter((block) => block !== '')
     if (blocks.length > 0) prompt = [...blocks, prompt].filter((part) => part !== '').join('\n\n')
 
     // 统计页签的「提示词构成」：记下这一回合每段实际占了多少字符。各段之和
@@ -2942,6 +2998,7 @@ ${neutralizeTags(ocr.text)}
       { key: 'recall', chars: recallBlock.length },
       { key: 'knowledge', chars: knowledgeBlock.length },
       { key: 'dryRun', chars: dryRunBlock.length },
+      { key: 'usage', chars: usageBlock.length },
       { key: 'message', chars: Math.max(0, prompt.length - joinedBlocks.length - separators) },
     ], { total: prompt.length, at: journaledAt })
 

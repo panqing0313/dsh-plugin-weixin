@@ -292,6 +292,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/status',
         'weixin/storage',
         'weixin/submitVerifyCode',
+        'weixin/usageLedger',
         'weixin/useSession',
         'weixinAsr/downloadModel',
         'weixinAsr/downloadStatus',
@@ -989,4 +990,30 @@ test('the About tab shows both tip codes, side by side, and hides whichever one 
   assert.match(host, /donateQrDataUrl\("donate-qr\.jpg"\)/)
   assert.match(host, /donateQrDataUrl\("donate-qr-alipay\.jpg"\)/)
   assert.match(host, /donateQrAlipay\(\) \{/)
+
+
+})
+
+test('the bill tab reads the ledger, and says out loud that the numbers are estimates', () => {
+  const repo = path.join(import.meta.dirname, '..', 'src')
+  const card = fs.readFileSync(path.join(repo, 'client.card.js'), 'utf8')
+  const host = fs.readFileSync(path.join(repo, 'login-remote.js'), 'utf8')
+  const config = fs.readFileSync(path.join(repo, 'config-remote.js'), 'utf8')
+
+  // The card calls the one method that owns the numbers, and shows the caveat
+  // next to them — an estimate that reads like a bill is worse than no number.
+  assert.match(card, /ctx\.remote\.weixin\.usageLedger\(\{\}\)/)
+  assert.match(card, /function UsageSection\(\{ ctx, t, onGoTo \}\)/)
+  assert.match(card, /token \u7531\u5b57\u7b26\u6570\u4f30\u7b97|token 由字符数估算/)
+  assert.match(card, /\u6a21\u578b\u4e00\u5217|模型一列/)
+
+  // The host reads the ledger with the operator's own prices, never a guess.
+  assert.match(host, /async usageLedger\(options\)/)
+  assert.match(host, /pricePer1kInputYuan/)
+  assert.match(host, /ledgerTotals\(rows\)/)
+
+  // Both prices and the awareness switch have a form entry, or nobody could set them.
+  assert.match(config, /path: "pricePer1kInputYuan"/)
+  assert.match(config, /path: "pricePer1kOutputYuan"/)
+  assert.match(config, /path: "usageAwarenessEnabled"/)
 })

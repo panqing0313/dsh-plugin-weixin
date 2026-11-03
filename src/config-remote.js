@@ -796,6 +796,15 @@ export const FIELDS = [
       ],
     },
     {
+      group: "用量与花费",
+      groupEn: "Usage and spend",
+      fields: [
+        { path: "pricePer1kInputYuan", type: T.number, default: 0, min: 0, step: 0.01, unit: "元/千token", unitEn: "yuan/1k", label: "输入单价", labelEn: "Input price", hint: "每千输入 token 多少钱；0 = 不算钱，只显示 token（单价由你自己填，我们不猜供应商价格）", hintEn: "What 1k input tokens cost you; 0 = show tokens only" },
+        { path: "pricePer1kOutputYuan", type: T.number, default: 0, min: 0, step: 0.01, unit: "元/千token", unitEn: "yuan/1k", label: "输出单价", labelEn: "Output price", hint: "每千输出 token 多少钱；填了之后「账单」页签才会显示元", hintEn: "What 1k output tokens cost you; the bill tab shows yuan only once this is set" },
+        { path: "usageAwarenessEnabled", type: T.boolean, default: true, label: "让它知道自己的消耗", labelEn: "Let it see its own spend", hint: "每回合在提示词末尾加一行「本会话已用多少回合、约多少 token」的估算；关掉就完全不说", hintEn: "Adds one estimated line about this conversation's spend to the prompt; turn off to stay silent" },
+      ],
+    },
+    {
       group: "预演",
       groupEn: "Dry run",
       fields: [

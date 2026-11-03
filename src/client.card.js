@@ -290,6 +290,11 @@ window.__ModuleLoader__.load({
 					stats: [
 						createElement("path", { key: "a", d: "M5 20V11M12 20V5M19 20v-6" }),
 					],
+					// 账单：一枚带竖线的硬币（¥ 缩到 15px 会糊）。
+					usage: [
+						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
+						createElement("path", { key: "b", d: "M12 7.5v9M9.4 10.2c0-1 1.1-1.7 2.6-1.7s2.6.7 2.6 1.7-1.1 1.6-2.6 1.9-2.6.9-2.6 1.9 1.1 1.7 2.6 1.7 2.6-.7 2.6-1.7" }),
+					],
 					reminders: [
 						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
 						createElement("path", { key: "b", d: "M12 8v4.2l3 1.8" }),
@@ -2052,6 +2057,113 @@ window.__ModuleLoader__.load({
 		 * 24-hour distribution and the busiest conversations. Bars are plain
 		 * divs — inline styles only, so the card has no charting dependency.
 		 */
+		/**
+		 * 账单：每个会话用了什么模型、多少 token、折合多少元。
+		 *
+		 * 三个数都是估算 —— token 由提示词与回复的字符数折算（插件不在模型请求
+		 * 链路上，拿不到真实 usage），元由你填的单价折算。这页不做计费、不做限额，
+		 * 只是让「这个会话大概在烧多少」有个看得见的地方，也让它自己看得见。
+		 */
+		function UsageSection({ ctx, t, onGoTo }) {
+			const [data, setData] = react.useState(null);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+
+			const load = async () => {
+				setBusy(true);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.usageLedger({}));
+					setError("");
+					setData(r);
+				} catch (e) {
+					setError(String(e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			react.useEffect(() => {
+				load();
+			}, []);
+
+			const tokenText = (value) => {
+				const n = Math.max(0, Math.round(Number(value) || 0));
+				return n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+			};
+			const yuanText = (value) => {
+				const n = Math.max(0, Number(value) || 0);
+				if (n === 0) return "—";
+				return n < 0.1 ? `${n.toFixed(3)} 元` : `${n.toFixed(2)} 元`;
+			};
+			const shortId = (id) => {
+				const text = String(id ?? "");
+				return text.length > 14 ? `${text.slice(0, 6)}…${text.slice(-6)}` : text;
+			};
+
+			const head = createElement("div", { style: panelTitleStyle },
+				t("Bill", "账单"),
+				createElement("span", { style: { flex: "1 1 auto" } }),
+				createElement("button", { onClick: () => load(), disabled: busy, style: buttonStyleFor(busy) }, t("Refresh", "刷新")));
+
+			if (error) {
+				return createElement("div", { style: panelStyle }, head,
+					createElement("div", { style: noticeStyle },
+						createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+						createElement("span", null, error)));
+			}
+
+			const totals = data?.totals ?? { turns: 0, tokens: 0, cost: 0, conversations: 0, todayTurns: 0, todayTokens: 0 };
+			const rows = Array.isArray(data?.rows) ? data.rows : [];
+			const prices = data?.prices ?? { priceInPer1k: 0, priceOutPer1k: 0 };
+			const priced = Number(prices.priceInPer1k) > 0 || Number(prices.priceOutPer1k) > 0;
+
+			const stat = (label, value, hint) => createElement("div", { style: { display: "flex", flexDirection: "column", gap: "2px", minWidth: "92px" } },
+				createElement("span", { style: { fontSize: "18px", fontWeight: "600", color: C.labelPrimary } }, value),
+				createElement("span", { style: { fontSize: "11px", color: C.labelTertiary } }, label),
+				hint ? createElement("span", { style: { fontSize: "10px", color: C.labelTertiary } }, hint) : null);
+
+			let rank = 0;
+			const rowNodes = rows.slice(0, 12).map((row) => {
+				rank += 1;
+				const models = Array.isArray(row.models) && row.models.length > 0 ? row.models.join("、") : t("default route", "默认路由");
+				return createElement("div", {
+					key: row.conversationId,
+					style: {
+						display: "flex", alignItems: "baseline", gap: "8px",
+						padding: "6px 0", borderTop: `1px solid ${C.border}`,
+						fontSize: "12px", color: C.labelPrimary,
+					},
+				},
+					createElement("span", { style: { color: C.labelTertiary, minWidth: "20px" } }, `#${rank}`),
+					createElement("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shortId(row.conversationId)),
+					createElement("span", { style: { color: C.labelSecondary } }, `${row.turns} ${t("turns", "回合")}`),
+					createElement("span", { style: { color: C.labelSecondary, minWidth: "54px", textAlign: "right" } }, tokenText(row.tokens)),
+					createElement("span", { style: { color: priced ? C.labelPrimary : C.labelTertiary, minWidth: "58px", textAlign: "right" } }, yuanText(row.cost)),
+					createElement("span", { style: { fontSize: "10px", color: C.labelTertiary, minWidth: "72px", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, models));
+			});
+
+			return createElement("div", { style: panelStyle }, head,
+				createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "18px", alignItems: "flex-start" } },
+					stat(t("Today", "今天"), `${totals.todayTurns} ${t("turns", "回合")}`, `${tokenText(totals.todayTokens)} token`),
+					stat(t("This account", "本账号累计"), `${totals.turns} ${t("turns", "回合")}`, `${tokenText(totals.tokens)} token`),
+					stat(t("Estimated spend", "估算花费"), priced ? `≈ ${yuanText(totals.cost)}` : "—", priced ? t("at your prices", "按你填的单价") : t("set a price to see yuan", "填了单价才算元"))),
+				rows.length === 0
+					? createElement("div", { style: { fontSize: "12px", color: C.labelSecondary, padding: "10px 0" } },
+						t("Nothing recorded yet — say something to this account and the numbers appear here.", "还没有记录：给这个账号说一句话，这里就有数字了。"))
+					: createElement("div", { style: { marginTop: "4px" } }, rowNodes),
+				createElement("div", { style: captionStyle },
+					createElement("div", null,
+						t("Tokens are estimated from characters (the plugin never sees the model usage), so they are lower than the bill.", "token 由字符数估算（插件看不到真实 usage），只会小于账单。")),
+					createElement("div", null,
+						t("The model column is the route we asked for, not necessarily the one the host picked.", "模型一列写的是我们请求的那条路由，不一定是宿主最终选用的。")),
+					data?.awareness === false
+						? createElement("div", null, t("The persona does not see its spend right now (the awareness line is off).", "人设当前看不到花费（消耗提示已关闭）。"))
+						: null,
+					createElement("div", { style: { display: "flex", gap: "8px", marginTop: "6px" } },
+						createElement("button", { onClick: () => onGoTo?.("options"), style: buttonStyleFor(false) }, t("Set the price", "去填单价")),
+						createElement("button", { onClick: () => onGoTo?.("stats"), style: buttonStyleFor(false) }, t("See the counts", "看统计")))));
+		}
+
 		function StatsSection({ ctx, t, onOpenConversation }) {
 			const [stats, setStats] = react.useState(null);
 			const [storage, setStorage] = react.useState(null);
@@ -3249,6 +3361,7 @@ window.__ModuleLoader__.load({
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t, focus: journalFocus, onClearFocus: () => setJournalFocus(null) }) },
 					{ id: "stats", label: t("Stats", "统计"), body: createElement(StatsSection, { ctx, t, onOpenConversation: openInJournal }) },
+					{ id: "usage", label: t("Bill", "账单"), body: createElement(UsageSection, { ctx, t, onGoTo: goToTab }) },
 					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
 					{ id: "persona", label: t("Persona", "个性化"), body: createElement(PersonaSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },

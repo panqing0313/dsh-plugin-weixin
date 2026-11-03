@@ -4068,3 +4068,19 @@ release run `41485882140` success）。
 **事故与教训**：我为这一项写代码时，发现文件里已经有一份同名导出，误判为重复而 `git checkout -- src/message/contacts.js` 把工作树里的实现删了（`git log -S contactStaleDays` 证明它从未提交）。随后按 `src/index.js` 等处的接线把 API 原样补回，并让测试钉住语义。**教训：回滚一个文件之前先 `git stash list` / `git diff` 确认那里面有没有别人（或自己上一轮）未提交的活。**
 
 **测试**：`test/contacts.test.js` 4 条（过时/未过时阈值、`touch` 不刷新 `profileUpdatedAt`、过时名片注入时带那行、`0` 关闭判断）。
+
+## 账单页签：每个会话用了谁、花了多少（2026-11-04，1.4.8 候选）
+
+**为什么**：用户要在设置卡里看见「每个会话用了什么模型、多少 token、折合多少元」，并且要让人设自己意识到在花钱。之前只有 `/usage`（今天一屏汇总）与统计页签（只数条数），按模型、按会话、按钱的账没有。
+
+**拿不到什么（决定了界面怎么写）**：插件不在模型请求链路上 —— `dsh-agent` 的事件类型里没有 `usage`，`dsh-llm` 的 usage 只在流式 chunk 里、不经过插件。所以真实 token 与缓存命中率都拿不到；能拿到的是「我们送进去的提示词」与「模型回来的文本」，于是 token 只能按字符数估算，元只能按使用者自填单价折算。**缓存命中率干脆不显示**：连估的依据都没有。
+
+**做成什么**：
+- `src/message/usage-ledger.js`：状态 `usage-ledger.json`（账号 → 会话 → 汇总 + 每模型/每路由/每日桶），`recordUsage` 折算并合并，`conversationRows` 按最近使用排序，`ledgerTotals` 加总，`costOf`/`formatYuan`/`formatTokens` 负责「元/千 token」与 `1.2k` 这类人读格式，`usageAwarenessLine` 给人设看的一行。保留 30 天日桶、最多 50 个会话（按最近使用淘汰），写入走 `atomicWriteJson`。
+- 记账入口只有一个：`AgentBridge` 新增 `onUsage`，在 `deliver()`（聊天）与 `summarize()`（所有后台任务：日报/核对/订阅/主动开口/名片/`/digest`/`/summary`）真正跑完时各报一次「提示词 + 回复」。为什么放在桥里：后台调用有六个调用点，逐个接线必漏；桥是唯一知道「这一回合真的跑完了」的地方。被后台预算闸门挡下的调用不会走到这里，账本与预算口径一致。
+- 模型名按「一条路由必须 provider + model 都填才生效」的既有规则拼成 `provider/model`，只填一半记「默认」——与 schema 说明保持一致，不虚报。
+- `src/index.js`：schema 增 `pricePer1kInputYuan`、`pricePer1kOutputYuan`（默认 0 = 不算钱）、`usageAwarenessEnabled`（默认开）；提示词在 blocks 末尾加那一行（配置关掉就完全不说），提示词构成记录相应多一段 `usage`。
+- 设置卡新增「账单」页签（`src/client.card.js` 的 `UsageSection`）：今天 / 本账号累计 / 估算花费三块数字，按会话列「回合 · token · 元 · 模型」，空态与口径说明写在卡片里，底部两个按钮直接跳「配置项」填单价或回「统计」。
+- 远程方法 `weixin.usageLedger`（`src/login-remote.js` + `src/client.js` 描述符表）。
+
+**测试**：`test/usage-ledger.test.js` 8 条（单回合落三处桶、每模型拆分与账号隔离、30 天日桶裁剪不改累计、50 个会话淘汰最旧、元与格式在单价缺省时说话的方式、行排序与加总、awareness 行只引用本会话、账本缺失即空账本）；`test/e2e.test.js` 1 条真实往返（假 iLink + 假 agent，断言 `usage-ledger.json` 落盘、回合数与 token 为正、模型写成 `deepseek/deepseek-chat`、路由为 `chat`）；`test/client-remote.test.js` 方法表与源码形状用例。

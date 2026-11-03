@@ -71,6 +71,7 @@ import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
 import { readJournalRange, renderChatMarkdown } from "./message/chat-export.js";
 import { computeStats, buildHealth } from "./message/stats.js";
+import { conversationRows, ledgerTotals } from "./message/usage-ledger.js";
 import { readPromptComposition } from "./message/prompt-composition.js";
 import { readBudget } from "./budget.js";
 
@@ -977,6 +978,39 @@ export class WeixinLoginController extends TypertRemoteService {
     }
 
     /**
+     * 每个会话用了什么模型、多少 token、折合多少元。
+     *
+     * 三个数字**都是估算**，卡片上也必须这么说：
+     *   - token 由提示词与回复的字符数折算（插件不在模型请求链路上，拿不到真实
+     *     usage），所以只会小于账单；
+     *   - 元由使用者自己填的单价折算，没填就只显示 token；
+     *   - 模型名是「我们请求的那条路由」。
+     */
+    async usageLedger(options) {
+        const opts = options ?? {};
+        const live = readSavedConfig();
+        const accountId =
+            typeof opts.accountId === "string" && opts.accountId !== ""
+                ? opts.accountId
+                : typeof live.accountId === "string" && live.accountId !== ""
+                  ? live.accountId
+                  : "";
+        const priceInPer1k = Number(live.pricePer1kInputYuan ?? 0);
+        const priceOutPer1k = Number(live.pricePer1kOutputYuan ?? 0);
+        const rows = conversationRows(stateDir(), accountId, {
+            priceInPer1k,
+            priceOutPer1k,
+        });
+        return {
+            accountId,
+            rows,
+            totals: ledgerTotals(rows),
+            prices: { priceInPer1k, priceOutPer1k },
+            awareness: live.usageAwarenessEnabled !== false,
+        };
+    }
+
+    /**
      * What a first-run user still has to do.
      *
      * The card could work this out itself from `status()` plus a few config
@@ -1203,4 +1237,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

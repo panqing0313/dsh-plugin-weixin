@@ -277,6 +277,66 @@ test('one Weixin round trip: allow → dedupe → agent → chunked reply', asyn
   }
 })
 
+test('a chat turn lands in the bill, tagged with the route we asked for', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-e2e-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 3001, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct1', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: '记一下这句话' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    // Both halves of the route are set, because a provider without a model does
+    // not actually take effect — and the bill must name what was really asked for.
+    const config = plugin.Config({
+      eventPollMs: 25,
+      sendIntervalMs: 1,
+      allowedSenders: [ALLOWED],
+      accountId: ACCOUNT_ID,
+      memoryEnabled: false,
+      chatProvider: 'deepseek',
+      chatModel: 'deepseek-chat',
+    })
+
+    const disposers = []
+    const ctx = {
+      logger: { info: () => {}, warn: () => {} },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + REPLY_WAIT_MS
+    while (sent.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    const file = path.join(stateRoot, 'usage-ledger.json')
+    assert.ok(fs.existsSync(file), 'the turn is recorded on disk, not only in memory')
+    const ledger = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const conversations = Object.values(ledger.accounts[ACCOUNT_ID].conversations)
+    assert.equal(conversations.length, 1, 'one conversation, one row')
+    const row = conversations[0]
+    assert.equal(row.turns, 1)
+    assert.ok(row.tokensIn > 0, 'the prompt we sent is counted')
+    assert.ok(row.tokensOut > 0, 'the reply is counted')
+    // The route we asked for, spelled the way it takes effect.
+    assert.deepEqual(Object.keys(row.models), ['deepseek/deepseek-chat'])
+    assert.deepEqual(Object.keys(row.routes), ['chat'])
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
 test('the sender enrolled on first contact is still allowed on their next message', async (t) => {
   if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
 
@@ -321,8 +381,15 @@ test('the sender enrolled on first contact is still allowed on their next messag
     server.close()
 
     assert.equal(refused(), false, `the enrolled sender must not be refused: ${warnings.join(' | ')}`)
+    // The prompt legitimately carries context blocks in front of the user's
+    // words (persona, memory, and the bill's own-spend line), so assert that
+    // both messages went through the agent, not that the prompt is bare.
     const answered = sent.map((entry) => entry.msg.item_list[0].text_item.text).sort()
-    assert.deepEqual(answered, ['pong: one', 'pong: two'], `both messages must be answered, got ${JSON.stringify(answered)}`)
+    assert.equal(answered.length, 2, `both messages must be answered, got ${JSON.stringify(answered)}`)
+    assert.match(answered[0], /^pong: /)
+    assert.match(answered[1], /^pong: /)
+    assert.ok(answered.some((text) => text.endsWith('one')), 'the first message reached the agent')
+    assert.ok(answered.some((text) => text.endsWith('two')), 'the second message reached the agent')
   } finally {
     fs.rmSync(stateRoot, { recursive: true, force: true })
     delete process.env.DSH_WEIXIN_STATE_DIR

@@ -65,10 +65,12 @@ export const COMPOSITION_LABELS = Object.freeze({
     life: ['生活状态', 'Life state'],
     contact: ['群成员名片', 'Member card'],
     memory: ['记忆', 'Memory'],
+    usage: ['消耗提示', 'Spend note'],
     recall: ['往事检索', 'Recall'],
     knowledge: ['知识库', 'Knowledge'],
     dryRun: ['预演约定', 'Dry run'],
     group: ['群里在聊什么', 'Group talk'],
+    usage: ['自己的消耗', 'Own spend'],
     source: ['来源说明', 'Source'],
     message: ['这条消息与附件', 'Message & attachments'],
 })
