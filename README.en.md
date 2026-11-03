@@ -176,7 +176,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.3.1`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.4.0`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
