@@ -1005,12 +1005,16 @@ window.__ModuleLoader__.load({
 			const [notice, setNotice] = react.useState("");
 
 			const [donateQr, setDonateQr] = react.useState(null);
+			const [donateQrAlipay, setDonateQrAlipay] = react.useState(null);
 			react.useEffect(() => {
-				// The QR is a bundled asset read by the host; if it is missing
-				// (custom install, stripped package) the section just hides.
+				// Both QRs are bundled assets read by the host; if one is missing
+				// (custom install, stripped package) that code just does not show.
 				callRemote(() => ctx.remote.weixin.donateQr())
 					.then((r) => setDonateQr(typeof r?.qrDataUrl === "string" ? r.qrDataUrl : null))
 					.catch(() => setDonateQr(null));
+				callRemote(() => ctx.remote.weixin.donateQrAlipay())
+					.then((r) => setDonateQrAlipay(typeof r?.qrDataUrl === "string" ? r.qrDataUrl : null))
+					.catch(() => setDonateQrAlipay(null));
 			}, []);
 
 			const checkUpdate = async () => {
@@ -1109,12 +1113,25 @@ window.__ModuleLoader__.load({
 						t("Scan a QR code to bind a personal WeChat as a bot, chat with multiple accounts, per-account allowlists, session lines, voice replies.",
 							"扫码把个人微信绑成机器人：多账号、按账号白名单、会话线、语音回复。")),
 				]),
-				typeof donateQr === "string"
+				typeof donateQr === "string" || typeof donateQrAlipay === "string"
 					? row(t("Support the author", "打赏作者"), [
-						createElement("img", { key: "qr", src: donateQr, alt: t("Donate QR", "微信赞赏码"), style: { width: 180, height: 245, display: "block", borderRadius: 8 } }),
+						createElement("div", { key: "qrs", style: { display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" } }, [
+							typeof donateQr === "string"
+								? createElement("div", { key: "wechat", style: { display: "flex", flexDirection: "column", gap: 6, alignItems: "center" } }, [
+									createElement("img", { key: "img", src: donateQr, alt: t("WeChat donate QR", "微信赞赏码"), style: { width: 150, height: 204, display: "block", borderRadius: 8 } }),
+									createElement("span", { key: "cap", style: { ...hintStyle, margin: 0 } }, t("WeChat", "微信")),
+								])
+								: null,
+							typeof donateQrAlipay === "string"
+								? createElement("div", { key: "alipay", style: { display: "flex", flexDirection: "column", gap: 6, alignItems: "center" } }, [
+									createElement("img", { key: "img", src: donateQrAlipay, alt: t("Alipay donate QR", "支付宝赞赏码"), style: { width: 150, height: 204, display: "block", borderRadius: 8 } }),
+									createElement("span", { key: "cap", style: { ...hintStyle, margin: 0 } }, t("Alipay", "支付宝")),
+								])
+								: null,
+						]),
 						createElement("p", { key: "h", style: hintStyle },
-							t("If this plugin saves you time, a small tip keeps the updates coming — scan with WeChat to buy the author a coffee.",
-								"如果这个插件帮到了你，请作者喝杯咖啡吧——用微信扫码打赏，鼓励作者持续更新、优化功能、推出更好的特性。")),
+							t("If this plugin saves you time, a small tip keeps the updates coming — WeChat or Alipay, either code works.",
+								"如果这个插件帮到了你，请作者喝杯咖啡吧——微信或支付宝扫码都行，鼓励作者持续更新、优化功能、推出更好的特性。")),
 					])
 					: null,
 				row(t("Data location", "数据位置"), createElement("p", { style: hintStyle },

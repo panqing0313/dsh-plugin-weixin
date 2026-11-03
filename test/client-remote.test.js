@@ -249,6 +249,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/contactSave',
         'weixin/contacts',
         'weixin/donateQr',
+        'weixin/donateQrAlipay',
         'weixin/journal',
         'weixin/journalExport',
         'weixin/label',
@@ -969,4 +970,23 @@ test('the getting-started tab renders the host checklist and can jump to another
   const host = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'login-remote.js'), 'utf8')
   assert.match(host, /async onboarding\(\)/)
   assert.match(host, /buildOnboardingChecklist\(\{/)
+})
+
+test('the About tab shows both tip codes, side by side, and hides whichever one is missing', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  // Two methods, each asked for its own data URL: one missing asset must not
+  // take the other code down with it.
+  assert.match(card, /ctx\.remote\.weixin\.donateQr\(\)/)
+  assert.match(card, /ctx\.remote\.weixin\.donateQrAlipay\(\)/)
+  const qrsAt = card.indexOf('"qrs"')
+  assert.ok(qrsAt > 0, 'the two codes share one flex row')
+  const row = card.slice(qrsAt, qrsAt + 1400)
+  assert.match(row, /flexWrap: "wrap"/)
+  assert.match(row, /t\("WeChat", "微信"\)/)
+  assert.match(row, /t\("Alipay", "支付宝"\)/)
+  // The host side reads each asset separately and stays silent when it is gone.
+  const host = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'login-remote.js'), 'utf8')
+  assert.match(host, /donateQrDataUrl\("donate-qr\.jpg"\)/)
+  assert.match(host, /donateQrDataUrl\("donate-qr-alipay\.jpg"\)/)
+  assert.match(host, /donateQrAlipay\(\) \{/)
 })

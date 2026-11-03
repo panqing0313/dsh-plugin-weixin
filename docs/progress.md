@@ -3750,3 +3750,18 @@ release run `41485882140` success）。
 - **测试**：`test/stickers.test.js` 从 14 条扩到 20 条（68 张全在且是真 PNG、id 与文案唯一、十一套
   角色包只在本模式生效、自定义目录合并 / 别名 / 模式隔离 / 非图片忽略 / 即放即生效 / CLI 三条命令）。
 - **诚实边界**：内置是矢量卡通（这里的生成器画不出照片级写实人物）；要真人照片用自定义目录。
+
+## 打赏二维码：支付宝那枚也上了，两边并排（2026-11-03）
+
+用户给了一张支付宝收款码的截图，要求「打赏那部分再增加一张图，平行对齐」。
+
+- 图片存 `assets/donate-qr-alipay.jpg`（`assets/` 本来就在 `package.json` 的 `files` 里，随包发布）；
+  用 `zbarimg` 解码校验过：`https://qr.alipay.com/2m610443ppmibfad7f9cobc`，
+  与微信那枚（`wxp://f2f0Pl9…`）一样是可扫的真码，而不是一张看不清的图。
+- README 两份的打赏小节从一个居中的 `<img width="280">` 改成两张 `<img width="240" align="middle">`
+  并排 + 一行 `<sub>` 说明左右分别是谁；正文句子也从「用微信扫码」改成「微信、支付宝扫码都行」。
+- 设置卡「关于」页签的打赏块同步：新增远程方法 `weixin/donateQrAlipay`（`src/login-remote.js`
+  的 `donateQrDataUrl(name)` 由单张缓存改成按文件名缓存的 Map，两张各自读、各自可能为 `null`），
+  卡片用一列 `flexWrap` 把两枚码并排渲染、各自带「微信 / 支付宝」小字；缺哪张就只少哪张，不影响另一张。
+- 测试：`test/client-remote.test.js` 的远程方法表加 `weixin/donateQrAlipay`，并新增一条源码形状用例
+  （两个 remote 调用、同一 flex 行、双语小字、host 侧按文件名取两张图）；25/25 通过，`check.mjs` 248 files。

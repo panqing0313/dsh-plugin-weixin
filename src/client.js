@@ -145,6 +145,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/donateQr:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/donateQrAlipay`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "donateQrAlipay",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/donateQrAlipay:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/remindCancel`,
 					service: "weixinLoginController",
 					namespace: "weixin",

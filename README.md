@@ -1276,8 +1276,13 @@ node bin/release.mjs --finish 0.9.11   # 补齐 tag / Release / 核验 / 装本�
 
 ## 打赏作者
 
-如果这个插件帮到了你，欢迎请作者喝杯咖啡 —— 用微信扫下面的码打赏，鼓励作者持续更新、优化功能、推出更好的特性。
+如果这个插件帮到了你，欢迎请作者喝杯咖啡 —— 微信、支付宝扫码都行，鼓励作者持续更新、优化功能、推出更好的特性。
 
-<p align="center"><img src="assets/donate-qr.jpg" alt="微信打赏二维码" width="280" /></p>
+<p align="center">
+  <img src="assets/donate-qr.jpg" alt="微信打赏二维码" width="240" align="middle" />
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/donate-qr-alipay.jpg" alt="支付宝打赏二维码" width="240" align="middle" />
+</p>
+<p align="center"><sub>左：微信 &nbsp;·&nbsp; 右：支付宝</sub></p>
 
 也可以提 Issue / PR：[github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)

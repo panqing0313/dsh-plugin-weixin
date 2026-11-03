@@ -1226,8 +1226,13 @@ Three things to note:
 
 ## Supporting the author
 
-If this plugin has been useful to you, you are welcome to buy the author a coffee — scan the code below with WeChat to tip, and encourage continued updates, polish and better features.
+If this plugin has been useful to you, you are welcome to buy the author a coffee — WeChat or Alipay, either code works. It encourages continued updates, polish and better features.
 
-<p align="center"><img src="assets/donate-qr.jpg" alt="WeChat tip QR code" width="280" /></p>
+<p align="center">
+  <img src="assets/donate-qr.jpg" alt="WeChat tip QR code" width="240" align="middle" />
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="assets/donate-qr-alipay.jpg" alt="Alipay tip QR code" width="240" align="middle" />
+</p>
+<p align="center"><sub>Left: WeChat &nbsp;·&nbsp; Right: Alipay</sub></p>
 
 Or open an Issue / PR: [github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)

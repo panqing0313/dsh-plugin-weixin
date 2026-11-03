@@ -48,21 +48,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The donate QR ships as a bundled asset (assets/donate-qr.jpg, whitelisted in
-// package.json "files"). Read it once, lazily, as a data URL - the settings
-// card cannot reach plugin files by path, so the image must ride the remote
-// result like the login QR does. A missing or unreadable file just means the
-// About tab hides its donate section; nothing else may break because of it.
-let donateQrDataUrlCache;
-function donateQrDataUrl() {
-    if (donateQrDataUrlCache !== undefined) return donateQrDataUrlCache;
+// The donate QRs ship as bundled assets (assets/donate-qr.jpg and
+// assets/donate-qr-alipay.jpg, both whitelisted through package.json "files").
+// Read one once, lazily, as a data URL - the settings card cannot reach plugin
+// files by path, so the image must ride the remote result like the login QR
+// does. A missing or unreadable file just means the About tab hides that one
+// code; nothing else may break because of it.
+const donateQrDataUrlCache = new Map();
+function donateQrDataUrl(name = "donate-qr.jpg") {
+    if (donateQrDataUrlCache.has(name)) return donateQrDataUrlCache.get(name);
+    let value;
     try {
-        const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets", "donate-qr.jpg");
-        donateQrDataUrlCache = `data:image/jpeg;base64,${fs.readFileSync(file).toString("base64")}`;
+        const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets", name);
+        value = `data:image/jpeg;base64,${fs.readFileSync(file).toString("base64")}`;
     } catch {
-        donateQrDataUrlCache = null;
+        value = null;
     }
-    return donateQrDataUrlCache;
+    donateQrDataUrlCache.set(name, value);
+    return value;
 }
 import { SessionLines, conversationSlug } from "./sessions.js";
 import { readJournal, DEFAULT_JOURNAL_LIMIT } from "./message/journal.js";
@@ -416,9 +419,14 @@ export class WeixinLoginController extends TypertRemoteService {
     }
 
     /** Cancel one pending reminder from the settings card. */
-    /** The donate QR as a data URL for the About tab; null when the asset is missing. */
+    /** The donate QRs as data URLs for the About tab; null when an asset is missing. */
     donateQr() {
-        return { qrDataUrl: donateQrDataUrl() };
+        return { qrDataUrl: donateQrDataUrl("donate-qr.jpg") };
+    }
+
+    /** The Alipay code, shown beside the WeChat one. */
+    donateQrAlipay() {
+        return { qrDataUrl: donateQrDataUrl("donate-qr-alipay.jpg") };
     }
 
     async remindCancel(id) {
@@ -1195,4 +1203,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
