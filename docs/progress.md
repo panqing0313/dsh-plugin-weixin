@@ -3817,3 +3817,30 @@ release run `41485882140` success）。
 - **已知不足**（记下来，用户报 id 就单张重画 `--only <id>`）：150px 缩略图下 `hug`/`gf_embrace`/`bs_hug`/`bf_carry`
   仍容易被读成「抱自己」；`neko` 猫耳与 `girlfriend` 蝴蝶结在极小尺寸可能混；`oneesan` 珍珠项链读着像粉衣领；
   共享 24 张（素体）是整套里最朴素的。
+
+## 发布 1.4.1（2026-11-03 晚）
+
+换角（大肥鱼）那一版发出去，过程里踩到一个**新问题**：publish 成功，但 CI 判红。
+
+- 流程仍是 CI 发布：改版本并提交 → `git tag -a v1.4.1` → `git push origin v1.4.1` →
+  `release.yml`（run `41568801077`）跑全量并 `npm publish --provenance` → 本机 `--finish 1.4.1`。
+- publish 这一步**是成功的**：日志里 `+ dsh-plugin-weixin@1.4.1`、`total files: 230`、
+  `Signed provenance statement`（sigstore `logIndex=3656736198`）都在。
+- 但紧随其后的「registry 必须能读到这个版本」那道检查只轮询 5 分钟就退出，打印
+  `::error::the registry never served 1.4.1 after 5 minutes`，整个 run 判 failure。
+  实际版本在 **7 分 30 秒**时才出现在注册表上（11:01:27 首次 200）。原因是这套表情图把 tarball
+  从 3.3MB 涨到 4.47MB（unpacked 7.5MB），npm 读侧的 processing 比过去久。
+- 两个教训：**发布这个动作成功了，不代表 CI 的那道「看得见」检查能立刻看到**；把窗口定得太短，
+  就会把一次成功的发布显示成失败（1.2.0 当初也栽在同一处，那时是 100 秒）。
+- 修法（提交 `fix(ci): give the registry fifteen minutes to serve a new version`）：窗口从
+  30×10 秒改成 **60×15 秒（15 分钟）**，错误信息里写明「版本不存在时重跑是安全的，先看 npm status」。
+  `bin/release.mjs --finish` 侧那道等待只 warn 不阻断，保持原样（60 秒，仅提示）。
+- 核验（全部手动确认）：`dist-tags.latest = 1.4.1`、
+  `dist.shasum 6b622bd768f46f8afa341c1ff0f2d58f59564c72`、
+  `dist.integrity sha512-MVAJXAmDMXACHxscCDZSoKQVLg2oe/wzyS16+dgtHedFoWvCNw2whbN5rsVXtLz+N5Za9iguaUWzW+d7MonoBA==`、
+  `gitHead 9f3ab7d7e88c0a99758b5e121ae0013004f40ce8`、`dist.unpackedSize 7489288`。
+- `node bin/release.mjs --finish 1.4.1` 四步全绿：registry 可见、tag `v1.4.1` 已在、pushed main+tag、
+  [GitHub release v1.4.1](https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.4.1) 已创建、
+  profile `^1.4.0 → ^1.4.1` 且锁文件刷新；`doctor` → `installed version 1.4.1`、`host 0.2.1-rc.5 (tested)`、
+  `published version up to date (1.4.1)`、`backups 3 copy(ies)`。
+- 待办：重启 DSH 后按 5 步复核（打赏块两枚码并排、表情图是那只大肥鱼、68 张），通过后再写进兼容表。
