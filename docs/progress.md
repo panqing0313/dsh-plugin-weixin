@@ -3844,3 +3844,33 @@ release run `41485882140` success）。
   profile `^1.4.0 → ^1.4.1` 且锁文件刷新；`doctor` → `installed version 1.4.1`、`host 0.2.1-rc.5 (tested)`、
   `published version up to date (1.4.1)`、`backups 3 copy(ies)`。
 - 待办：重启 DSH 后按 5 步复核（打赏块两枚码并排、表情图是那只大肥鱼、68 张），通过后再写进兼容表。
+
+## 表情包：从公开档案装一套（本地，2026-11-03）
+
+用户看完自己画的 68 张说「太丑了，我要这种」（附了一张动漫贴纸截图），并要求「去网上搜集资源」。
+于是去找那张图的出处，顺手把「借来的画」这条路做成了一条命令。
+
+- **出处找到了**：那张截图来自公开档案 `lmy414/ai-girl-stickers`（站点 [蓝色大肥鱼](https://xn--pssy23gqgbz2d718b.com/)，
+  文字材料 MIT）。先确认了三件事：仓库里没有机器可读的索引（站点 CMS 接口未登录 403）、
+  图片里没有 EXIF/XMP、tesseract 的中文 OCR 对贴纸上的美术字基本读不出来
+  （`chi_sim` 把「全RETV 过从凯寺Sis」这种读出来）——所以标签只能用眼睛认。
+- **怎么认的**：把档案「首批作品」209 张预览（`dist/data/blue-fish/previews/*.webp`，480px 上下）
+  全部取到本地，按 4×3 拼成 18 张**带编号的大总览图**（编号是我画上去的，避免认错格），
+  逐页读图记下「这一格是什么情绪/什么台词」。
+- **装了什么**：挑了 25 张，名字就是模型要写的那个词——`开心 / 微笑 / 生气 / 彻底怒了 / 困了 / 晚安 /
+  抱抱 / 害羞 / 眨眼 / 吃惊 / 无语 / 加油 / 蹦蹦 / 最强 / 比心 / 好女孩 / 别踩我 / 说我也没用 /
+  我先去吃饭啦 / 我是路边鱼 / 该电了 / 期待 / 世界上最残忍的生物 / 蹭饭 / 大肥鱼`，
+  外加 37 条同义词（`贴贴` → `害羞.png` 这种）。本机装进 `~/.dsh/weixin/stickers/all/`。
+- **权利边界**：图片是别人的画，所以**清单进仓库、图片不进**。`assets/sticker-packs/bluefish.json`
+  只写 `名字 + repo/path/sha + 权利说明`；`bin/stickers.mjs fetch <包>` 在你自己的机器上从公开仓库
+  现取（`api.github.com`，未登录 60 次/小时，有 `GITHUB_TOKEN` 自动带上），WebP 用 Pillow 转成 PNG。
+  这份便利是给个人自己用的，不二次分发；作者要求下架，删一条 json 即可。
+- **代码**：`bin/stickers.mjs` 新增 `fetch`（`--list` 看清单、`--limit` 只装前 N 张、
+  `--mode` 选模式、`--from <目录>` 离线装、`--force` 重装；「已存在」按**名字**判断，
+  免得同一张图因为有没有 Pillow 而 .png/.webp 各存一份）；README 中英表情节各加一段；
+  `docs/extras.md` 加「借来的画」一节。顺手修掉英文 README 里「36 built-in sticker images」这处
+  从 1.0.0 起就没更新的数字（实际 68 张，图注早就写的是 sixty-eight）。
+- **测试**：`test/sticker-packs.test.js` 5 条——清单结构（名字唯一、`source.sha` 是 40 位十六进制、
+  `source.path` 不跳出仓库、别名指向本清单里的名字、别名不等于本名）、清单目录里只允许 json
+  （图片不许进 git）、`fetch --list` 的输出、`--from` 离线装进临时数据目录并合并别名、未知/穿越式
+  包 id 被拒绝。全量见提交时的测试数字。

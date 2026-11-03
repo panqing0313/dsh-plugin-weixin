@@ -1,0 +1,298 @@
+{
+  "id": "bluefish",
+  "name": "蓝色大肥鱼档案馆（本地）",
+  "note": "图片来自公开档案 lmy414/ai-girl-stickers，权利归各原作者，不随本包发布；fetch 只在你自己的机器上下载。",
+  "homepage": "https://xn--pssy23gqgbz2d718b.com/",
+  "license": "图片权利归原作者，以档案详情页的来源与授权为准",
+  "items": [
+    {
+      "name": "开心",
+      "file": "开心.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/31637313df4bfa88f487d87383da95c8_0.webp",
+        "sha": "ac2d8f1c009f0bc5d7f5041ce14766a31a60a3a4",
+        "bytes": 18232
+      }
+    },
+    {
+      "name": "微笑",
+      "file": "微笑.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/0e8eef7f-d545-4d79-b4fa-01ee61885e40.webp",
+        "sha": "bef29b773edf226c53993c2997d178585082dbf8",
+        "bytes": 30200
+      }
+    },
+    {
+      "name": "生气",
+      "file": "生气.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/1d4cff23-a424-4edc-b2c8-725933eda826.webp",
+        "sha": "b36a126dad09b9478fc1a9105afdf5fbd0182ec9",
+        "bytes": 27330
+      }
+    },
+    {
+      "name": "彻底怒了",
+      "file": "彻底怒了.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/1e2013be1ba8f37e9d72305dc319ced0.webp",
+        "sha": "3e4006a1b532b2d851caac59ebc71a655c325b8b",
+        "bytes": 35876
+      }
+    },
+    {
+      "name": "困了",
+      "file": "困了.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/11c02087-7120-4de0-b72c-c498107e5361.webp",
+        "sha": "10d81c636251fbca9c9df0489595dbc9baed6d6a",
+        "bytes": 41510
+      }
+    },
+    {
+      "name": "晚安",
+      "file": "晚安.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/34dffd79-9169-4dfc-8569-9444d2299e75.webp",
+        "sha": "73c3aee426ff8a92ae1a68654675381f077933b0",
+        "bytes": 40796
+      }
+    },
+    {
+      "name": "抱抱",
+      "file": "抱抱.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/1436f5182e89a2d8cdff331b818761fa.webp",
+        "sha": "cd3b47272a168831903d5fb2b2b09396eae1649c",
+        "bytes": 7744
+      }
+    },
+    {
+      "name": "害羞",
+      "file": "害羞.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/2266d372e811287bf9a5c340d7c77eab.webp",
+        "sha": "bc31ceb83ef52e96daa0dcbde71a9ca83533dccd",
+        "bytes": 21496
+      }
+    },
+    {
+      "name": "眨眼",
+      "file": "眨眼.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/38427b32-f363-4bd9-919f-f4630f068205.webp",
+        "sha": "a9a5ece948bb253970ddb29d3e51b4b3a9a6cf56",
+        "bytes": 49596
+      }
+    },
+    {
+      "name": "吃惊",
+      "file": "吃惊.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/3b6868f9cdf8b398e5752da3e9b0a316.webp",
+        "sha": "cbb93eb9f2d8967e20d033d47e3d8709e83e07e7",
+        "bytes": 31842
+      }
+    },
+    {
+      "name": "无语",
+      "file": "无语.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/299e99da92313229a42d188bb08dacce7aa33445.webp",
+        "sha": "d61be6a863efae6884c8a1604098860c611dfe3e",
+        "bytes": 18520
+      }
+    },
+    {
+      "name": "加油",
+      "file": "加油.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/24f87b144488f11f62dfc0e51631644c.webp",
+        "sha": "edc4509a9ddfe56f6df79afb9b7cce9d7dd99182",
+        "bytes": 23058
+      }
+    },
+    {
+      "name": "蹦蹦",
+      "file": "蹦蹦.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/2bd3c0c5eea95ebf57afca66e843a653.webp",
+        "sha": "56515ed00c30128cc7f5c2dd4736c4e24e1aeb50",
+        "bytes": 21254
+      }
+    },
+    {
+      "name": "最强",
+      "file": "最强.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/0c493abc-becd-4471-ba1c-13248793fb4d.webp",
+        "sha": "25934905f4ff28b0bfa60b7d1a17a2ce428677c4",
+        "bytes": 66072
+      }
+    },
+    {
+      "name": "比心",
+      "file": "比心.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/0392c11e-36f8-4b4f-9a81-11e04ff41336.webp",
+        "sha": "0e41681dd74b7873a98f5b173dacd7a70c6926cd",
+        "bytes": 49404
+      }
+    },
+    {
+      "name": "好女孩",
+      "file": "好女孩.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/1d23a9e9-d7a7-4d5e-88a6-c228ee1488b4.webp",
+        "sha": "9ce7bd432ed5a988380bb7cc9a1601d92094d688",
+        "bytes": 22850
+      }
+    },
+    {
+      "name": "别踩我",
+      "file": "别踩我.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/10a3517b-fc1c-4a6a-8f87-2208a8320165.webp",
+        "sha": "27ba5608d6f8e76cc2b488c40ed08f49dbcb4bd8",
+        "bytes": 39366
+      }
+    },
+    {
+      "name": "说我也没用",
+      "file": "说我也没用.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/18a83e3f5cca6071d0d5ea68f5e1f540.webp",
+        "sha": "b7d5468818adb364ea3addc0a1ea6894a6026646",
+        "bytes": 47628
+      }
+    },
+    {
+      "name": "我先去吃饭啦",
+      "file": "我先去吃饭啦.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/2ae42106-e52f-488b-bdf0-a43c7b9f507d.webp",
+        "sha": "7b815cd59f1027698ddd140a7876f64b9361ab11",
+        "bytes": 59614
+      }
+    },
+    {
+      "name": "我是路边鱼",
+      "file": "我是路边鱼.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/2b994025-be80-4076-9b38-0f0f6edd68d9.webp",
+        "sha": "171ad78f00c4bc12d6ce7d5173c241f540e1ecc1",
+        "bytes": 24572
+      }
+    },
+    {
+      "name": "该电了",
+      "file": "该电了.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/251e25bc0f2ea3faffd707181bda7b36.webp",
+        "sha": "43bccd286b8de164c9c27375856840ccf3b7df50",
+        "bytes": 43530
+      }
+    },
+    {
+      "name": "期待",
+      "file": "期待.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/2debd765-ea55-41a9-a383-7d39826bee2d.webp",
+        "sha": "6722014e35ac8a3676cba7a41d253b94d7f38db2",
+        "bytes": 35712
+      }
+    },
+    {
+      "name": "世界上最残忍的生物",
+      "file": "世界上最残忍的生物.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/0fd03c70-a59d-4c10-8cba-9ff8b48e6c73.webp",
+        "sha": "1a26a41c7aab835af994c41f38a49a6452ec16af",
+        "bytes": 59962
+      }
+    },
+    {
+      "name": "蹭饭",
+      "file": "蹭饭.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/3520f317-f272-44b6-8710-dcfd446b1bfd.webp",
+        "sha": "9cbe10d8ea4f701fc17834e22f4ee6a13c7e6bad",
+        "bytes": 49020
+      }
+    },
+    {
+      "name": "大肥鱼",
+      "file": "大肥鱼.png",
+      "source": {
+        "repo": "lmy414/ai-girl-stickers",
+        "path": "dist/data/blue-fish/previews/08fd0ba72a47b36f62eac09ee8e6b7a4_0.webp",
+        "sha": "e6a97712da9e40b40227bedc2f17b217540665ad",
+        "bytes": 40734
+      }
+    }
+  ],
+  "aliases": {
+    "高兴": "开心",
+    "好耶": "开心",
+    "笑嘻嘻": "微笑",
+    "笑": "微笑",
+    "哈": "微笑",
+    "气": "生气",
+    "哼": "生气",
+    "不爽": "生气",
+    "怒了": "彻底怒了",
+    "困": "困了",
+    "想睡": "困了",
+    "睡了": "晚安",
+    "睡觉啦": "晚安",
+    "要抱抱": "抱抱",
+    "抱一下": "抱抱",
+    "脸红": "害羞",
+    "贴贴": "害羞",
+    "wink": "眨眼",
+    "惊讶": "吃惊",
+    "震惊": "吃惊",
+    "汗": "无语",
+    "服了": "无语",
+    "冲": "加油",
+    "努力": "加油",
+    "跳": "蹦蹦",
+    "牛": "最强",
+    "厉害": "最强",
+    "爱心": "比心",
+    "喜欢你": "比心",
+    "好耶！": "好女孩",
+    "踩我": "别踩我",
+    "嘴硬": "说我也没用",
+    "吃饭": "我先去吃饭啦",
+    "摸鱼": "我是路边鱼",
+    "等不及": "期待",
+    "吃瓜": "世界上最残忍的生物",
+    "看戏": "世界上最残忍的生物"
+  }
+}

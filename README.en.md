@@ -872,7 +872,7 @@ events and to-dos → numbered long-term memory list → this conversation's mem
 ### Stickers (stickerEnabled)
 
 The WeChat protocol has no sticker (meme pack) message type — `MessageItemType` only has text / image / voice / file / video —
-so tappable, animated native sticker packs cannot be sent. The plugin takes another route: **36 built-in sticker images, and the model picks one with a marker**.
+so tappable, animated native sticker packs cannot be sent. The plugin takes another route: **68 built-in sticker images, and the model picks one with a marker**.
 
 ![Sixty-eight built-in sticker images](docs/stickers.png)
 
@@ -894,6 +894,18 @@ so tappable, animated native sticker packs cannot be sent. The plugin takes anot
   `[表情:困了]` in the body, and before sending the plugin strips the marker and sends the matching PNG through the **image channel** (a native image bubble,
   exactly the same path as sending an image by hand). Unknown names or more than two markers are deleted with one warning line, and no
   `[表情:???]` is left in the body; the same one is sent only once. Full-width colons, `[表情: 开心 ]` and trailing bits like `晚安~` are all recognized.
+- **A curated set from a public archive (optional, local)**: if the built-in whale is not to your taste, one command installs 25 hand-picked images from the public
+  [Blue Big Fat Fish](https://xn--pssy23gqgbz2d718b.com/) archive into your own sticker folder:
+
+  ```bash
+  node bin/stickers.mjs fetch bluefish --list   # what the 25 are, where they come from, whose rights they are
+  node bin/stickers.mjs fetch bluefish          # install into <state dir>/stickers/all/
+  ```
+
+  The manifest `assets/sticker-packs/bluefish.json` holds only **names, provenance and shas**: the pictures ship neither in the repo nor in the npm package,
+  because those rights belong to their authors (the archive says so plainly — its MIT covers the text material, images follow each detail page's source and
+  licence). The script fetches them from the public repository on your machine, for your own use; it talks to `api.github.com` (60 requests an hour
+  unauthenticated, enough for one 25-image pack — set `GITHUB_TOKEN` for headroom), names them for the model, and writes `aliases.json` next to them.
 - With `stickerEnabled` off the marker is neither taught nor parsed, and replies are plain text.
 
 `test/stickers.test.js` checks that every image really exists and is a real PNG; the `stickers` cases in e2e assert that the marker is stripped,

@@ -939,6 +939,19 @@ npm run pack -- import 毒舌陪聊.json --account b1b2d0b10d66@im.bot
   ```
 
   放好即生效：下一条消息的提示词里就有它，不用重启。
+- **从公开档案装一套（可选，本地）**：如果内置的大肥鱼不合口味，一条命令就能把公开档案
+  「[蓝色大肥鱼](https://xn--pssy23gqgbz2d718b.com/)」里挑好的 25 张装进自己的目录：
+
+  ```bash
+  node bin/stickers.mjs fetch bluefish --list   # 先看是哪 25 张、出自哪里、权利怎么算
+  node bin/stickers.mjs fetch bluefish          # 装进 <数据目录>/stickers/all/
+  ```
+
+  清单在 `assets/sticker-packs/bluefish.json`，里面只有**名字 + 出处 + sha**：图片本身既不在仓库里，
+  也不在 npm 包里 —— 这些画的权利在各自的作者手里（档案页写得很清楚：它的 MIT 只覆盖文字材料，
+  图片以详情页的来源与授权为准），所以脚本是在你自己的机器上从公开仓库现取、取完归你用。
+  走 `api.github.com`，未登录每小时 60 次，装一整套 25 张够；想更宽裕就在环境里放个 `GITHUB_TOKEN`。
+  装好后名字就是 `[表情:开心]` 这种，同义词（`贴贴` → `害羞.png`）写进同目录的 `aliases.json`。
 - 关掉 `stickerEnabled` 后标记不教、不解析，回复就是纯文字。
 
 `test/stickers.test.js` 校验每张图确实存在且是真 PNG、角色包不串味、自定义目录的合并与生效；
