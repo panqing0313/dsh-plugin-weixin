@@ -3917,3 +3917,17 @@ release run `41485882140` success）。
   打开 `keepBuiltins` 是 53 张（25 + 女友模式 24 公共 + 4 角色），
   自定义的排在最前面。
 - 文档：README 中英的表情节各加一段、`docs/extras.md` 第 3 条下补两条、CHANGELOG 1.4.3。
+
+## 发布 1.4.3（2026-11-03）
+
+- 「自己的表情就是全部的表情」这条规则按 **tag → CI 发布（`NPM_TOKEN` + provenance）→ 本机 `--finish`** 的常规流程发出，
+  全程没敲一次性密码；发布提交 `f650c07 feat(stickers): your own pictures mean the built-ins step aside`。
+- 核验：`dist.shasum 692ca1564bf2183ada3b54f0673ef4442a99ddec`、
+  `dist.integrity sha512-vV690UEHk+7A4E25HrY8H3XJlbKjczSsU5/VvFlqmdTiQ1isIUOWi/Nvy67yNk+W3ZyAr/KR5jnpZ14Y0mEmbA==`、
+  `gitHead f650c0718c6bddb2ed192812a657c923cee5e249`、`dist.unpackedSize 7515415`、`dist-tags.latest = 1.4.3`。
+- CI release run `41581362224` success（`✓ the registry must now serve this version`）；`node bin/release.mjs --finish 1.4.3`
+  四步全绿：tag `v1.4.3` 已在、pushed main+tag、[GitHub release v1.4.3](https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.4.3)、
+  profile `^1.4.2 → ^1.4.3` 且锁文件刷新；`doctor` → `installed version 1.4.3`、`host 0.2.1-rc.5 (tested)`、
+  `published version up to date (1.4.3)`。
+- 全量 `npm test` **1070/1070、0 fail、0 skipped**、39.2s；`node bin/check.mjs` → `checked 249 files`。
+- 待办：重启 DSH 后按 5 步复核，并在聊天里发一条带 `[表情:…]` 的消息确认内置 68 张确实退场（本机默认 `stickerKeepBuiltins: false`）。
