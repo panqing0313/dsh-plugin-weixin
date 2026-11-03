@@ -3973,3 +3973,11 @@ release run `41485882140` success）。
 - 配置：`groupSummaryEnabled`（默认 `false`）、`groupSummaryEvery`（默认 12）；设置卡「群聊」组两个字段；`src/config-effect.js` 标 `live`；`COMPOSITION_LABELS` 加 `group: ['群里在聊什么', 'Group talk']`。
 - 测试：`test/group-summary.test.js` 5 条（提示词、块的新鲜/过期/空、批次累计与环形上限、保存后重置与重载、空结果不覆盖、超长截断）；`test/e2e.test.js` 新增 1 条（群里被叫到时提示词含摘要块；一天前的摘要不出现）。
 - 顺带修掉 `persona + memory` 那条老 flake 的两个来源：它原来断言**出站气泡**（要活过节奏、贴纸、outbox）并靠两条脚本批次按顺序被轮询取走。现在断言**假 agent 收到的提示词**，第二条消息在第一条到位后按需投递。
+
+## 日报带上昨天（2026-11-03，1.4.4 item 5）
+
+**为什么**：日报只讲今天，读起来像报表；早上那条没有昨天的话头。
+
+**做成什么**：`src/message/digest.js` 新增 `yesterdayRecap({ stateRoot, accountId, now, warn })` —— 用 `readJournalRange(days: 2)` 取回条目，按本地日切出**昨天**那一段，统计收到/发出/会话数，取最后三条入站原话（各截 40 字，空的就不写）；`recapLine(recap)` 把它压成一行；`composeDigest` 与 `src/message/reports.js` 的 `buildDigestPrompt` 都把这一行折进提示词。没有昨天的流水时返回空串，日报不提。
+
+**测试**：`test/digest.test.js` 3 条（有昨天时提示词带 lastLines 与计数；昨天没说话时提示词不出现回看字样；跨天采样时按本地日归属）。

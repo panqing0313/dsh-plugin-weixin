@@ -13,9 +13,50 @@
 
 import { readConvMemory, readGlobalMemory } from '../memory.js'
 import { readJournalRange } from './chat-export.js'
-import { habitDigestLine, habitsList } from './habits.js'
+import { dayKey, habitDigestLine, habitsList } from './habits.js'
 import { staleDigestLine, staleFacts } from './memory-stale.js'
 import { buildDigestPrompt } from './reports.js'
+
+/** 昨天最多引几句原话：日报是一句话的东西，不是会议纪要。 */
+export const RECAP_SNIPPETS = 3
+const RECAP_SNIPPET_CHARS = 40
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 昨天聊了什么。日报只讲今天，于是昨晚没说完的事在第二天被当成新话题；
+ * 这里把昨天收到的条数、聊得最多的会话、最后几句话取出来，让日报能顺一句。
+ *
+ * 只要条数与最后几句原话，不做总结 —— 总结交给模型，数字必须是流水里真有的。
+ *
+ * @param {{ stateRoot: string, accountId: string, now?: number, warn?: (line: string) => void }} input
+ * @returns {{ all: number, in: number, out: number, conversations: number, snippets: string[], day: string }}
+ */
+export function yesterdayRecap({ stateRoot, accountId, now = Date.now(), warn = () => {} }) {
+  const day = dayKey(now - DAY_MS)
+  const entries = readJournalRange(stateRoot, { accountId, days: 2, now })
+  const mine = entries.filter((entry) => dayKey(Number(entry.at ?? 0)) === day)
+  const recap = { all: mine.length, in: 0, out: 0, conversations: new Set(), snippets: [], day }
+  for (const entry of mine) {
+    if (entry.dir === 'in') recap.in += 1
+    else recap.out += 1
+    recap.conversations.add(entry.conversationId ?? '')
+  }
+  for (const entry of mine.filter((item) => item.dir === 'in').slice(-RECAP_SNIPPETS)) {
+    const text = String(entry.text ?? '').replace(/\s+/g, ' ').trim()
+    if (text !== '') recap.snippets.push(text.slice(0, RECAP_SNIPPET_CHARS))
+  }
+  recap.conversations = recap.conversations.size
+  if (mine.length === 0) warn(`no journal entries for ${day}; the digest will skip yesterday`)
+  return recap
+}
+
+/** 一行话；昨天没消息时返回空串（日报不该天天多一句「昨天没聊」）。 */
+export function recapLine(recap) {
+  if (recap === undefined || recap.all === 0) return ''
+  const parts = [`昨天收到 ${recap.in} 条、发出 ${recap.out} 条`]
+  if (recap.snippets.length > 0) parts.push(`最后说到「${recap.snippets.join('」「')}」`)
+  return parts.join('，')
+}
 
 /**
  * @param {{
@@ -27,7 +68,7 @@ import { buildDigestPrompt } from './reports.js'
  *   day: string,
  *   staleDays?: number,
  * }} input
- * @returns {{ prompt: string, total: { in: number, out: number, all: number }, conversations: Array<{ conversationId: string, all: number }> }}
+ * @returns {{ prompt: string, total: { in: number, out: number, all: number }, conversations: Array<{ conversationId: string, all: number }>, yesterday: { all: number, in: number, out: number, conversations: number, snippets: string[], day: string } }}
  */
 export function composeDigest({ stateRoot, accountId, conversationId, now = Date.now(), warn = () => {}, day, staleDays }) {
   const entries = readJournalRange(stateRoot, { accountId, conversationId, days: 1, now })
@@ -50,6 +91,9 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
   // ③ One line, and only when something actually went stale: a digest that ends
   // with a chore list every day is a digest nobody reads.
   const stale = staleDigestLine(staleFacts(global.facts ?? [], { now, staleDays }))
+  // ⑤ The morning after: one line about yesterday, so "接着昨天那句" is possible.
+  const yesterday = yesterdayRecap({ stateRoot, accountId, now, warn })
+  const recap = recapLine(yesterday)
   const prompt = buildDigestPrompt({
     day,
     total,
@@ -58,6 +102,7 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
     summary: conv.summary,
     ...(habits === '' ? {} : { habits }),
     ...(stale === '' ? {} : { stale }),
+    ...(recap === '' ? {} : { recap }),
   })
-  return { prompt, total, conversations }
+  return { prompt, total, conversations, yesterday }
 }
