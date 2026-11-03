@@ -3961,6 +3961,15 @@ release run `41485882140` success）。
 
 **做法**：`package.json` 的 `test` / `test:watch` 加 `--test-concurrency=4`。实测 1138 条 **55 秒**（10 路并行约 60 秒且偶发红），既更稳也不更慢 —— 这些测试大部分时间在等 I/O 与定时器，不是等 CPU。CI runner 核少，本来就没跑满，改后行为一致。
 
+## 发布 1.4.5（2026-11-04）
+
+- 三个提交：`570e048` ② 本地语音（`/say` + `voiceReplies`）、`355f307` ⑤ `doctor --fix`、`ca9a6bb` ⑥ 名片自动补全（并把全量测试并发改成 4）；`c931e23 docs: 1.4.5 — the three things 1.4.4 swapped out, plus a steadier suite` 是版本提交。
+- 发布走 CI 的 NPM_TOKEN + provenance：`git tag -a v1.4.5` 推上去触发 `release.yml` run `41673505233`，**success**；`node bin/release.mjs --finish 1.4.5` 四步全绿（registry 可见、tag 已在、GitHub release 创建、profile `^1.4.4 → ^1.4.5` 且锁文件刷新）。
+- 核验：`dist.shasum f7c08f29e048c6ab91b6693c042c94d581988bce`、`dist.integrity sha512-6O+gHLAUwV3KNq/1AYBFJvU9fjMxI1Y3lpHxh+F1CZfVLYkhSlqizmBn2xR/oZSYNK5Ik77YSnYZQvbj8nOe/w==`、`gitHead c931e23d53548f21c35fbd51fd64c7d29c895483`（= 本地 HEAD）、`dist.unpackedSize 7609622`、`dist-tags.latest = 1.4.5`、GitHub release 非 draft/prerelease。
+- `doctor`：`installed 1.4.5`、`host 0.2.1-rc.5 (tested)`、`published up to date (1.4.5)`、`13 checks, 0 problem(s)`。
+- 测试：改成并发 4 之后连续两次全量 **1138/1138、0 fail、0 skipped**（55 秒 / 次）。
+- 偏差说明（诚实记录）：1.4.4 承诺的六项里，原定的 ② 本地 TTS、⑤ `doctor --fix`、⑥ 原则上的「联系人档案刷新」三项当时被换成了群聊摘要、日报昨天、名片过期三件；本轮把 ②⑤⑥ 真正补上，并把「名片过期」升级成「会自动补全」。
+
 ## 发布 1.4.4（2026-11-03）
 
 这一版是六件事，每一件都回答「它到底在想什么」。按实现顺序：
