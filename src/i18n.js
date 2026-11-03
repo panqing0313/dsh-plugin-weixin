@@ -59,6 +59,7 @@ export const CATALOG = Object.freeze({
     'help.bad': { zh: '/bad 太长了 —— 记下「别这样」，下一条回复起生效', en: '/bad too long — remember what to stop doing, live on the next reply' },
     'help.good': { zh: '/good 就这样 —— 记下「保持这样」', en: '/good keep it up — remember what to keep doing' },
     'help.style': { zh: '/style 看记下的偏好，/style clear 清空', en: '/style lists the feedback rules; /style clear wipes them' },
+    'help.say': { zh: '/say 一句话 用本机语音合成发一条语音（macOS）', en: '/say text synthesises a voice with the local system voice (macOS)' },
     'help.quiet': { zh: '/quiet 2h 临时静默（不主动开口、不自动回复、提醒顺延），/quiet off 恢复', en: '/quiet 2h pauses proactive lines, auto-replies and timed sends; /quiet off resumes' },
     'help.snooze': { zh: '/snooze 10m 把最近一条提醒往后推；/remind skip 跳过重复提醒的下一次', en: '/snooze 10m pushes the next reminder back; /remind skip skips one occurrence of a repeating reminder' },
     'help.habit': { zh: '/habit 看习惯与连续天数，add 新增，done 打卡，rm 删除', en: '/habit shows streaks; add, done and rm manage them' },

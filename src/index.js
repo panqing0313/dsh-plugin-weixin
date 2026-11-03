@@ -166,6 +166,7 @@ import { describeLearnedHours, learnActiveHours } from './message/proactive-timi
 import { buildGroupSummaryBlock, createGroupSummaries, groupSummaryPrompt, readGroupSummary } from './message/group-summary.js'
 import { recordPromptComposition } from './message/prompt-composition.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
+import { cleanSpeechText, synthesizeVoiceFile, ttsPlatformSupported } from './media/tts.js'
 import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './message/style-feedback.js'
 // The vendored logger is the only channel guaranteed to land on disk at INFO:
 // ctx.logger can drop levels depending on the host's exporter config, and a
@@ -294,6 +295,13 @@ export const Config = z.object({
   stickerKeepBuiltins: z.boolean().default(false).description(
     '内置表情图：默认关闭——只要 <数据目录>/stickers/ 里放了你自己的图片，模型能用的就只有那些，内置那 68 张不再出现在可用名单里（也不会被解析）。打开则两边都在，你自己的名字优先。',
   ),
+  ttsVoice: z.string().default('').description(
+    '本地语音合成用的系统音色：macOS `say -v` 的名字（例如 Tingting、Meijia；`say -v ?` 可以列出来）。留空用系统默认音色。',
+  ),
+  voiceReplies: z.boolean().default(false).description(
+    '陪聊模式下，短回复额外再发一条语音（用本机 `say` 合成，不需要联网、不花钱）。默认关闭：一是只有 macOS 能合成，二是 iLink 目前会收下机器人的语音气泡却不投递（实测两次），所以发出去的是音频文件而不是语音条；打开前请先用 /say 试一条。',
+  ),
+  voiceReplyMaxChars: z.number().min(1).max(300).default(60).description('多长的回复才值得再念一遍（`voiceReplies` 打开时生效，超长的回复只发文字）。'),
   proactiveEnabled: z.boolean().default(false).description(
     '主动开口：角色模式下，对方一段时间没说话时由它先发一条消息（只在设定的时段内、每条之间有最短间隔、没被回应会退避、每天有上限）。默认关闭——一个工具不该自己找你；「默认助手」模式永远不主动。',
   ),
@@ -2194,6 +2202,35 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         send: (text) => sendChunked(transport, effectiveConfig.current, { conversationId, text }),
         warn,
       }),
+      say: async (arg) => {
+        const spoken = String(arg ?? '').trim()
+        if (spoken === '') return '用法：/say 要说的话 —— 用本机语音合成，发成音频（macOS 才带 `say`）。'
+        if (!ttsPlatformSupported()) return `这台机器（${process.platform}）没有系统语音合成，/say 只在 macOS 上能用。`
+        const liveConfig = effectiveConfig.current
+        const speech = cleanSpeechText(spoken, { max: 300 })
+        if (speech.text === '') return '这句话里没有可读的文字。'
+        const made = await synthesizeVoiceFile(speech.text, { voice: liveConfig.ttsVoice })
+        if (made.ok !== true) return `语音没合成出来：${made.reason}`
+        try {
+          await channelFor(transport).sendMedia({
+            filePath: made.file,
+            text: '',
+            conversationId,
+            cdnBaseUrl: transport.cdnBaseUrl,
+          })
+        } catch (error) {
+          return `语音发送失败：${String(error?.message ?? error)}`
+        } finally {
+          try {
+            fs.rmSync(made.file, { force: true })
+          } catch {
+            // 临时文件删不掉不是错误。
+          }
+        }
+        const how = liveConfig.voiceOutbound === true ? '语音条' : '音频文件'
+        fileLog.info(`sent /say voice (${speech.chars} chars) to ${conversationId}`)
+        return `用本机音色合成好了，作为${how}发了出去（${speech.chars} 字${speech.truncated ? '，只念了前一段' : ''}）。`
+      },
       ...createStyleCommands({
         stateRoot,
         accountId,
@@ -3007,6 +3044,37 @@ ${neutralizeTags(ocr.text)}
         } catch (error) {
           warn(`sticker ${stickerId} failed: ${String(error)}`)
           fileLog.info(`sticker ${stickerId} failed: ${String(error)}`)
+        }
+      }
+      // 语音回复：默认关闭。短回复才念；合成或发送失败都只记一行，文字已经发了。
+      const voiceCfg = effectiveConfig.current
+      if (companion && voiceCfg.voiceReplies === true && ttsPlatformSupported()) {
+        const speech = cleanSpeechText(replyText, { max: voiceCfg.voiceReplyMaxChars })
+        if (speech.text !== '') {
+          const made = await synthesizeVoiceFile(speech.text, { voice: voiceCfg.ttsVoice })
+          if (made.ok !== true) {
+            warn(`voice reply skipped: ${made.reason}`)
+          } else {
+            try {
+              await channelFor(transport).sendMedia({
+                filePath: made.file,
+                text: '',
+                conversationId: message.conversationId,
+                contextToken: message.contextToken,
+                cdnBaseUrl: transport.cdnBaseUrl,
+              })
+              fileLog.info(`sent voice reply to ${message.conversationId}`)
+            } catch (error) {
+              warn(`voice reply failed: ${String(error)}`)
+              fileLog.info(`voice reply failed: ${String(error)}`)
+            } finally {
+              try {
+                fs.rmSync(made.file, { force: true })
+              } catch {
+                // 临时文件删不掉不是错误。
+              }
+            }
+          }
         }
       }
       await sendProducedFiles({

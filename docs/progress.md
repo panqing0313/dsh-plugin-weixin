@@ -3928,6 +3928,17 @@ release run `41485882140` success）。
 
 **另一个坑**：`node --test test/e2e.test.js` 直接跑会红两条（`expected the vendor log dir to be redirected`、相对路径上传），因为它们依赖 `npm test` 里的 `--import ./test/isolate-host-state.mjs`（它负责把 `DSH_WEIXIN_LOG_DIR` 指到临时目录、隔离宿主状态）。**验证要用 `npm test`，不要在文件级直接跑完就下结论。**
 
+## ② 本地 TTS 语音条（1.4.5）
+
+**为什么这么做**：这一项原本是「本机语音合成，把一句话发成语音」。动手前先把边界查清楚，两条都很硬：
+
+- 出站语音通道**确实存在**（`src/transport/ilink.js:685` 的 `isVoiceCandidate` + `src/media/voice-encode.js` 的 SILK 编码器，WAV 不用 ffmpeg），但 `voiceOutbound` 一直默认关，原因是**服务端收下机器人语音却不投递**（2026-06、2026-10-26 各实测一次）。
+- 「克隆成某个人的声音」需要外部 TTS 服务（API key + 费用），本项目不默认走那条路。
+
+**做成什么**：新增 `src/media/tts.js` —— `cleanSpeechText`（去标记/Markdown/链接，截断到 120 字）、`synthesizeAiff`（`say -v <音色> -o out.aiff`）、`aiffToWav`（`afconvert -f WAVE -d LEI16@24000`）、`synthesizeVoiceFile`（两步串起来，中间 AIFF 无论成败都删）。命令是注入式的（`run`），所以测试能假装 `say` 成功而不用真发声。新增 `/say <一句话>`（persona 命令，不进模型、不花 token）、配置 `ttsVoice` / `voiceReplies` / `voiceReplyMaxChars`，以及回复后的可选「再念一遍」：陪聊模式下短于上限的回复额外发一条音频；合成或发送失败只记一行日志，文字已经发出去。
+
+**测试**：`test/tts.test.js` 10 条（朗读文本清洗与截断、只有 macOS 声称支持、带/不带音色参数、空文本不启动进程、`say` 失败与「成功但没产出文件」都变成 reason、afconvert 参数、成功路径删掉 AIFF、转换失败也删掉 AIFF）；`test/session-commands.test.js` 加一条 `/say` 空参数的用法回复且不开会话。
+
 ## 发布 1.4.4（2026-11-03）
 
 这一版是六件事，每一件都回答「它到底在想什么」。按实现顺序：

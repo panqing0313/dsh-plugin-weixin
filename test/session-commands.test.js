@@ -1121,6 +1121,15 @@ hostTest('with the knowledge base switched off, the same question carries no kno
   )
 })
 
+test('/say explains itself when handed nothing, and never needs the model', async () => {
+  await withPlugin(async ({ fake, sessionsOpened }) => {
+    fake.deliver('/say', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the usage reply')
+    assert.match(fake.outbound[0].text, /用法：\/say/)
+    assert.equal(sessionsOpened.length, 0, 'a local voice never needs the model')
+  })
+})
+
 test('/bad, /good and /style record feedback without opening a session', async () => {
   await withPlugin(async ({ fake, sessionsOpened }) => {
     fake.deliver('/bad 太长了', 'm1')
