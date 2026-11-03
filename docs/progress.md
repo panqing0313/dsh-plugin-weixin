@@ -4099,3 +4099,12 @@ release run `41485882140` success）。
 基准复测：阻塞写 4.05 → 2.05 次/条。
 
 **教训**：先写基准再动手。第一版基准因为「同会话只允许一个等待回合」测出 6000ms/条这种假数字，如果照着它去优化，会去改一条根本不在热路径上的代码。
+
+## 发布 1.4.8（2026-11-04）
+
+**这一版**：账单页签（`a4f79a8`）+ 两条热路径优化（`b527ff5`）+ 版本漂移修复（`4933cdd`）。
+
+- **走的是 CI 发布**：`git tag -a v1.4.8` → `release.yml` run `41694547224`（NPM_TOKEN + `id-token: write`）：secret 检查 / `npm ci` / fast checks / full suite / tag 与 package.json 一致 / package / `publish with provenance` 全绿；最后一步「registry 必须能读到这个版本」等了约 100 秒才通过（大包在 npm 侧的可见延迟，窗口已是 15 分钟）。
+- **本机收尾**：`node bin/release.mjs --finish 1.4.8` —— `dist-tag latest -> 1.4.8`、装进 desktop profile、profile 依赖 `^1.4.5 → ^1.4.8`、锁文件刷新。
+- **核验**：`dist.shasum 60d3bf339b0cad3b498e2adab79d07dbebce390e`、`dist.integrity sha512-2gwxYKI6vGMab4AEDL/LuNSE2gG8u8WAfdwwLopwWTR6qg9aAXB1NkUt82VdxySmXr0QMksHISIzlC+CF0HIvQ==`、`gitHead 4933cddb71588d685dcf03a9340f39c6a4e55864`（= 本地 HEAD）、tag `v1.4.8` 指向同一提交；`doctor` → `installed version 1.4.8`。
+- 本地没有 tarball 可逐字节比对（包由 CI 构建），所以这一版的一致性靠 `gitHead` + tag 指向同一提交来证明；这是走 CI 发布的代价，已记下。
