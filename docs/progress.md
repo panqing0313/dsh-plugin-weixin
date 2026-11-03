@@ -3721,3 +3721,32 @@ release run `41485882140` success）。
 再补：两份 README 的「安装」小节里都留着一份**停在 0.8.0 的版本变更清单**（而我们已经在 1.3.1），
 既与 `CHANGELOG.md` 重复又持续过期——一并删掉，版本历史只留在 CHANGELOG，README 只说「现在能做什么」。
 两份现在同形：22 个 `##` / 44 个 `###` / 3 个 `####`，各 81 条内部链接、断链 0。
+
+
+## 表情图片：68 张半身动作图 + 每模式预制 + 自己的表情包（2026-11-03）
+
+用户要求：表情图别只给一张大头脸，要「真实的人物动作图」，并且按模式预制。
+
+- **目录**（`src/message/stickers.js`）：内置从 24 张公共 + 3 套角色（12 张）扩到**公共 24 + 十一套
+  角色 44 = 68 张**。新增的八套：`girlfriend`（抱紧你 / 亲一下 / 撅嘴 / 等你）、`boyfriend`（摸你头 /
+  抱起你 / 护着你 / 递咖啡）、`friend`（挥手 / 递奶茶 / 击掌 / 听你说）、`jarvis`（扫描 / 递报告 /
+  投影 / 警报）、`oneesan`（摸头杀 / 微笑 / 举杯 / 轻拍）、`big-sister`（抱抱你 / 理头发 / 讲道理 /
+  牵着走）、`warm-guy`（披外套 / 撑伞 / 扶住你 / 带饭）、`tsundere`（哼 / 嘴硬脸红 / 扔给你 / 偷偷等）；
+  原有的 `neko` / `whale-girl` / `daughter` id 与别名保持不变。
+- **自定义包**：`<state>/stickers/all| <modeId>/*.png|jpg|gif|webp|bmp`，文件名即标记名，可选
+  `aliases.json` 加别名；`stickersForMode`、`resolveSticker`、`stickerHint`、`stickerPath`、
+  `takeStickers` 全部接受 `{ stateRoot }` 并把用户图并入同一个别名索引（用户图优先于内置同名），
+  目录列表按 mtime 缓存、丢文件即失效。`src/message/human-pace.js` 的
+  `buildHumanStyleBlock({ stickers, modeId, stateRoot })` 与 `src/index.js` 的两处
+  `takeStickers` / `stickerPath` 都接上了 `stateRoot`。
+- **美术**：`scripts/make-stickers.py` 重写为「角色表 + 动作表 + 通用绘制（身体 / 手臂 / 头 / 道具 /
+  表情 / 字幕）」的半身人物画法（1859 行，`CHARACTERS` 12 / `POSES` 68 / `A` 26 / `PROPS` 21，3× 超采样后
+  LANCZOS 缩小，`--only <id>` 只重画一张），重新生成全部 68 张 360×420 透明 PNG。脚本要 Pillow：
+  本机 `python3`(3.15) 没有、`/usr/local/bin/python3.14` 有，脚本在缺 Pillow 时会打印带解释器的提示再退出 1。
+- **总览图**：新增 `scripts/make-sticker-sheet.py`，通过 node 向 `src/message/stickers.js` 要同一份目录表，
+  再拼成 `docs/stickers.png`（68 格带 id 与文案）——README 里的图因此不会与插件实际提供的套装脱节。
+- **命令行**：`bin/stickers.mjs`（`list` / `add <图> [--mode all|<模式>] [--as <名字>]` / `check`），
+  `npm run stickers`；`add` 校验扩展名与魔数，非图片直接拒绝并提示用 `sips` 转格式。
+- **测试**：`test/stickers.test.js` 从 14 条扩到 20 条（68 张全在且是真 PNG、id 与文案唯一、十一套
+  角色包只在本模式生效、自定义目录合并 / 别名 / 模式隔离 / 非图片忽略 / 即放即生效 / CLI 三条命令）。
+- **诚实边界**：内置是矢量卡通（这里的生成器画不出照片级写实人物）；要真人照片用自定义目录。

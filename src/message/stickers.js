@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { stateDir } from '../state.js'
+
 /**
  * The built-in sticker packs.
  *
@@ -17,13 +19,23 @@ import { fileURLToPath } from 'node:url'
  * matching PNG and sends it as its own image message. Keeping the catalog in
  * one place means the prompt, the marker parser and the files cannot drift.
  *
- * Three packs: a base twelve, twelve "cute" additions available everywhere, and
- * one pack per character (a cat, a whale girl, a daughter) that only appears
- * while the conversation is in that mode — a cat sticker from a 御姐 would give
- * the whole thing away.
+ * Three layers:
+ *   - a shared pack everyone can use (base twelve + twelve "cute" ones);
+ *   - one pack per character mode (女友 / 男友 / 朋友 / 贾维斯 / 猫娘 …), which
+ *     only appears while the conversation is in that mode — a cat sticker from
+ *     a 御姐 would give the whole thing away;
+ *   - whatever the user drops into `<state>/stickers/` (see below).
  *
  * The art is drawn by `scripts/make-stickers.py` — see that file for why it is
  * generated instead of shipped as opaque blobs.
+ *
+ * Custom packs: `<state>/stickers/all/*.png` (available in every mode) and
+ * `<state>/stickers/<modeId>/*.png` (only in that mode). The file name is the
+ * name the model writes in the marker, so `老板.png` is `[表情:老板]`; an
+ * optional `aliases.json` in the same folder (`{"发红包": "老板.png"}`) adds
+ * more names for the same file. Real photos work fine here — a dropped-in JPEG
+ * is just a PNG away, and `node bin/stickers.mjs add` does the conversion-less
+ * copy for you.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -31,6 +43,14 @@ export const STICKER_DIR = path.join(HERE, '..', '..', 'assets', 'stickers')
 
 /** How many stickers one reply may carry: one is a beat, three is a flood. */
 export const MAX_STICKERS_PER_REPLY = 2
+
+/** Marker prefix for a user-supplied file; keeps them apart from catalog ids. */
+const USER_PREFIX = 'user:'
+
+/** The folder someone can drop their own pictures into. */
+export function userStickerRoot(root = stateDir()) {
+  return path.join(root, 'stickers')
+}
 
 /**
  * id (file name), caption (drawn into the image), and every name the model is
@@ -67,6 +87,9 @@ export const CUTE_STICKERS = [
   { id: 'heart_hands', caption: '比心', aliases: ['比心', '笔芯', '爱你哦'] },
 ]
 
+/** Free for every mode: the shared two packs. */
+export const SHARED_STICKERS = [...BASE_STICKERS, ...CUTE_STICKERS]
+
 /** Packs that only show up while the conversation is in the given mode. */
 export const MODE_STICKERS = [
   {
@@ -96,12 +119,82 @@ export const MODE_STICKERS = [
       { id: 'weepy', caption: '委屈哭', aliases: ['委屈哭', '想哭', '呜呜呜'] },
     ],
   },
+  {
+    modes: ['girlfriend'],
+    stickers: [
+      { id: 'gf_embrace', caption: '抱紧你', aliases: ['抱紧你', '抱住你', '抱紧'] },
+      { id: 'gf_kiss', caption: '亲一下', aliases: ['亲一下', '亲亲', '啵'] },
+      { id: 'gf_pout', caption: '撅嘴', aliases: ['撅嘴', '嘟嘴', '不高兴'] },
+      { id: 'gf_wait', caption: '等你', aliases: ['等你', '等你回来', '等你回家'] },
+    ],
+  },
+  {
+    modes: ['boyfriend'],
+    stickers: [
+      { id: 'bf_headpat', caption: '摸你头', aliases: ['摸你头', '摸摸你', '揉揉头'] },
+      { id: 'bf_carry', caption: '抱起你', aliases: ['抱起你', '公主抱', '抱起来'] },
+      { id: 'bf_protect', caption: '护着你', aliases: ['护着你', '保护你', '挡一下'] },
+      { id: 'bf_coffee', caption: '递咖啡', aliases: ['递咖啡', '咖啡', '给你咖啡'] },
+    ],
+  },
+  {
+    modes: ['friend'],
+    stickers: [
+      { id: 'fr_wave', caption: '挥手', aliases: ['挥手', '打招呼', '嗨'] },
+      { id: 'fr_tea', caption: '递奶茶', aliases: ['递奶茶', '奶茶', '请你喝'] },
+      { id: 'fr_highfive', caption: '击掌', aliases: ['击掌', '拍手', 'high five'] },
+      { id: 'fr_listen', caption: '听你说', aliases: ['听你说', '我在听', '说吧'] },
+    ],
+  },
+  {
+    modes: ['jarvis'],
+    stickers: [
+      { id: 'jv_scan', caption: '扫描', aliases: ['扫描', '扫描分析', '检测'] },
+      { id: 'jv_report', caption: '递报告', aliases: ['递报告', '报告', '汇报'] },
+      { id: 'jv_hologram', caption: '投影', aliases: ['投影', '全息', '投影屏'] },
+      { id: 'jv_alert', caption: '警报', aliases: ['警报', '警告', '提醒你'] },
+    ],
+  },
+  {
+    modes: ['oneesan'],
+    stickers: [
+      { id: 'os_headpat', caption: '摸头杀', aliases: ['摸头杀', '揉你头', '拍拍你'] },
+      { id: 'os_smile', caption: '微笑', aliases: ['微笑', '温柔笑', '浅笑'] },
+      { id: 'os_toast', caption: '举杯', aliases: ['举杯', '干杯', '碰杯'] },
+      { id: 'os_scold', caption: '轻拍', aliases: ['轻拍', '拍你一下', '敲你'] },
+    ],
+  },
+  {
+    modes: ['big-sister'],
+    stickers: [
+      { id: 'bs_hug', caption: '抱抱你', aliases: ['抱抱你', '抱住你', '抱一下'] },
+      { id: 'bs_hair', caption: '理头发', aliases: ['理头发', '顺头发', '别头发'] },
+      { id: 'bs_advice', caption: '讲道理', aliases: ['讲道理', '说说你', '开导'] },
+      { id: 'bs_lead', caption: '牵着走', aliases: ['牵着走', '拉着你', '跟我来'] },
+    ],
+  },
+  {
+    modes: ['warm-guy'],
+    stickers: [
+      { id: 'wg_coat', caption: '披外套', aliases: ['披外套', '外套', '给你披上'] },
+      { id: 'wg_umbrella', caption: '撑伞', aliases: ['撑伞', '打伞', '伞给你'] },
+      { id: 'wg_steady', caption: '扶住你', aliases: ['扶住你', '接住你', '稳住'] },
+      { id: 'wg_lunch', caption: '带饭', aliases: ['带饭', '给你带饭', '便当'] },
+    ],
+  },
+  {
+    modes: ['tsundere'],
+    stickers: [
+      { id: 'ts_hmph', caption: '哼', aliases: ['哼', '别过头', '才不是'] },
+      { id: 'ts_blush', caption: '嘴硬脸红', aliases: ['嘴硬脸红', '脸红嘴硬', '才没有'] },
+      { id: 'ts_gift', caption: '扔给你', aliases: ['扔给你', '丢给你', '拿去'] },
+      { id: 'ts_wait', caption: '偷偷等', aliases: ['偷偷等', '偷偷等你', '才没等'] },
+    ],
+  },
 ]
 
-/** Every sticker on disk, whatever pack it belongs to. */
-export const STICKERS = [...BASE_STICKERS, ...CUTE_STICKERS, ...MODE_STICKERS.flatMap((pack) => pack.stickers)]
-
-const EVERYWHERE = [...BASE_STICKERS, ...CUTE_STICKERS]
+/** Every built-in sticker on disk, whatever pack it belongs to. */
+export const STICKERS = [...SHARED_STICKERS, ...MODE_STICKERS.flatMap((pack) => pack.stickers)]
 
 const aliasIndex = new Map()
 function aliasesFor(stickers) {
@@ -117,19 +210,156 @@ function aliasesFor(stickers) {
   return index
 }
 
-/**
- * The stickers a conversation in this mode may send: the shared twelve plus the
- * character's own pack, when the mode has one.
- *
- * @param {string} [modeId]
- */
-export function stickersForMode(modeId) {
-  const extra = MODE_STICKERS.filter((pack) => pack.modes.includes(modeId)).flatMap((pack) => pack.stickers)
-  return extra.length === 0 ? EVERYWHERE : [...EVERYWHERE, ...extra]
+/* ------------------------------------------------------------------ user packs */
+
+/** Folder → its `aliases.json` (alias → file name in that folder). */
+function readAliasFile(dir, warn) {
+  const map = new Map()
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'aliases.json'), 'utf8'))
+    if (raw !== null && typeof raw === 'object' && Array.isArray(raw) === false) {
+      for (const [alias, file] of Object.entries(raw)) {
+        if (typeof file === 'string' && file !== '') map.set(alias, file)
+      }
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && warn !== undefined) {
+      warn(`could not read ${path.join(dir, 'aliases.json')}: ${String(error?.message ?? error)}`)
+    }
+  }
+  return map
 }
 
-/** Absolute path of one sticker image. */
-export function stickerPath(id) {
+/** Extensions the iLink image bubble accepts (`mediaKind` calls these image). */
+export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
+
+function sniff(head) {
+  if (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return true
+  if (head.length >= 6 && head.subarray(0, 4).toString('latin1') === 'GIF8') return true
+  if (head.length >= 12 && head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP') return true
+  if (head.length >= 2 && head[0] === 0x42 && head[1] === 0x4d) return true
+  return false
+}
+
+/** True for files whose extension and first bytes say "this is an image". */
+export function looksLikeImage(file) {
+  try {
+    if (IMAGE_EXTENSIONS.includes(path.extname(file).toLowerCase()) === false) return false
+    const head = Buffer.alloc(12)
+    const fd = fs.openSync(file, 'r')
+    try {
+      fs.readSync(fd, head, 0, 12, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    return sniff(head)
+  } catch {
+    return false
+  }
+}
+
+function entriesInFolder(root, folder, mode, warn) {
+  const dir = path.join(root, folder)
+  let files
+  try {
+    files = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const aliasFile = readAliasFile(dir, warn)
+  const byFile = new Map()
+  for (const [alias, file] of aliasFile) {
+    const list = byFile.get(file) ?? []
+    list.push(alias)
+    byFile.set(file, list)
+  }
+  const entries = []
+  for (const file of files.sort()) {
+    if (looksLikeImage(path.join(dir, file)) === false) continue
+    const stem = path.basename(file, path.extname(file))
+    if (file.includes(':') || file.includes('/') || stem === '') continue
+    entries.push({
+      id: `${USER_PREFIX}${mode}:${file}`,
+      caption: stem,
+      aliases: [stem, ...(byFile.get(file) ?? [])],
+      file: path.join(dir, file),
+      mode,
+      user: true,
+    })
+  }
+  return entries
+}
+
+const userCache = new Map()
+
+/**
+ * The user's own folders, read from disk with a stat-based cache (the directories
+ * change when someone drops a file in, not per message).
+ */
+function userPacks(root = stateDir(), { warn } = {}) {
+  const folder = userStickerRoot(root)
+  const names = ['all', ...new Set(MODE_STICKERS.flatMap((pack) => pack.modes))]
+  let stamp = ''
+  for (const name of names) {
+    try {
+      const stat = fs.statSync(path.join(folder, name))
+      stamp += `${name}:${stat.mtimeMs}:${stat.size}|`
+    } catch {
+      stamp += `${name}:-|`
+    }
+  }
+  const cached = userCache.get(folder)
+  if (cached !== undefined && cached.stamp === stamp) return cached.byMode
+
+  const byMode = new Map()
+  for (const name of names) {
+    byMode.set(name, entriesInFolder(folder, name, name, warn))
+  }
+  userCache.set(folder, { stamp, byMode })
+  return byMode
+}
+
+/** Forget the cached listing (used by tests and by the `stickers` CLI). */
+export function clearUserStickerCache() {
+  userCache.clear()
+}
+
+/** Every sticker the user dropped in, as one line each (the CLI and `/diag`). */
+export function listUserStickerFiles(root = stateDir()) {
+  const lines = []
+  for (const [mode, entries] of userPacks(root, {})) {
+    for (const entry of entries) {
+      lines.push(`[表情:${entry.caption}]  ${mode === 'all' ? '全部模式' : mode}  ${entry.file}`)
+    }
+  }
+  return lines
+}
+
+/**
+ * The stickers a conversation in this mode may send: the shared twelve plus the
+ * character's own pack, plus anything the user dropped in `<state>/stickers/`.
+ *
+ * @param {string} [modeId]
+ * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
+ */
+export function stickersForMode(modeId, { stateRoot, warn } = {}) {
+  const extra = MODE_STICKERS.filter((pack) => pack.modes.includes(modeId)).flatMap((pack) => pack.stickers)
+  const mine = extra.length === 0 ? SHARED_STICKERS : [...SHARED_STICKERS, ...extra]
+  const packs = userPacks(stateRoot, { warn })
+  const custom = [...(packs.get('all') ?? [])]
+  if (modeId !== undefined && modeId !== '') custom.push(...(packs.get(modeId) ?? []))
+  return [...mine, ...custom]
+}
+
+/** Absolute path of one sticker image (built-in id or `user:<mode>:<file>` id). */
+export function stickerPath(id, root = stateDir()) {
+  if (String(id).startsWith(USER_PREFIX)) {
+    const rest = String(id).slice(USER_PREFIX.length)
+    const split = rest.indexOf(':')
+    if (split <= 0) return path.join(userStickerRoot(root), 'missing')
+    return path.join(userStickerRoot(root), rest.slice(0, split), rest.slice(split + 1))
+  }
   return path.join(STICKER_DIR, `${id}.png`)
 }
 
@@ -142,11 +372,12 @@ export function stickerPath(id) {
  *
  * @param {string} name
  * @param {string} [modeId]
+ * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
  */
-export function resolveSticker(name, modeId) {
+export function resolveSticker(name, modeId, { stateRoot, warn } = {}) {
   const key = String(name ?? '').trim()
   if (key === '') return null
-  const index = aliasesFor(stickersForMode(modeId))
+  const index = aliasesFor(stickersForMode(modeId, { stateRoot, warn }))
   const direct = index.get(key)
   if (direct !== undefined) return direct
   // Tolerate a trailing 啊/呀/啦 and surrounding punctuation: the model is
@@ -166,15 +397,15 @@ const MARKER_RE = /\[表情[:：]\s*([^\]\n]{1,16}?)\s*\]/g
  * like a bug) and reported in `dropped` so the caller can log it.
  *
  * @param {string} text
- * @param {{ max?: number, modeId?: string }} [options]
+ * @param {{ max?: number, modeId?: string, stateRoot?: string, warn?: (line: string) => void }} [options]
  * @returns {{ text: string, stickers: string[], dropped: string[] }}
  */
-export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId } = {}) {
+export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId, stateRoot, warn } = {}) {
   const source = typeof text === 'string' ? text : ''
   const stickers = []
   const dropped = []
   const stripped = source.replace(MARKER_RE, (_match, rawName) => {
-    const id = resolveSticker(rawName, modeId)
+    const id = resolveSticker(rawName, modeId, { stateRoot, warn })
     if (id === null) {
       dropped.push(String(rawName))
       return ''
@@ -197,20 +428,22 @@ export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId } = {}
 
 /**
  * The prompt line that teaches the model the markers. Built from the catalog so
- * a new sticker needs no prompt edit.
+ * a new sticker needs no prompt edit, and from the user's folders so a dropped
+ * file is usable in the same reply that learns about it.
  *
  * @param {string} [modeId]
+ * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
  */
-export function stickerHint(modeId) {
-  const names = stickersForMode(modeId).map((sticker) => sticker.caption).join('、')
-  return `- 想发个表情的时候，单独写一行 [表情:名字]，插件会替你发一张表情图；可用：${names}；一次最多一张，别每句都配`
+export function stickerHint(modeId, { stateRoot, warn } = {}) {
+  const names = stickersForMode(modeId, { stateRoot, warn }).map((sticker) => sticker.caption)
+  return `- 想发个表情的时候，单独写一行 [表情:名字]，插件会替你发一张表情图；可用：${[...new Set(names)].join('、')}；一次最多一张，别每句都配`
 }
 
-/** True when every catalog entry has a readable PNG on disk. */
-export function stickerFilesReady() {
+/** True when every built-in catalog entry has a readable PNG on disk. */
+export function stickerFilesReady(root = stateDir()) {
   return STICKERS.every((sticker) => {
     try {
-      return fs.statSync(stickerPath(sticker.id)).isFile()
+      return fs.statSync(stickerPath(sticker.id, root)).isFile()
     } catch {
       return false
     }

@@ -988,7 +988,7 @@ export function apply(ctx, config) {
             ? readOrInferLifeState(stateRoot, candidate.accountId, { now, bond: convMemory.bond, warn })
             : null
           const personaBlock = buildPersonaBlock(candidate.mode)
-          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id })
+          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id, stateRoot })
           const lifeBlockText = life === null ? '' : lifeBlock(life)
           const globalMemory = readGlobalMemory(stateRoot, candidate.accountId, { warn })
           const memoryBlock = live.memoryEnabled === true
@@ -1031,7 +1031,7 @@ export function apply(ctx, config) {
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') return ''
           const plan = live.stickerEnabled !== false
-            ? takeStickers(text, { modeId: candidate.mode?.id })
+            ? takeStickers(text, { modeId: candidate.mode?.id, stateRoot, warn })
             : { text, stickers: [] }
           if (live.typingIndicator === true) {
             await transport.setTyping(true, candidate.conversationId).catch(() => {})
@@ -1041,7 +1041,7 @@ export function apply(ctx, config) {
             await sendChunked(transport, config, { conversationId: candidate.conversationId, text: plan.text })
             for (const stickerId of plan.stickers.slice(0, MAX_STICKERS_PER_REPLY)) {
               await channelFor(transport).sendMedia({
-                filePath: stickerPath(stickerId),
+                filePath: stickerPath(stickerId, stateRoot),
                 conversationId: candidate.conversationId,
                 cdnBaseUrl: transport.cdnBaseUrl,
               }).catch((error) => warn(`proactive sticker ${stickerId} failed: ${String(error)}`))
@@ -2631,7 +2631,7 @@ ${neutralizeTags(ocr.text)}
     // badly.
     const companion = isCompanionMode(activeMode)
     const styleBlock = companion
-      ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id })
+      ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id, stateRoot })
       : ''
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
@@ -2866,7 +2866,7 @@ ${neutralizeTags(ocr.text)}
       // image bubble instead). Markers are stripped before anything counts
       // characters, or the bracket would show up in the bubble itself.
       const stickerPlan = companion && effectiveConfig.current.stickerEnabled !== false
-        ? takeStickers(outbound.text, { modeId: activeMode?.id })
+        ? takeStickers(outbound.text, { modeId: activeMode?.id, stateRoot, warn })
         : { text: outbound.text, stickers: [], dropped: [] }
       if (stickerPlan.dropped.length > 0) {
         warn(`dropped sticker marker(s): ${stickerPlan.dropped.join(', ')}`)
@@ -2898,7 +2898,7 @@ ${neutralizeTags(ocr.text)}
       for (const stickerId of stickerPlan.stickers) {
         try {
           await channelFor(transport).sendMedia({
-            filePath: stickerPath(stickerId),
+            filePath: stickerPath(stickerId, stateRoot),
             text: '',
             conversationId: message.conversationId,
             contextToken: message.contextToken,

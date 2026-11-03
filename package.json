@@ -38,7 +38,8 @@
     "i18n": "node bin/i18n-report.mjs",
     "metrics": "node bin/metrics.mjs",
     "soak": "node bin/soak.mjs",
-    "pack": "node bin/pack.mjs"
+    "pack": "node bin/pack.mjs",
+    "stickers": "node bin/stickers.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
