@@ -3772,3 +3772,23 @@ release run `41485882140` success）。
   撞上 deadline（单跑只要 614ms）。它断言的是**提示词内容**，却被机器的忙碌程度决定成败。
 - 改法：deadline 从 60 秒放到 **150 秒**，并把注释写清楚这是一道安全网而不是性能断言；
   失败信息里本来就打印 `waited`，真出现慢下来仍能看见。全量连跑两次 **1064/1064、39s** 均绿。
+
+## 发布 1.4.0（2026-11-03）
+
+**这次走的是 CI 发布，不再是本机伪 TTY 换一次性密码。** 流程：改版本并提交 push → `git tag -a v1.4.0`
+→ `git push origin v1.4.0` → `release.yml`（`NPM_TOKEN` + `id-token: write`）跑全量测试并
+`npm publish --provenance` → 本机 `node bin/release.mjs --finish 1.4.0` 收尾。整个发布过程我没有敲过 OTP。
+
+- release workflow run **`41565629179`**：secret 检查 ✅、`npm ci`/fast checks/full suite ✅、tag 版本核对 ✅、
+  `publish: success`（带 provenance）。
+- 核验：`dist-tags.latest = 1.4.0`、`dist.shasum 4a5517ccdeec3ef9d9a3a54643f7b1069c70c3e3`、
+  `dist.integrity sha512-TgA0ntAxs3RVyHAqNMeG9uyodEWV3pXogytklAO+A6oYuZr2eXuYmfJFZ3TkCXPPRxQNfRCFdoMO7TzyVtSXrw==`、
+  `gitHead 988a99ee0e69d51a69896c2f1c9fbd7c296d247d`（= 发布提交 `988a99e`）、
+  注册表带 SLSA v1 证明（`dist.attestations.provenance.predicateType = https://slsa.dev/provenance/v1`）。
+- `--finish` 四步全绿：registry 已可见、tag `v1.4.0` 已在（CI 之前就打好了）、pushed main+tag、
+  [GitHub release v1.4.0](https://github.com/panqing0313/dsh-plugin-weixin/releases/tag/v1.4.0) 非 draft/prerelease、
+  profile `^1.3.1 → ^1.4.0` 且锁文件已刷新。
+- `doctor` → `installed version 1.4.0`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.4.0)`。
+- 版本内容：68 张半身动作表情图 + 十一个模式各 4 张、自定义表情包目录（文件名即标记名、`aliases.json`、五种格式、
+  即放即生效）、`bin/stickers.mjs add|list|check`、README 与设置卡「关于」的双打赏码并排、以及那条 e2e 等待放宽。
+- 待办：重启 DSH 后按 5 步复核（打赏块应看到两枚码并排、表情图应是 68 张那批），通过后再把它写进兼容表。
