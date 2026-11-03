@@ -31,6 +31,7 @@ function clock(ms) {
  * @param {number} [input.subscriptions]
  * @param {{ count?: number, lastAt?: number, misses?: number }} [input.proactive]
  * @param {string} [input.proactiveWindow] one line from describeLearnedHours()
+ * @param {{ total?: number, stale?: number, staleDays?: number }} [input.contacts] group member cards
  * @param {number} [input.journalToday]
  * @param {number} [input.conversations]
  * @param {number} [input.allowlist]
@@ -56,6 +57,16 @@ export function buildDiagReport(input) {
   )
 
   lines.push(`待发：提醒 ${input.reminders ?? 0} 条 · 订阅 ${input.subscriptions ?? 0} 条`)
+
+  const contacts = input.contacts
+  if (contacts !== undefined && (contacts.total ?? 0) > 0) {
+    const staleDays = contacts.staleDays ?? 0
+    lines.push(
+      staleDays > 0
+        ? `群成员名片：${contacts.total ?? 0} 张（其中 ${contacts.stale ?? 0} 张超过 ${staleDays} 天没更新，注入时会注明可能已过时）`
+        : `群成员名片：${contacts.total ?? 0} 张`,
+    )
+  }
 
   const proactive = input.proactive
   if (proactive === undefined || (proactive.count ?? 0) === 0 && proactive.lastAt === undefined) {

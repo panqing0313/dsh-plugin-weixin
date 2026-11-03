@@ -1315,3 +1315,4 @@ node bin/release.mjs --finish 0.9.11   # 补齐 tag / Release / 核验 / 装本�
 也可以提 Issue / PR：[github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)
 
 群里被叫到时，模型默认只看见被点名的那一条消息：前面二十条说过什么，它在自己的窗口之外。把 `groupSummaryEnabled` 打开（默认关闭，因为它每次都要花一次后台调用）之后，插件会悄悄攒群消息，每 `groupSummaryEvery` 条（默认 12）做一次摘要，下次被叫到时把那几行折进提示词 —— 摘要超过 3 小时就不再注入，三天前聊的事不该冒充今天的上下文。摘要只从群消息本身来，不发散、不推测；`/diag` 与统计页签里的「群里在聊什么」一段能看出它占了多少提示词。
+| `contactStaleDays` | `45` | 群成员名片超过这么多天没更新内容，注入时会注明「可能已过时」；0 关闭 |

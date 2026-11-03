@@ -3981,3 +3981,13 @@ release run `41485882140` success）。
 **做成什么**：`src/message/digest.js` 新增 `yesterdayRecap({ stateRoot, accountId, now, warn })` —— 用 `readJournalRange(days: 2)` 取回条目，按本地日切出**昨天**那一段，统计收到/发出/会话数，取最后三条入站原话（各截 40 字，空的就不写）；`recapLine(recap)` 把它压成一行；`composeDigest` 与 `src/message/reports.js` 的 `buildDigestPrompt` 都把这一行折进提示词。没有昨天的流水时返回空串，日报不提。
 
 **测试**：`test/digest.test.js` 3 条（有昨天时提示词带 lastLines 与计数；昨天没说话时提示词不出现回看字样；跨天采样时按本地日归属）。
+
+## 群成员名片过期注明（2026-11-03，1.4.4 item 6）
+
+**为什么**：名片是快照，却从来没记「什么时候写的」；三个月前的「最近在忙装修」会被当成现状注入。
+
+**做成什么**：`src/message/contacts.js` 新增 `CONTACT_STALE_DAYS = 45`、`contactAge(contact, { now })`（按 `profileUpdatedAt ?? lastSeenAt` 算天数，两者都没有时 `days` 是 undefined）、`isContactStale(...)`、`countStaleContacts(...)`；`saveContact` 现在记 `profileUpdatedAt`，但 `touch: true`（只是又说话了）**不算**改过名片；`buildContactBlock` 对过时名片追加一行「这张名片有 N 天没更新了，可能已经过时：别把上面的事当成现状。」，不删不改写。配置 `contactStaleDays`（默认 45，0 关闭，热生效），`/diag` 增一行「群成员名片：N 张（其中 M 张超过 X 天没更新）」。
+
+**事故与教训**：我为这一项写代码时，发现文件里已经有一份同名导出，误判为重复而 `git checkout -- src/message/contacts.js` 把工作树里的实现删了（`git log -S contactStaleDays` 证明它从未提交）。随后按 `src/index.js` 等处的接线把 API 原样补回，并让测试钉住语义。**教训：回滚一个文件之前先 `git stash list` / `git diff` 确认那里面有没有别人（或自己上一轮）未提交的活。**
+
+**测试**：`test/contacts.test.js` 4 条（过时/未过时阈值、`touch` 不刷新 `profileUpdatedAt`、过时名片注入时带那行、`0` 关闭判断）。

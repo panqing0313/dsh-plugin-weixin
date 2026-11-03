@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildContactBlock, contactFile, listContacts, readContact, saveContact, touchContact } from '../src/message/contacts.js'
+import { buildContactBlock, contactAge, contactFile, countStaleContacts, isContactStale, listContacts, readContact, saveContact, touchContact } from '../src/message/contacts.js'
+
+const DAY = 24 * 60 * 60 * 1000
 
 function root() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-contacts-'))
@@ -62,4 +64,36 @@ test('the block names the person and asks not to read the card out loud', () => 
   assert.match(block, /重要日期：生日 1998-03-04/)
   assert.match(block, /不要主动念出来/)
   assert.match(block, /<\/weixin_contact>$/)
+})
+
+test('a card that has not been updated in months is marked, not deleted', () => {
+  const state = root()
+  const longAgo = Date.now() - 90 * DAY
+  saveContact(state, 'accA', 'wxid_lin', { call: '小林', profile: { schedule: '十点睡' } }, { now: longAgo })
+  const card = readContact(state, 'accA', 'wxid_lin')
+
+  assert.equal(contactAge(card, { now: longAgo + 60 * DAY }).days, 60)
+  assert.equal(isContactStale(card, { now: longAgo + 60 * DAY, staleDays: 45 }), true)
+  assert.equal(isContactStale(card, { now: longAgo + 30 * DAY, staleDays: 45 }), false)
+  assert.equal(isContactStale(card, { now: longAgo + 900 * DAY, staleDays: 0 }), false, '0 turns the judgement off')
+
+  const stale = buildContactBlock(card, { senderId: 'wxid_lin', now: longAgo + 60 * DAY, staleDays: 45 })
+  assert.match(stale, /60 天没更新/)
+  assert.match(stale, /别把上面的事当成现状/)
+  const fresh = buildContactBlock(card, { senderId: 'wxid_lin', now: longAgo + 1 * DAY, staleDays: 45 })
+  assert.doesNotMatch(fresh, /没更新/)
+  assert.equal(countStaleContacts(state, 'accA', { now: longAgo + 60 * DAY, staleDays: 45 }).stale, 1)
+})
+
+test('talking to someone does not refresh their card', () => {
+  const state = root()
+  const first = Date.now() - 100 * DAY
+  saveContact(state, 'accA', 'wxid_lin', { call: '小林' }, { now: first })
+  touchContact(state, 'accA', 'wxid_lin', { now: Date.now() })
+  const card = readContact(state, 'accA', 'wxid_lin')
+  assert.equal(card.profileUpdatedAt, first, 'the card still says what it said')
+  assert.ok(card.lastSeenAt > first)
+  assert.equal(isContactStale(card, { staleDays: 45 }), true)
+  saveContact(state, 'accA', 'wxid_lin', { profile: { dislikes: ['香菜'] } })
+  assert.equal(isContactStale(readContact(state, 'accA', 'wxid_lin'), { staleDays: 45 }), false, 'writing it down again makes it current')
 })

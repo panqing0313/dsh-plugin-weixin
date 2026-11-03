@@ -19,6 +19,12 @@ import { sanitizeProfile, formatProfile } from '../memory.js'
 
 export const CONTACTS_SCHEMA_VERSION = 1
 export const CONTACT_MAX_CALL_CHARS = 40
+/**
+ * 名片多久算「旧」。默认 45 天：足够长到不像是在催，短到不会把三个月前的
+ * 「最近在忙装修」当成现状。0 表示不做这个判断。
+ */
+export const CONTACT_STALE_DAYS = 45
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function safeName(value) {
   return String(value ?? '').replace(/[^A-Za-z0-9@._-]/g, '_').slice(0, 120) || 'unknown'
@@ -30,6 +36,37 @@ export function contactsDir(stateRoot) {
 
 export function contactFile(stateRoot, accountId, contactId) {
   return path.join(contactsDir(stateRoot), `${safeName(accountId)}-${safeName(contactId)}.json`)
+}
+
+/**
+ * 名片距上次更新多少天。没有 `profileUpdatedAt` 的旧记录按 lastSeenAt 算；
+ * 两者都没有时 `days` 是 undefined —— 不知道就不猜。
+ *
+ * @param {object} contact
+ * @param {{ now?: number }} [options]
+ * @returns {{ days: number | undefined, at: number | undefined }}
+ */
+export function contactAge(contact, { now = Date.now() } = {}) {
+  const at = Number(contact?.profileUpdatedAt ?? contact?.lastSeenAt ?? 0)
+  if (!Number.isFinite(at) || at <= 0) return { days: undefined, at: undefined }
+  return { days: Math.max(0, Math.floor((Number(now) - at) / DAY_MS)), at }
+}
+
+/** 名片是否过时；`staleDays <= 0` 表示不判断。 */
+export function isContactStale(contact, { now = Date.now(), staleDays = CONTACT_STALE_DAYS } = {}) {
+  if (!Number.isFinite(staleDays) || staleDays <= 0) return false
+  const { days } = contactAge(contact, { now })
+  return days !== undefined && days >= staleDays
+}
+
+/** 一个账号下有多少张名片、其中多少张过时了，给 `/diag` 用。 */
+export function countStaleContacts(stateRoot, accountId, { now = Date.now(), staleDays = CONTACT_STALE_DAYS, warn } = {}) {
+  const contacts = listContacts(stateRoot, accountId, { warn })
+  return {
+    total: contacts.length,
+    stale: contacts.filter((contact) => isContactStale(contact, { now, staleDays })).length,
+    staleDays,
+  }
 }
 
 /** All known contacts of one account, newest first by last seen. */
@@ -78,6 +115,9 @@ export function saveContact(stateRoot, accountId, contactId, patch = {}, { now =
     const sanitized = sanitizeProfile({ ...profile, ...patch.profile })
     Object.assign(profile, sanitized)
   }
+  // `touch: true` 的意思是「只是又说话了」，哪怕它顺手带上了旧 profile 也不算改过名片。
+  const wroteProfile = patch.touch !== true
+    && (typeof patch.call === 'string' || (patch.profile !== undefined && typeof patch.profile === 'object'))
   const record = {
     schemaVersion: CONTACTS_SCHEMA_VERSION,
     accountId: String(accountId),
@@ -85,6 +125,8 @@ export function saveContact(stateRoot, accountId, contactId, patch = {}, { now =
     profile: sanitizeProfile(profile),
     firstSeenAt: Number(existing?.firstSeenAt ?? now),
     lastSeenAt: Number(patch.touch === false ? existing?.lastSeenAt ?? now : now),
+    // 说话和「名片被改过」是两回事：天天聊天的人，名片可能还是三个月前写的。
+    profileUpdatedAt: wroteProfile ? Number(now) : Number(existing?.profileUpdatedAt ?? existing?.lastSeenAt ?? now),
   }
   fs.mkdirSync(contactsDir(stateRoot), { recursive: true })
   const written = atomicWriteJson(contactFile(stateRoot, accountId, contactId), record, { warn })
@@ -102,15 +144,21 @@ export function touchContact(stateRoot, accountId, contactId, { now = Date.now()
  * them. Empty when there is nothing to say (a stranger in a group gets no block,
  * and the model is not told to guess).
  */
-export function buildContactBlock(contact, { senderId } = {}) {
+export function buildContactBlock(contact, { senderId, now = Date.now(), staleDays = CONTACT_STALE_DAYS } = {}) {
   // formatProfile already renders the call name and skips empty fields, so the card
   // and this block cannot disagree about what is known.
   const lines = formatProfile(contact?.profile)
   if (lines.length === 0) return ''
+  // 过时的名片不删，只注明：过时的事实仍然有用，只是不能说成现状。
+  const { days } = contactAge(contact, { now })
+  const stale = isContactStale(contact, { now, staleDays })
+    ? [`这张名片有 ${days} 天没更新了，可能已经过时：别把上面的事当成现状。`]
+    : []
   return [
     `<weixin_contact id="${String(senderId ?? contact?.contactId ?? '')}">`,
     '这条消息来自群里的这个人。下面是你给他记的名字和已知的事，只用于理解他的话，不要主动念出来：',
     ...lines,
+    ...stale,
     '</weixin_contact>',
   ].join('\n')
 }

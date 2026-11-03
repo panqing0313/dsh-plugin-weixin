@@ -1262,3 +1262,4 @@ If this plugin has been useful to you, you are welcome to buy the author a coffe
 Or open an Issue / PR: [github.com/panqing0313/dsh-plugin-weixin](https://github.com/panqing0313/dsh-plugin-weixin)
 
 When you are mentioned in a group, the model sees only the message that mentioned you — what the previous twenty said is outside its window. With `groupSummaryEnabled` on (off by default, because it spends one background call per batch) the plugin collects group messages, summarizes them every `groupSummaryEvery` messages (12 by default), and folds those lines into the next mention's prompt. A summary older than three hours is not injected: three-day-old talk must not pass as today's context. It restates only what the messages say, never guesses, and the stats tab shows how much of the prompt it takes.
+| `contactStaleDays` | `45` | Days before a group member card is marked possibly out of date when injected (0 disables) |

@@ -155,7 +155,7 @@ import { routeFor, sideRouteFor } from './model-route.js'
 import { readOrInferLifeState, lifeBlock } from './message/life-state.js'
 import { readJournalRange, renderChatMarkdown, writeChatExport } from './message/chat-export.js'
 import { createNotifyServer, DEFAULT_NOTIFY_PORT, ensureNotifyToken } from './notify.js'
-import { buildContactBlock, listContacts, readContact, saveContact, touchContact } from './message/contacts.js'
+import { buildContactBlock, countStaleContacts, listContacts, readContact, saveContact, touchContact } from './message/contacts.js'
 import { describeAffinity, readAffinityHistory, recordAffinitySnapshot } from './message/affinity-history.js'
 import { buildDryRunBlock, describeDryRun, isGoAhead } from './message/dry-run.js'
 import { describeUnknownItems, firstSighting } from './message/unknown-items.js'
@@ -305,6 +305,7 @@ export const Config = z.object({
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupSummaryEnabled: z.boolean().default(false).description('群聊上下文摘要：群里攒够 groupSummaryEvery 条消息后，用一次后台调用把最近聊的压成几行，下次被叫到时折进提示词。默认关闭——它每次都要花一次调用。'),
   groupSummaryEvery: z.number().min(4).max(100).default(12).description('攒多少条群消息做一次摘要（默认 12）。'),
+  contactStaleDays: z.number().min(0).max(3650).default(45).description('群成员名片多久算「旧」：超过这么多天没更新过内容时，注入时会注明「可能已过时」。0 表示不做这个判断。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
   groupKeywords: z.string().default('').description('群关键词自动回复，每行一条：正则 => 回复。例如「^打卡$ => 打卡成功」。只在群里、只对白名单内的人生效；同一群同一条规则 60 秒内最多应一次；免打扰时段沉默。回复是模板，不走模型。'),
@@ -1824,6 +1825,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           accountId,
           transportUp: transport !== undefined,
           proactiveWindow: describeLearnedHours(learnActiveHours(readJournalRange(stateRoot, { accountId, days: 14 }), {})),
+          contacts: countStaleContacts(stateRoot, accountId, { staleDays: live.contactStaleDays }),
           modeName: current?.name ?? currentId,
           companion: isCompanionMode(current),
           config: live,
@@ -2759,7 +2761,7 @@ ${neutralizeTags(ocr.text)}
     let contactBlock = ''
     if (isGroupMessage(message)) {
       const known = readContact(stateRoot, accountId, message.senderId, { warn })
-      if (known !== undefined) contactBlock = buildContactBlock(known, { senderId: message.senderId })
+      if (known !== undefined) contactBlock = buildContactBlock(known, { senderId: message.senderId, staleDays: effectiveConfig.current.contactStaleDays })
       touchContact(stateRoot, accountId, message.senderId, { warn })
     }
     const memoryBlock = effectiveConfig.current.memoryEnabled === true && memoryShared === true
