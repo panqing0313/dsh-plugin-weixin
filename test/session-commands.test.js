@@ -779,7 +779,9 @@ test('/export renders the journal as markdown and spills to a file when long', a
 			appendJournal(root, { dir: 'in', accountId: ACCOUNT_ID, conversationId: ALLOWED, text: `长记录第${i}条 ${'x'.repeat(90)}`, at: Date.now() + i })
 		}
 		fake.deliver('/export', 'e1')
-		await waitFor(() => fake.outbound.length > 1, 'the spill reply')
+		// 长导出要写完 11KB 文件、再走一遍附件链路，本机 0.6 秒，冷 CI runner 上
+		// 5 秒不够（run 41576862282 就死在这）。这是防误报的安全网，不是性能断言。
+		await waitFor(() => fake.outbound.length > 1, 'the spill reply', 20_000)
 		assert.match(fake.outbound[1].text, /已导出成文件/)
 		// 长导出现在会把文件一起发出来：附件链路成功时路径会从正文里摘掉，
 		// 失败时正文保留路径并在末尾附上失败原因。两种情况文件都必须存在。
@@ -789,7 +791,7 @@ test('/export renders the journal as markdown and spills to a file when long', a
 
 		// The zh alias reaches the command, not the agent turn.
 		fake.deliver('/导出', 'e2')
-		await waitFor(() => fake.outbound.length > 2, 'the alias reply')
+		await waitFor(() => fake.outbound.length > 2, 'the alias reply', 20_000)
 		assert.match(fake.outbound[2].text, /已导出成文件/)
 	})
 })
