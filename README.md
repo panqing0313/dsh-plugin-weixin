@@ -173,7 +173,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.4.2`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.4.3`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
@@ -929,7 +929,11 @@ npm run pack -- import 毒舌陪聊.json --account b1b2d0b10d66@im.bot
   可用）或 `<数据目录>/stickers/<模式>/`（只在该模式，模式名如 `girlfriend`、`neko`），
   **文件名就是模型要写的名字**——`老板.png` 就是 `[表情:老板]`；同目录下的 `aliases.json`
   （`{"发红包": "老板.png"}`）可以再给同一张图起别的名字。PNG / JPG / GIF / WebP / BMP 都收，
-  手机拍的照片直接能用（360×420 的透明 PNG 效果最好）。命令行版：
+  手机拍的照片直接能用（360×420 的透明 PNG 效果最好）。
+
+  **你自己的图一旦存在，内置那 68 张就不在名单里了**（既不出现、也不再被解析）——装了自己的
+  表情却被塞回内置的，是最让人想骂的那种结果。想两边都留着当兜底，打开「保留内置表情」
+  （`stickerKeepBuiltins`，默认关）——打开时你自己的名字仍排在内置前面。命令行版：
 
   ```bash
   node bin/stickers.mjs add ~/照片.jpg --mode girlfriend --as 亲亲   # 收进女友模式，名字叫「亲亲」

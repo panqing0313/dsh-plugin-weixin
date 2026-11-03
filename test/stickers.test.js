@@ -213,13 +213,54 @@ test('a picture dropped into the state folder becomes a usable sticker', () => {
     assert.equal(plan.text, '好')
     assert.deepEqual(plan.stickers, ['user:all:老板.png'])
 
-    // Built-in ids keep working while custom ones are around.
-    assert.equal(resolveSticker('开心', undefined, { stateRoot: root }), 'happy')
+    // With pictures of your own in the folder the built-in cast steps aside:
+    // a marker for one of its names is dropped rather than sending art the
+    // user replaced. `keepBuiltins` puts both lists back together.
+    assert.equal(resolveSticker('开心', undefined, { stateRoot: root }), null)
+    assert.equal(stickerHint(undefined, { stateRoot: root }).includes('开心'), false, 'built-ins leave the list')
+    assert.equal(resolveSticker('开心', undefined, { stateRoot: root, keepBuiltins: true }), 'happy')
     assert.equal(stickerFilesReady(root), true)
 
     const listed = listUserStickerFiles(root)
     assert.equal(listed.length, 2)
     assert.equal(listed.some((line) => line.includes('老板')), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    process.env.DSH_WEIXIN_STATE_DIR = SCRATCH
+    clearUserStickerCache()
+  }
+})
+
+test('your own set replaces the built-in cast, and the switch brings it back', () => {
+  const root = userState()
+  try {
+    const before = stickersForMode('girlfriend', { stateRoot: root })
+    assert.ok(before.length >= SHARED_STICKERS.length, 'built-ins until you install something')
+
+    fs.mkdirSync(path.join(root, 'stickers', 'all'), { recursive: true })
+    // Same caption as a built-in on purpose: yours must win the name.
+    fs.writeFileSync(path.join(root, 'stickers', 'all', '开心.png'), PNG_1PX)
+    clearUserStickerCache()
+
+    const after = stickersForMode('girlfriend', { stateRoot: root })
+    assert.deepEqual(after.map((sticker) => sticker.id), ['user:all:开心.png'], 'only yours is offered')
+    assert.equal(resolveSticker('开心', 'girlfriend', { stateRoot: root }), 'user:all:开心.png')
+    assert.equal(resolveSticker('点头', 'girlfriend', { stateRoot: root }), null, 'built-ins stop resolving')
+
+    const hint = stickerHint('girlfriend', { stateRoot: root })
+    assert.match(hint, /开心/)
+    assert.equal(hint.includes('点头'), false, 'the built-in names are gone from the prompt')
+
+    const both = stickersForMode('girlfriend', { stateRoot: root, keepBuiltins: true })
+    assert.equal(both.length, after.length + before.length)
+    assert.equal(both[0].id, 'user:all:开心.png', 'yours still comes first')
+    assert.equal(resolveSticker('点头', 'girlfriend', { stateRoot: root, keepBuiltins: true }), 'nod')
+
+    // A built-in marker is dropped from the text, not quietly sent.
+    const plan = takeStickers('好\n[表情:点头]', { modeId: 'girlfriend', stateRoot: root })
+    assert.equal(plan.text, '好')
+    assert.deepEqual(plan.stickers, [])
+    assert.deepEqual(plan.dropped, ['点头'])
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
     process.env.DSH_WEIXIN_STATE_DIR = SCRATCH

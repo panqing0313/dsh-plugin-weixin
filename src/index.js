@@ -285,6 +285,9 @@ export const Config = z.object({
   stickerEnabled: z.boolean().default(true).description(
     '表情图片：角色模式下模型可以在回复里写 [表情:开心]，插件发一张对应的表情图（图片气泡）。微信协议没有贴纸消息类型，所以只能是图片，不是可点开的原生表情包；关掉则连这个标记也不教给模型。',
   ),
+  stickerKeepBuiltins: z.boolean().default(false).description(
+    '内置表情图：默认关闭——只要 <数据目录>/stickers/ 里放了你自己的图片，模型能用的就只有那些，内置那 68 张不再出现在可用名单里（也不会被解析）。打开则两边都在，你自己的名字优先。',
+  ),
   proactiveEnabled: z.boolean().default(false).description(
     '主动开口：角色模式下，对方一段时间没说话时由它先发一条消息（只在设定的时段内、每条之间有最短间隔、没被回应会退避、每天有上限）。默认关闭——一个工具不该自己找你；「默认助手」模式永远不主动。',
   ),
@@ -988,7 +991,7 @@ export function apply(ctx, config) {
             ? readOrInferLifeState(stateRoot, candidate.accountId, { now, bond: convMemory.bond, warn })
             : null
           const personaBlock = buildPersonaBlock(candidate.mode)
-          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id, stateRoot })
+          const styleBlock = buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: candidate.mode?.id, stateRoot, keepBuiltins: live.stickerKeepBuiltins === true })
           const lifeBlockText = life === null ? '' : lifeBlock(life)
           const globalMemory = readGlobalMemory(stateRoot, candidate.accountId, { warn })
           const memoryBlock = live.memoryEnabled === true
@@ -1031,7 +1034,7 @@ export function apply(ctx, config) {
           const text = typeof result?.text === 'string' ? result.text.trim() : ''
           if (text === '' || text === '（已取消）') return ''
           const plan = live.stickerEnabled !== false
-            ? takeStickers(text, { modeId: candidate.mode?.id, stateRoot, warn })
+            ? takeStickers(text, { modeId: candidate.mode?.id, stateRoot, warn, keepBuiltins: live.stickerKeepBuiltins === true })
             : { text, stickers: [] }
           if (live.typingIndicator === true) {
             await transport.setTyping(true, candidate.conversationId).catch(() => {})
@@ -2631,7 +2634,7 @@ ${neutralizeTags(ocr.text)}
     // badly.
     const companion = isCompanionMode(activeMode)
     const styleBlock = companion
-      ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id, stateRoot })
+      ? buildHumanStyleBlock({ stickers: effectiveConfig.current.stickerEnabled !== false, modeId: activeMode?.id, stateRoot, keepBuiltins: effectiveConfig.current.stickerKeepBuiltins === true })
       : ''
     // The recent-message window is the expensive part of the memory block and
     // it only earns its tokens on a COLD line: a resumed session already has
@@ -2866,7 +2869,7 @@ ${neutralizeTags(ocr.text)}
       // image bubble instead). Markers are stripped before anything counts
       // characters, or the bracket would show up in the bubble itself.
       const stickerPlan = companion && effectiveConfig.current.stickerEnabled !== false
-        ? takeStickers(outbound.text, { modeId: activeMode?.id, stateRoot, warn })
+        ? takeStickers(outbound.text, { modeId: activeMode?.id, stateRoot, warn, keepBuiltins: effectiveConfig.current.stickerKeepBuiltins === true })
         : { text: outbound.text, stickers: [], dropped: [] }
       if (stickerPlan.dropped.length > 0) {
         warn(`dropped sticker marker(s): ${stickerPlan.dropped.join(', ')}`)

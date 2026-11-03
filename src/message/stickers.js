@@ -340,16 +340,23 @@ export function listUserStickerFiles(root = stateDir()) {
  * The stickers a conversation in this mode may send: the shared twelve plus the
  * character's own pack, plus anything the user dropped in `<state>/stickers/`.
  *
+ * Your own pictures win. As soon as that folder has anything in it, the built-in
+ * cast steps aside instead of competing with it — whoever installs a set means
+ * it, and a marker resolving to built-in art they rejected is the one outcome
+ * they would call a bug. `keepBuiltins: true` keeps both (yours first, so your
+ * names still win a collision).
+ *
  * @param {string} [modeId]
- * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
+ * @param {{ stateRoot?: string, warn?: (line: string) => void, keepBuiltins?: boolean }} [options]
  */
-export function stickersForMode(modeId, { stateRoot, warn } = {}) {
+export function stickersForMode(modeId, { stateRoot, warn, keepBuiltins = false } = {}) {
   const extra = MODE_STICKERS.filter((pack) => pack.modes.includes(modeId)).flatMap((pack) => pack.stickers)
   const mine = extra.length === 0 ? SHARED_STICKERS : [...SHARED_STICKERS, ...extra]
   const packs = userPacks(stateRoot, { warn })
   const custom = [...(packs.get('all') ?? [])]
   if (modeId !== undefined && modeId !== '') custom.push(...(packs.get(modeId) ?? []))
-  return [...mine, ...custom]
+  if (custom.length > 0 && keepBuiltins !== true) return custom
+  return [...custom, ...mine]
 }
 
 /** Absolute path of one sticker image (built-in id or `user:<mode>:<file>` id). */
@@ -372,12 +379,12 @@ export function stickerPath(id, root = stateDir()) {
  *
  * @param {string} name
  * @param {string} [modeId]
- * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
+ * @param {{ stateRoot?: string, warn?: (line: string) => void, keepBuiltins?: boolean }} [options]
  */
-export function resolveSticker(name, modeId, { stateRoot, warn } = {}) {
+export function resolveSticker(name, modeId, { stateRoot, warn, keepBuiltins = false } = {}) {
   const key = String(name ?? '').trim()
   if (key === '') return null
-  const index = aliasesFor(stickersForMode(modeId, { stateRoot, warn }))
+  const index = aliasesFor(stickersForMode(modeId, { stateRoot, warn, keepBuiltins }))
   const direct = index.get(key)
   if (direct !== undefined) return direct
   // Tolerate a trailing 啊/呀/啦 and surrounding punctuation: the model is
@@ -397,15 +404,15 @@ const MARKER_RE = /\[表情[:：]\s*([^\]\n]{1,16}?)\s*\]/g
  * like a bug) and reported in `dropped` so the caller can log it.
  *
  * @param {string} text
- * @param {{ max?: number, modeId?: string, stateRoot?: string, warn?: (line: string) => void }} [options]
+ * @param {{ max?: number, modeId?: string, stateRoot?: string, warn?: (line: string) => void, keepBuiltins?: boolean }} [options]
  * @returns {{ text: string, stickers: string[], dropped: string[] }}
  */
-export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId, stateRoot, warn } = {}) {
+export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId, stateRoot, warn, keepBuiltins = false } = {}) {
   const source = typeof text === 'string' ? text : ''
   const stickers = []
   const dropped = []
   const stripped = source.replace(MARKER_RE, (_match, rawName) => {
-    const id = resolveSticker(rawName, modeId, { stateRoot, warn })
+    const id = resolveSticker(rawName, modeId, { stateRoot, warn, keepBuiltins })
     if (id === null) {
       dropped.push(String(rawName))
       return ''
@@ -434,8 +441,8 @@ export function takeStickers(text, { max = MAX_STICKERS_PER_REPLY, modeId, state
  * @param {string} [modeId]
  * @param {{ stateRoot?: string, warn?: (line: string) => void }} [options]
  */
-export function stickerHint(modeId, { stateRoot, warn } = {}) {
-  const names = stickersForMode(modeId, { stateRoot, warn }).map((sticker) => sticker.caption)
+export function stickerHint(modeId, { stateRoot, warn, keepBuiltins = false } = {}) {
+  const names = stickersForMode(modeId, { stateRoot, warn, keepBuiltins }).map((sticker) => sticker.caption)
   return `- 想发个表情的时候，单独写一行 [表情:名字]，插件会替你发一张表情图；可用：${[...new Set(names)].join('、')}；一次最多一张，别每句都配`
 }
 

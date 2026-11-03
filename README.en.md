@@ -176,7 +176,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.4.2`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.4.3`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -890,6 +890,9 @@ so tappable, animated native sticker packs cannot be sent. The plugin takes anot
   `<state dir>/stickers/all/` or `<state dir>/stickers/<mode>/`: **the file name is the name the model writes** (`老板.png` → `[表情:老板]`),
   an optional `aliases.json` in the same folder adds aliases, and PNG / JPG / GIF / WebP / BMP are all accepted. `node bin/stickers.mjs add|list|check` does it from the terminal,
   and a new file works from the next message on — no restart (the listing is invalidated by mtime, not cached forever).
+- **Once your own pictures exist, the 68 built-ins leave the list** — they are neither offered nor resolved, because installing a set and still getting
+  built-in art back is the one outcome you would call a bug. Names collide in your favour: your `开心.png` is what `[表情:开心]` sends. Keep both
+  (built-ins as a fallback) with `stickerKeepBuiltins` — off by default, and your names still come first when it is on.
 - Companion modes' prompts carry a line "available: happy, lol, ... at most one at a time"; the model writes
   `[表情:困了]` in the body, and before sending the plugin strips the marker and sends the matching PNG through the **image channel** (a native image bubble,
   exactly the same path as sending an image by hand). Unknown names or more than two markers are deleted with one warning line, and no

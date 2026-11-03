@@ -595,6 +595,15 @@ export const FIELDS = [
           hint: "角色模式下模型可以写 [表情:开心] 换成一张表情图发出（图片气泡；微信协议没有贴纸类型，所以不是可点开的原生表情包）。关掉则连这个标记也不教给模型。",
           hintEn: "In a companion mode the model may write [表情:开心] and the plugin sends the matching image bubble (the protocol has no sticker item). Off means the model is not taught the marker at all.",
         },
+        {
+          path: "stickerKeepBuiltins",
+          type: T.boolean,
+          default: false,
+          label: "保留内置表情",
+          labelEn: "Keep built-in stickers",
+          hint: "默认关闭：只要 <数据目录>/stickers/ 里有你自己的图片，模型能用的就只有那些——内置那 68 张不再出现在可用名单里，也不会被解析（装了自己的表情，内置就不会再被挑中）。打开则两边都在，你自己的名字优先。",
+          hintEn: "Off by default: as soon as <state dir>/stickers/ holds pictures of your own, those are all the model may send — the 68 built-ins leave the list and stop resolving. On keeps both, with your names winning.",
+        },
       ],
     },
     {

@@ -175,7 +175,7 @@ export function planCompanionReply({ text, mode, life = null, config = {}, rng =
  * @param {{ stickers?: boolean, modeId?: string, stateRoot?: string }} [options]
  * @returns {string}
  */
-export function buildHumanStyleBlock({ stickers = false, modeId, stateRoot } = {}) {
+export function buildHumanStyleBlock({ stickers = false, modeId, stateRoot, keepBuiltins = false } = {}) {
   return [
     '<weixin_style>',
     '【怎么发消息】你在微信上和对方聊天，不是写文档：',
@@ -184,7 +184,7 @@ export function buildHumanStyleBlock({ stickers = false, modeId, stateRoot } = {
     '- 想补充的话可以另起一条再说，不要全堆在一段里。',
     // Only offered when the sticker channel is on: a marker the pipeline will
     // not honour becomes a stray bracket in the user's chat.
-    ...(stickers ? [stickerHint(modeId, { stateRoot })] : []),
+    ...(stickers ? [stickerHint(modeId, { stateRoot, keepBuiltins })] : []),
     '</weixin_style>',
   ].join('\n');
 }

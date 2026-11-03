@@ -3895,3 +3895,25 @@ release run `41485882140` success）。
   `gitHead e35eb61d1a553d309c0ca62000a1488e30b5c3fc`、`dist.unpackedSize 7511558`；
   `doctor` → `installed version 1.4.2`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.4.2)`。
 - 待办：重启 DSH 后按 5 步复核（本版只加了一条 fetch 子命令与清单文件，界面与内置表情未动），通过后写进兼容表。
+
+## 1.4.3：你自己的表情，就是全部的表情（2026-11-03）
+
+用户装完 25 张后说「我只要这些表情图，其他的都删了」——发现真正的问题不是「删不掉」，
+而是**装了自定义表情之后，内置那 68 张仍然在可用名单里**：模型顺手写一个 `[表情:点头]`，
+发出去的就是内置的大肥鱼。重启后的第一小时日志里就正好抓到一条
+`[dsh-weixin] sent sticker nod to o9cq…`。
+
+- 改法（`src/message/stickers.js`）：`stickersForMode()` 现在只要 `stickers/` 里有你自己的图片，
+  **就只返回那些**，内置的 68 个名字既不进名单、也不再被解析；`keepBuiltins: true` 时两边都在，
+  但**你自己的排在内置前面**（同名由你的图胜出）。`resolveSticker()`/`takeStickers()`/
+  `stickerHint()` 都接受同一个开关，所以「教模型的名单」和「解析用的名单」不可能再走散。
+- 新配置项 **`stickerKeepBuiltins`**（默认 false）贯穿 schema、设置卡「角色」组、四个调用点
+  （入站提示词两处、出站解析两处）。
+- 测试：`test/stickers.test.js` 新增一条并改掉一条旧断言——放一张与内置同名的 `开心.png` 后
+  `stickersForMode` 只返回它、`resolveSticker('点头')` 回 null、提示词里不再出现内置名字、
+  `keepBuiltins` 时两边都在且自定义在前、`[表情:点头]` 被摘掉并记进 `dropped`。该文件 24/24。
+- 本机实测（用户的 25 张已在 `~/.dsh/weixin/stickers/all/`）：默认名单 **25 张**、
+  `resolveSticker('nod')`/`('点头')` 都是 null、`贴贴` → `user:all:害羞.png`、提示词里没有「点头」；
+  打开 `keepBuiltins` 是 53 张（25 + 女友模式 24 公共 + 4 角色），
+  自定义的排在最前面。
+- 文档：README 中英的表情节各加一段、`docs/extras.md` 第 3 条下补两条、CHANGELOG 1.4.3。
