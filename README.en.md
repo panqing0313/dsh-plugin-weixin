@@ -176,7 +176,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.4.0`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.4.1`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -880,11 +880,13 @@ so tappable, animated native sticker packs cannot be sent. The plugin takes anot
   rerun the script to redraw them — it needs Pillow; `/usr/local/bin/python3.14` on this Mac has it): 12 base ones (happy / lol / sob / aggrieved / angry / shy / speechless / sleepy / like you /
   awesome / go for it / good night), 12 cute ones (excited / snicker / facepalm / hug / cheer / confetti / munching / applause / nod /
   shake head / shocked / finger heart), plus **eleven character packs** of four that **follow the role**: girlfriend, boyfriend, friend, Jarvis,
-  mature lady, big sister, warm guy, daughter, catgirl, little whale girl, tsundere — 68 images in all, drawn as half-body characters
-  whose **pose and prop** carry the action (hug / kiss / head pat / toast / umbrella / bubble tea / coat over your shoulders / hologram / applause / munching melon).
+  mature lady, big sister, warm guy, daughter, catgirl, little whale girl, tsundere — 68 images in all. The whole set is **one blue
+  whale mascot**: a round body, a white belly, big eyes, fins for arms; a mode pack only swaps accessories (pink bow, cap, headset and visor,
+  pearl necklace, cat ears). Each image is **doing** something (hug / kiss / head pat / toast / umbrella / bubble tea / coat over your shoulders /
+  hologram / applause / munching melon) and is shaded rather than flat — gradients, cel shadows, highlights, blush.
 - Character packs only appear in the matching mode: when the current conversation is catgirl the prompt lists only the four cat ones, and those four do not resolve at other times
   — there is no "girlfriend mode sends a cat paw" cross-contamination.
-- Being drawn art, these are vector cartoons rather than photographs. For real photos (or art someone made for you) drop files into
+- Being drawn art, these are cartoons rather than photographs. For real photos (or art someone made for you) drop files into
   `<state dir>/stickers/all/` or `<state dir>/stickers/<mode>/`: **the file name is the name the model writes** (`老板.png` → `[表情:老板]`),
   an optional `aliases.json` in the same folder adds aliases, and PNG / JPG / GIF / WebP / BMP are all accepted. `node bin/stickers.mjs add|list|check` does it from the terminal,
   and a new file works from the next message on — no restart (the listing is invalidated by mtime, not cached forever).
