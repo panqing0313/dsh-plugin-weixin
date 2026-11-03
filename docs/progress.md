@@ -3928,6 +3928,31 @@ release run `41485882140` success）。
 
 **另一个坑**：`node --test test/e2e.test.js` 直接跑会红两条（`expected the vendor log dir to be redirected`、相对路径上传），因为它们依赖 `npm test` 里的 `--import ./test/isolate-host-state.mjs`（它负责把 `DSH_WEIXIN_LOG_DIR` 指到临时目录、隔离宿主状态）。**验证要用 `npm test`，不要在文件级直接跑完就下结论。**
 
+## 发布 1.4.4（2026-11-03）
+
+这一版是六件事，每一件都回答「它到底在想什么」。按实现顺序：
+
+| 项 | 提交 | 做了什么 |
+| --- | --- | --- |
+| ① 回复风格反馈 | `dfc7a37` | `/bad 太长了`、`/good 就这样` 写成规则（每账号每模式最多 12 条、每条 60 字），下一条回复的提示词里带上；`/style` 看、`/style clear` 清 |
+| ④ 重要日子的草稿 | `29d33d5` | 日子当天先拟好一句要说的话（最多 3 版、400 字、36 小时过期）；`/draft`、`/draft 2`、`/draft keep 2`、`/draft drop` |
+| ③ 主动开口作息学习 | `ff3f9f3` | 从最近 14 天**你真正说话的小时**里学窗口；样本 <20 条或 <4 天就不猜；`/diag` 写明学到什么、依据是什么 |
+| ② 群聊上下文摘要 | `006eef5` | 群里每累计 N 条（默认 20、最少 5）滚动压缩一次；被 @ 到时提示词里多一段「他们刚才在聊什么」 |
+| ⑤ 日报带昨天 | `b0a17a2` | 早报加昨天回看（收/发条数、会话数、最后 3 条原话 40 字），冷启动不再从零开始 |
+| ⑥ 名片过期 | `c439346` | 群成员名片超过 `contactStaleDays`（默认 45 天）没更新时注入会注明「可能已过时」；`/diag` 显示多少张过期 |
+
+**顺带修掉一个反复红的测试假象**（`9d7f435`）：`test/e2e.test.js` 里 22 处「等回复」的截止时间是写死的 10 秒，而一条回复要穿过节流、分块、表情剥离、重发队列，机器一忙就不够用 —— 换成 `REPLY_WAIT_MS`（默认 60 秒，`DSH_WEIXIN_E2E_WAIT_MS` 可覆盖）。真正的失败仍会在 60 秒时报出来，只是不再因为「机器有点忙」就红。另记一笔：`node --test test/e2e.test.js` 直接跑会红两条，因为它们依赖 `npm test` 的 `--import ./test/isolate-host-state.mjs`。
+
+**发布与核验**：
+
+- 版本提交 `bc09c34 docs: 1.4.4 — six things that make it explain itself`，`git tag -a v1.4.4` 推上去触发 CI 发布
+- `release.yml` run **`41669678552`**：secret 检查 ✅、`npm ci` ✅、快速检查 ✅、全量 suite ✅、tag 版本核对 ✅、`publish with provenance` ✅
+- `node bin/release.mjs --finish 1.4.4`：`✓ the registry now serves 1.4.4`、tag `v1.4.4`、GitHub release 创建、profile `^1.4.3 → ^1.4.4` 且锁文件刷新
+- 核验：`dist.shasum 9ecaa51c67206924b2d225aa6c70b2433cd04821`、`dist.integrity sha512-HagNwUQwB7/aoNkER3xq45e0GqXMsIasBAcgV8hOMhs0IUvYTVnKMrBRg+Nd0QjgVCdf5WkIxKvZUR99wUQjtw==`、`gitHead bc09c34982e356aecbb113e037df4124e4b4879e`、`dist-tags.latest = 1.4.4`、`unpackedSize 7570410`
+- `doctor`：`installed 1.4.4`、`host 0.2.1-rc.5 (tested)`、`published up to date (1.4.4)`、`backups 3 copy(ies)`
+
+**待做**：重启 DSH 后按 5 步复核，再把 `1.4.4 / 0.2.1-rc.5` 写进兼容表。
+
 ## 发布 1.4.3（2026-11-03）
 
 - 「自己的表情就是全部的表情」这条规则按 **tag → CI 发布（`NPM_TOKEN` + provenance）→ 本机 `--finish`** 的常规流程发出，
