@@ -65,7 +65,8 @@ export function recordAffinitySnapshot(stateRoot, accountId, conversationId, { n
   const kept = days.slice(-AFFINITY_KEEP_DAYS)
   const file = affinityFilePath(stateRoot, accountId, conversationId)
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  atomicWriteJson(file, { schemaVersion: AFFINITY_SCHEMA_VERSION, days: kept }, { warn })
+  // A history of counters, recomputed from the journal on the next turn.
+  atomicWriteJson(file, { schemaVersion: AFFINITY_SCHEMA_VERSION, days: kept }, { warn, durable: false })
   return kept
 }
 

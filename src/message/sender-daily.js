@@ -78,7 +78,8 @@ export function createSenderDailyLimiter({ stateRoot, limit, now = () => Date.no
     }
 
     bucket.senders[key] = used + 1
-    atomicWriteJson(fileOf(stateRoot), { schemaVersion: SENDER_DAILY_SCHEMA_VERSION, accounts: store.accounts }, { warn })
+    // Quota counters for one local day; losing them restarts today's count.
+    atomicWriteJson(fileOf(stateRoot), { schemaVersion: SENDER_DAILY_SCHEMA_VERSION, accounts: store.accounts }, { warn, durable: false })
     return { allowed: true, shouldWarn: false, used: used + 1, limit: cap, day }
   }
 

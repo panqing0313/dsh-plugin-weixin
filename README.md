@@ -1220,6 +1220,24 @@ stdin，从 stdout 逐行读 JSON。任何满足「读一行 `{"wav": "..."}` �
 > 注意：`![alt](路径)` 同时是**出站附件**语法。开启 `mediaEnabled` 时该引用会先交给媒体层上传，
 > 文本里只剩 alt 文本；`stripMediaReferences` 已在媒体步骤处理掉的部分不会再进入 Markdown 过滤器。
 
+## 每条消息的开销（以及为什么它不该更贵）
+
+插件在**别人的电脑上**常驻运行，所以每条消息的处理成本是产品的一部分，不是实现细节。`npm run bench` 用一个假 iLink 服务端 + 假 agent 压 N 条消息（每条的发送者不同，避免撞上「同一会话正在等待」的闸门），报每条消息的挂钟时间、CPU 时间与**阻塞式 fsync 次数**：
+
+```bash
+npm run bench            # 100 条
+npm run bench -- 400     # 更多样本
+```
+
+一次测量与优化的例子（macOS，Node 22）：每条消息原本要写 4 次带 `fsync` 的原子文件 ——
+`accounts-registry.json`（每消息都重写一次 `lastSeenAt`）、`usage-ledger.json`、`sender-daily.json`、
+`budget.json`。`fsync` 一次约 4ms，且**同步阻塞事件循环**，也就是每条消息白扔约 16ms。两项改动：
+
+- **`lastSeenAt` 一分钟写一次**（`src/account-registry.js` 的 `TOUCH_WRITE_INTERVAL_MS`）。卡片上那行「安静了多久」精确到分钟就够，每次消息都落盘只是把热路径挂在了磁盘上。
+- **派生状态不付 `fsync`**（`atomicWriteJson(..., { durable: false })`）：用量账本、当日预算、每人每日配额、生活状态、亲密度历史。它们要么能自己重建，要么丢几分钟无所谓；**用户自己拥有的东西**（提醒、订阅、记忆、人设、白名单、联系人、出站队列）仍走默认的持久写。
+
+结果：每条消息的阻塞写从 4 次降到 2 次（剩下的是会话记忆，真的在改内容）。取舍写在 `src/atomic.js` 的注释里：`durable: false` 仍然是「写临时文件 + rename」的原子替换，读者永远看不到半截文件；只有在写到一半断电的极小窗口里，这个文件可能是空的 —— 对那些本来就会被覆盖的计数器来说，这个代价比每条消息阻塞 4ms 划算。
+
 ## 兼容性
 
 插件用的是宿主应用自己的座位名、客户端加载器和两个只在宿主里存在的包，这些都没有版本号协商。真正验证过的组合记在 [docs/compatibility.md](docs/compatibility.md)，`npm run doctor` 会打出当前宿主版本并指出它在不在表里 —— 宿主升级后「昨天还好好的今天不行了」，第一个该看的就是这一行。
@@ -1229,6 +1247,7 @@ stdin，从 stdout 逐行读 JSON。任何满足「读一行 `{"wav": "..."}` �
 ```bash
 npm test                       # node --test "test/**/*.test.js"
 npm run check                  # 语法 + 打包元数据（CI 先跑这个）
+npm run bench                  # 假服务端压 100 条消息，报每条消息的 CPU / 阻塞写次数
 npm run doctor                 # 13 项体检：账号/白名单/实例锁/积压/日志/宿主版本
 npm run vendor                 # 校验 vendor/ 是否仍等于记录的 tarball
 node bin/login.js              # 真实扫码登录

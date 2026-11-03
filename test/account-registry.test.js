@@ -18,7 +18,7 @@ import test, { after } from 'node:test'
 process.env.DSH_WEIXIN_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-registry-'))
 after(() => fs.rmSync(process.env.DSH_WEIXIN_STATE_DIR, { recursive: true, force: true }))
 
-const { registryFile, readRegistry, writeRegistry, ensureAccountEntry, touchAccount, setAccountPaused, isAccountPaused, setAccountLabel, setAccountAllowlist, allowlistForAccount } =
+const { registryFile, readRegistry, writeRegistry, ensureAccountEntry, touchAccount, resetTouchThrottle, TOUCH_WRITE_INTERVAL_MS, setAccountPaused, isAccountPaused, setAccountLabel, setAccountAllowlist, allowlistForAccount } =
   await import('../src/account-registry.js')
 
 const warnings = []
@@ -63,7 +63,7 @@ test('lastSeenAt is written only by touchAccount, and never blocks on a bad stat
   const onWarning = (w) => emitted.push(String(w?.message ?? w))
   process.on('warning', onWarning)
   try {
-    assert.doesNotThrow(() => touchAccount('bot1', warn))
+    assert.doesNotThrow(() => touchAccount('bot1', warn, { throttleMs: 0 }))
     // process.emitWarning delivers on nextTick, not synchronously.
     await new Promise((resolve) => setImmediate(resolve))
   } finally {
@@ -78,6 +78,34 @@ test('lastSeenAt is written only by touchAccount, and never blocks on a bad stat
   healed.bot1 = { ...healed.bot1, lastSeenAt: seen }
   writeRegistry(healed, warn)
   assert.equal(readRegistry().bot1.lastSeenAt, seen)
+})
+
+test('lastSeenAt writes are throttled to one a minute, without losing the timestamp', () => {
+  resetTouchThrottle()
+  const start = Date.parse('2026-11-04T09:00:00.000Z')
+  assert.equal(touchAccount('bot1', warn, { now: start }), true, 'the first touch writes')
+  const first = readRegistry().bot1.lastSeenAt
+
+  // A second message seconds later is the common case: the registry must not be
+  // rewritten (each write is an fsync), and the stored stamp stays truthful to
+  // the minute the card renders.
+  assert.equal(touchAccount('bot1', warn, { now: start + 20_000 }), false)
+  assert.equal(readRegistry().bot1.lastSeenAt, first)
+
+  assert.equal(touchAccount('bot1', warn, { now: start + TOUCH_WRITE_INTERVAL_MS }), true)
+  assert.equal(readRegistry().bot1.lastSeenAt, new Date(start + TOUCH_WRITE_INTERVAL_MS).toISOString())
+
+  // The throttle is per state dir: two installations touching the same account
+  // id must not silence each other.
+  const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-registry-other-'))
+  const previousDir = process.env.DSH_WEIXIN_STATE_DIR
+  process.env.DSH_WEIXIN_STATE_DIR = otherDir
+  try {
+    assert.equal(touchAccount('bot1', warn, { now: start + 1_000 }), true, 'another state dir keeps its own throttle')
+  } finally {
+    process.env.DSH_WEIXIN_STATE_DIR = previousDir
+    fs.rmSync(otherDir, { recursive: true, force: true })
+  }
 })
 
 test('label set, label cleared, and re-binding an account keeps both', () => {

@@ -1156,6 +1156,22 @@ Whitespace (blank lines, trailing newlines, CRLF) is preserved byte for byte. Wi
 > Note: `![alt](path)` is also **outbound attachment** syntax. With `mediaEnabled` on, that reference goes to the media layer for upload first and
 > only the alt text remains in the text; whatever `stripMediaReferences` already handled in the media step never reaches the Markdown filter.
 
+## What one message costs (and why it should not cost more)
+
+The plugin runs permanently on someone else's machine, so the per-message cost is part of the product, not an implementation detail. `npm run bench` drives N messages through a fake iLink server and a fake agent — one distinct sender per message, so the "this conversation is already waiting" guard never fires — and reports wall time, CPU time and the number of **blocking fsyncs** per message:
+
+```bash
+npm run bench            # 100 messages
+npm run bench -- 400     # more samples
+```
+
+One measured example (macOS, Node 22): every message used to perform four fsync-backed atomic writes — `accounts-registry.json` (rewritten for `lastSeenAt` on every message), `usage-ledger.json`, `sender-daily.json`, `budget.json`. An fsync costs ~4ms and blocks the event loop, so that was ~16ms thrown away per message. Two changes:
+
+- **`lastSeenAt` is written at most once a minute** (`TOUCH_WRITE_INTERVAL_MS` in `src/account-registry.js`). The card renders it as "silent for N minutes", so a per-message disk write bought nothing.
+- **derived state skips the fsync** (`atomicWriteJson(..., { durable: false })`): the usage ledger, today's budget, the per-sender daily quota, life state, affinity history. They either rebuild themselves or may lose minutes. Everything the user owns — reminders, subscriptions, memory, persona, allowlist, contacts, the outbox — keeps the durable default.
+
+Result: blocking writes per message dropped from 4 to 2 (the remaining two are the conversation memory, which genuinely changes). The tradeoff is written down in `src/atomic.js`: `durable: false` is still temp-file + rename, so a reader never sees a torn file; only a power cut in the microseconds before the rename can leave that file empty — acceptable for counters that get overwritten anyway.
+
 ## Compatibility
 
 The plugin rides on the host app's own slot names, its client module loader, and two packages that only exist inside the host. None of that is versioned. The combinations actually verified live in [docs/compatibility.md](docs/compatibility.md); `npm run doctor` prints the host version and says whether it is on the list — which is the first line to read when something worked yesterday and does not today.

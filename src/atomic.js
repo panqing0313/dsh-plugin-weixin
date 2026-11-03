@@ -76,13 +76,23 @@ export function clearTextFileCache(file) {
  *
  * @param {string} file absolute path
  * @param {unknown} value anything `JSON.stringify` accepts
- * @param {{ mode?: number, warn?: (message: string) => void, indent?: string | number }} [options]
+ * @param {{ mode?: number, warn?: (message: string) => void, indent?: string | number, durable?: boolean }} [options]
+ *   `durable` (default true) keeps the fsync before the rename. Pass `false`
+ *   for state that rebuilds itself or that may lose its last minutes without
+ *   consequence (today's counters, derived summaries): the rename is still
+ *   atomic against readers, but a power cut in the microseconds between the
+ *   write and the rename can leave the file empty instead of old-or-new.
+ *   On macOS that fsync costs ~4ms of blocked event loop per write, which is
+ *   the difference between one message being free and one message stalling
+ *   the whole plugin; user-owned facts (reminders, memory, persona, allowlist)
+ *   must keep the default.
  * @returns {boolean} whether the file now holds the new value
  */
 export function atomicWriteJson(file, value, options = {}) {
   const mode = options.mode ?? 0o600
   const warn = options.warn ?? (() => {})
   const indent = options.indent ?? 2
+  const durable = options.durable !== false
   const temp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -91,7 +101,7 @@ export function atomicWriteJson(file, value, options = {}) {
     const handle = fs.openSync(temp, 'w', mode)
     try {
       fs.writeFileSync(handle, `${JSON.stringify(value, null, indent)}\n`)
-      fs.fsyncSync(handle)
+      if (durable) fs.fsyncSync(handle)
     } finally {
       fs.closeSync(handle)
     }

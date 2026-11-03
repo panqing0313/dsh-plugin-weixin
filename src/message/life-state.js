@@ -71,7 +71,7 @@ export function readLifeState(stateRoot, accountId, { warn = noopWarn } = {}) {
 export function writeLifeState(stateRoot, accountId, life, { warn = noopWarn } = {}) {
   try {
     const file = lifeFilePath(stateRoot, accountId);
-    return atomicWriteJson(file, { schemaVersion: 1, ...life }, { warn: (message) => warn(`life state not written (${message})`) });
+    return atomicWriteJson(file, { schemaVersion: 1, ...life }, { warn: (message) => warn(`life state not written (${message})`), durable: false });
   } catch (error) {
     warn(`life state not written (${String(error)})`);
     return false;

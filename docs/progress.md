@@ -4084,3 +4084,18 @@ release run `41485882140` success）。
 - 远程方法 `weixin.usageLedger`（`src/login-remote.js` + `src/client.js` 描述符表）。
 
 **测试**：`test/usage-ledger.test.js` 8 条（单回合落三处桶、每模型拆分与账号隔离、30 天日桶裁剪不改累计、50 个会话淘汰最旧、元与格式在单价缺省时说话的方式、行排序与加总、awareness 行只引用本会话、账本缺失即空账本）；`test/e2e.test.js` 1 条真实往返（假 iLink + 假 agent，断言 `usage-ledger.json` 落盘、回合数与 token 为正、模型写成 `deepseek/deepseek-chat`、路由为 `chat`）；`test/client-remote.test.js` 方法表与源码形状用例。
+
+## 每条消息的阻塞写：先量再改（2026-11-04，1.4.8）
+
+**起因**：用户要求「想想还有没有优化的」。没有先猜，而是写了一个基准：`scripts/bench-inbound.mjs`（`npm run bench`）—— 假 iLink 服务端 + 假 agent，每条消息来自**不同发送者**，这样不会撞上插件「同一会话已有一个回合在等」的闸门（第一次版本就是这么量的，测出来的是拒绝次数，不是工作量；数字漂亮但没意义）。
+
+**量到什么**：每条消息 4 次带 `fsync` 的原子写。`fsync` 在 macOS 上 ~4ms 且同步阻塞事件循环，所以是每条消息约 16ms 的白白阻塞。CPU profile 里 `fsyncSync` 878ms/40 条消息，和这个数字对得上。写的是：`accounts-registry.json`（每条消息重写 `lastSeenAt`）、`usage-ledger.json`、`sender-daily.json`、`budget.json`、会话记忆（这个真的在改内容，保留）。
+
+**改了什么**：
+1. `touchAccount` 节流到每账号每 60 秒一次（`TOUCH_WRITE_INTERVAL_MS`），throttle 键是 `<registry 文件>|<账号>`，所以两套安装不会互相静音；`throttleMs: 0` 可强制写，`resetTouchThrottle()` 给测试用。`lastSeenAt` 的语义因此是「该账号最近一次被写入的分钟」，卡片本来也只显示分钟。
+2. `atomicWriteJson` 增加 `durable`（默认 true）。派生状态传 `durable: false`：用量账本、当日预算、每人每日配额、生活状态、亲密度历史。**仍是临时文件 + rename**，读者永远看不到半截文件；差别只在「写到一半断电」的窗口里这个文件可能是空的。用户自己拥有的东西（提醒/订阅/记忆/人设/白名单/联系人/出站队列）保持默认。
+
+**验证**：`test/durability.test.js` 2 条（默认写必须 fsync、`durable: false` 不 fsync 且文件可读、无残留 tmp；账本/预算/配额三处派生写 0 次 fsync）；`test/account-registry.test.js` 新增 1 条（一分钟内第二次 touch 不写且时间戳不变、超过一分钟会写、不同 state dir 各自节流）；全量 1150/1150。
+基准复测：阻塞写 4.05 → 2.05 次/条。
+
+**教训**：先写基准再动手。第一版基准因为「同会话只允许一个等待回合」测出 6000ms/条这种假数字，如果照着它去优化，会去改一条根本不在热路径上的代码。

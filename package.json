@@ -34,6 +34,7 @@
     "doctor": "node bin/doctor.mjs",
     "onboard": "node bin/onboard.mjs",
     "check": "node bin/check.mjs",
+    "bench": "node scripts/bench-inbound.mjs",
     "vendor": "node bin/vendor-manifest.mjs",
     "i18n": "node bin/i18n-report.mjs",
     "metrics": "node bin/metrics.mjs",

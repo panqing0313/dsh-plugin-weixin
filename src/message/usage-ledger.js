@@ -120,7 +120,9 @@ export function recordUsage(stateRoot, { accountId, conversationId, route = 'cha
     for (const [key] of entries.slice(MAX_LEDGER_CONVERSATIONS)) delete conversations[key]
   }
   accounts[id] = { conversations }
-  atomicWriteJson(ledgerFile(stateRoot), { schemaVersion: USAGE_LEDGER_SCHEMA_VERSION, accounts }, { warn })
+  // The ledger is an estimate that rebuilds its view every time; losing the
+  // last few minutes of it costs nothing an fsync would buy back.
+  atomicWriteJson(ledgerFile(stateRoot), { schemaVersion: USAGE_LEDGER_SCHEMA_VERSION, accounts }, { warn, durable: false })
   return { ok: true, tokensIn, tokensOut }
 }
 

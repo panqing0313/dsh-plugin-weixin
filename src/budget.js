@@ -71,6 +71,7 @@ export function backgroundBudget(stateRoot, { limit, now = new Date(), warn } = 
 export function recordBackgroundCall(stateRoot, { now = new Date(), warn } = {}) {
   const { day, used } = readBudget(stateRoot, { now, warn })
   const next = { schemaVersion: BUDGET_SCHEMA_VERSION, day, used: used + 1 }
-  atomicWriteJson(budgetFile(stateRoot), next, { warn })
+  // Today's counters rebuild themselves; a power cut may lose a few minutes.
+  atomicWriteJson(budgetFile(stateRoot), next, { warn, durable: false })
   return next
 }

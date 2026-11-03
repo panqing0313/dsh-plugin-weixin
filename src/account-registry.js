@@ -48,9 +48,12 @@ export function readRegistry() {
 }
 
 /** Write the whole registry atomically; failure warns but never throws. */
-export function writeRegistry(registry, warn = () => {}) {
+export function writeRegistry(registry, warn = () => {}, options = {}) {
   atomicWriteJson(registryFile(), { schemaVersion: 1, ...registry }, {
     warn: (message) => warn(`dsh-weixin: could not persist the registry: ${message}`),
+    // Settings edits and enrolments keep the default (durable). The last-seen
+    // bookkeeping that runs on every message passes durable: false.
+    durable: options.durable !== false,
   })
 }
 
@@ -71,13 +74,50 @@ export function ensureAccountEntry(registry, accountId) {
   return entry
 }
 
-/** Record that the account just received or sent a message. */
-export function touchAccount(accountId, warn = () => {}) {
-  if (typeof accountId !== 'string' || accountId === '') return
+/**
+ * How often a repeated touch of the same account may rewrite the registry.
+ *
+ * `touchAccount` runs on every accepted message. Rewriting a file with an fsync
+ * each time measured ~4ms of blocked event loop per message, for a timestamp
+ * the card renders as "silent since N minutes". One write a minute per account
+ * is indistinguishable in the UI and free on the hot path.
+ */
+export const TOUCH_WRITE_INTERVAL_MS = 60_000
+
+/** `${registry file}|${accountId}` → when we last persisted a touch. */
+const lastTouchWriteAt = new Map()
+
+/**
+ * Record that the account just received or sent a message.
+ *
+ * Throttled: at most one write per account per {@link TOUCH_WRITE_INTERVAL_MS}.
+ * Pass `throttleMs: 0` to force a write (tests, and callers that just changed
+ * the registry and want lastSeenAt fresh on the same put).
+ *
+ * @param {string} accountId
+ * @param {(message: string) => void} [warn]
+ * @param {{ now?: number, throttleMs?: number }} [options]
+ * @returns {boolean} whether the timestamp was persisted this time
+ */
+export function touchAccount(accountId, warn = () => {}, options = {}) {
+  if (typeof accountId !== 'string' || accountId === '') return false
+  const file = registryFile()
+  const key = `${file}|${accountId}`
+  const now = options.now ?? Date.now()
+  const throttleMs = options.throttleMs ?? TOUCH_WRITE_INTERVAL_MS
+  const previous = lastTouchWriteAt.get(key) ?? 0
+  if (throttleMs > 0 && now - previous < throttleMs) return false
+  lastTouchWriteAt.set(key, now)
   const registry = readRegistry()
   const entry = ensureAccountEntry(registry, accountId)
-  entry.lastSeenAt = new Date().toISOString()
-  writeRegistry(registry, warn)
+  entry.lastSeenAt = new Date(now).toISOString()
+  writeRegistry(registry, warn, { durable: false })
+  return true
+}
+
+/** Forget the throttle state — used by tests that switch state directories. */
+export function resetTouchThrottle() {
+  lastTouchWriteAt.clear()
 }
 
 /**
