@@ -355,6 +355,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `proactiveMinGapMinutes` | `180` | 距对方最后一条消息至少这么久才主动开口；也是没被回应时退避的基数（每次翻倍，最多一天） |
 | `proactiveMaxPerDay` | `3` | 每个账号每天最多主动发几条 |
 | `proactiveWindowStart` | `'09:00'` | 主动开口的时段开始（本地 `HH:mm`），窗外一律不发；填反会回落到默认时段 |
+| `proactiveLearnedWindow` | `true` | 从消息流水里学「对方通常几点在线」，把上面的时段收窄到那一段；只收窄不放宽，样本不足（两周内 20 条）时不启用 |
 | `proactiveWindowEnd` | `'23:00'` | 主动开口的时段结束（本地 `HH:mm`），必须晚于开始 |
 | `quietHoursEnabled` | `false` | 免打扰开关：开着时落在时段内的定时提醒与 /subscribe 主动消息都推迟到时段结束后再发（重新排期，不丢、不重复） |
 | `quietHoursStart` | `'23:00'` | 免打扰开始（本地时间 `HH:mm`）。必须严格早于结束（或跨午夜），两端相等视为未配置 |
@@ -972,8 +973,9 @@ e2e 的 `stickers` 用例断言标记被摘掉、以 `image_item` 发出、`getu
 ——像微信里那种「你在干嘛呀」「我这儿下雨了」。
 
 - 每 5 分钟看一次候选会话（按最近活跃排序），能不能发由**纯函数**决定，顺序是：模式必须是陪聊模式 →
-  在 `proactiveWindowStart`–`proactiveWindowEnd` 之内 → 距对方最后一条消息 ≥ `proactiveMinGapMinutes` →
-  上一次主动没被回应则退避（间隔按 `2^miss` 翻倍，最多 24 小时）→ 今天没超过 `proactiveMaxPerDay` →
+  在 `proactiveWindowStart`–`proactiveWindowEnd` 之内（开了 `proactiveLearnedWindow` 时，还要落在
+  从流水里学到的作息段内）→ 距对方最后一条消息 ≥ `proactiveMinGapMinutes` →
+  上一次主动没被回应则退避（一次没回按 `2^miss` 翻倍；连着两次没回改为 `3^miss`，最多 24 小时）→ 今天没超过 `proactiveMaxPerDay` →
   最后再摇一次骰子（35%），所以它不会像闹钟一样准点出现。
 - 内容由**侧会话**生成：注入人设 + 节奏提示 + 生活状态 + 记忆 + 一段「现在是几点、对方已经多久没说话、
   一两句话、别追问去哪儿、不要说『我主动来找你』」，还会附上你上次发的那条让它别重复。侧会话**不会**产生

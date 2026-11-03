@@ -4,6 +4,7 @@ import { keyedStatePath } from '../state-layout.js'
 import { atomicWriteJson } from '../atomic.js'
 import { parseClockHHmm } from './quiet-hours.js'
 import { formatStamp } from './subscriptions.js'
+import { intersectWindow } from './proactive-timing.js'
 
 /**
  * 「先开口」 — the bot initiating a conversation.
@@ -37,6 +38,12 @@ export const DEFAULT_WINDOW_START = '09:00'
 export const DEFAULT_WINDOW_END = '23:00'
 /** Every unanswered proactive message multiplies the gap by this. */
 export const BACKOFF_FACTOR = 2
+/**
+ * 连着被无视两次之后，下一次等待用这个系数：一次没回是「可能忙」（3 小时→6 小时），
+ * 连着两次没回就该安静很久（6 小时→18 小时，再往上撞一天的封顶）。被无视的代价
+ * 应该比「只是没看见」更大，否则它就成了定时问候。
+ */
+export const IGNORED_BACKOFF_FACTOR = 3
 /** …but never waits longer than a day. */
 export const MAX_BACKOFF_MS = 24 * 60 * 60_000
 /** Probability that a tick which passes every rule actually speaks. */
@@ -115,8 +122,10 @@ function windowOf(config) {
  * @param {object} [params.config]
  * @param {() => number} [params.rng]
  * @param {number} [params.tickChance]
+ * @param {import('./proactive-timing.js').LearnedHours} [params.learned]
+ *   Hours this person actually writes in. Only ever narrows the configured window.
  */
-export function planProactive({ now, state, lastInboundAt, config = {}, rng = Math.random, tickChance = DEFAULT_TICK_CHANCE }) {
+export function planProactive({ now, state, lastInboundAt, config = {}, rng = Math.random, tickChance = DEFAULT_TICK_CHANCE, learned }) {
   if (config.proactiveEnabled !== true) return { fire: false, reason: 'disabled', waitMs: 0 }
 
   const minutesOfDay = (() => {
@@ -128,6 +137,15 @@ export function planProactive({ now, state, lastInboundAt, config = {}, rng = Ma
     return { fire: false, reason: 'outside-window', waitMs: 0 }
   }
 
+  // 从流水里学到的时段只做收窄，不做放宽；两边完全不重合时（比如配置成 09:00–12:00，
+  // 而这个人只在深夜出现）保留配置窗口——宁可照旧，也不要凭十来条样本把人静音。
+  if (config.proactiveLearnedWindow !== false && learned?.ok === true) {
+    const effective = intersectWindow(window, learned)
+    const insideAnything = effective === undefined
+      || effective.ranges.some((range) => minutesOfDay >= range.start && minutesOfDay < range.end)
+    if (!insideAnything) return { fire: false, reason: 'outside-learned-window', waitMs: 0 }
+  }
+
   const minGapMs = Math.max(1, Number(config.proactiveMinGapMinutes ?? DEFAULT_MIN_GAP_MINUTES)) * 60_000
   if (Number.isFinite(lastInboundAt) && lastInboundAt > 0) {
     const sinceInbound = now - lastInboundAt
@@ -137,7 +155,8 @@ export function planProactive({ now, state, lastInboundAt, config = {}, rng = Ma
   }
 
   const misses = Math.max(0, Number(state?.misses ?? 0))
-  const backoffMs = Math.min(minGapMs * Math.pow(BACKOFF_FACTOR, misses), Math.max(minGapMs, MAX_BACKOFF_MS))
+  const factor = misses >= 2 ? IGNORED_BACKOFF_FACTOR : BACKOFF_FACTOR
+  const backoffMs = Math.min(minGapMs * Math.pow(factor, misses), Math.max(minGapMs, MAX_BACKOFF_MS))
   const lastAt = Number(state?.lastAt ?? 0)
   if (lastAt > 0 && now - lastAt < backoffMs) {
     return { fire: false, reason: 'backoff', waitMs: backoffMs - (now - lastAt) }
@@ -256,6 +275,7 @@ export class ProactiveScheduler {
           config,
           rng: this.#rng,
           tickChance: this.#tickChance,
+          ...(candidate.learned === undefined ? {} : { learned: candidate.learned }),
         })
         lastReason = plan.reason
         if (!plan.fire) continue

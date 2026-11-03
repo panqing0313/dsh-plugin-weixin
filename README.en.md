@@ -361,6 +361,7 @@ The `config` of that line in `cordis.patch.yml`:
 | `proactiveMinGapMinutes` | `180` | At least this long since the other side's last message before it may speak first; also the base for the backoff when unanswered (doubles each time, up to one day) |
 | `proactiveMaxPerDay` | `3` | Maximum number of proactive messages per account per day |
 | `proactiveWindowStart` | `'09:00'` | Start of the speaking window (local `HH:mm`); nothing is sent outside it, and a reversed window falls back to the default |
+| `proactiveLearnedWindow` | `true` | Learn the hours the other person actually writes from the journal and narrow the window above to them; narrows only, and stays off until two weeks hold 20 inbound messages |
 | `proactiveWindowEnd` | `'23:00'` | End of the speaking window (local `HH:mm`); must be later than the start |
 | `quietHoursEnabled` | `false` | Do-not-disturb switch: while on, scheduled reminders and /subscribe proactive messages that fall inside the window are deferred until it ends (rescheduled — never lost, never duplicated) |
 | `quietHoursStart` | `'23:00'` | Quiet hours start (local `HH:mm`). Must be strictly earlier than the end (or cross midnight); equal ends are treated as unconfigured |

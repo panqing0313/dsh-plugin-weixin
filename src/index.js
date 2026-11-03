@@ -160,6 +160,7 @@ import { describeUnknownItems, firstSighting } from './message/unknown-items.js'
 import { statePaths } from './state-layout.js'
 import { createMemorySummarizer } from './memory-summarizer.js'
 import { ProactiveScheduler, readProactiveState } from './message/proactive.js'
+import { describeLearnedHours, learnActiveHours } from './message/proactive-timing.js'
 import { recordPromptComposition } from './message/prompt-composition.js'
 import { MAX_STICKERS_PER_REPLY, stickerPath, takeStickers } from './message/stickers.js'
 import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './message/style-feedback.js'
@@ -297,6 +298,7 @@ export const Config = z.object({
   proactiveMaxPerDay: z.number().min(1).max(24).default(3).description('每个账号每天最多主动发几条。'),
   proactiveWindowStart: z.string().default('09:00').description('主动消息的时间窗开始，HH:mm；窗外（含夜里）一律不发。'),
   proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
+  proactiveLearnedWindow: z.boolean().default(true).description('从消息流水里学「对方通常几点在线」，把主动消息的时间窗收窄到那段（只收窄，不放宽；样本不够时不启用）。'),
   groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
   groupReplyWhen: z.string().default('mention').description('群里什么时候回：mention 只答被叫到的时候，all 每条都答。iLink 不给 @ 列表，因此按首行里的机器人名字匹配。'),
   groupBotNames: z.string().default('').description('群里额外的称呼，用逗号分隔。iLink 不提供机器人的群昵称，想让「@小助手」生效就得在这里写上它。'),
@@ -962,6 +964,8 @@ export function apply(ctx, config) {
           const live = withSavedConfig(config)
           const modes = readPersonaStore(stateRoot, { warn })
           const out = []
+          // 作息只跟账号有关，不跟会话有关：一个 tick 里每个账号算一次。
+          const learnedByAccount = new Map()
           for (const accountId of transports.keys()) {
             // 临时静默期间不参与候选：连判断都不做，自然不花 token。
             if (tempQuietDelay(Date.now(), stateRoot, accountId, { warn }) > 0) continue
@@ -972,11 +976,17 @@ export function apply(ctx, config) {
                 activeModeFor(stateRoot, accountId, conv.conversationId, live.personaDefaultMode ?? DEFAULT_MODE_ID, { warn }),
               )
               if (!isCompanionMode(mode)) continue
+              if (!learnedByAccount.has(accountId)) {
+                // 从已有的日流水里现算，不落盘：删掉流水它就忘掉。
+                const at = Date.now()
+                learnedByAccount.set(accountId, learnActiveHours(readJournalRange(stateRoot, { accountId, days: 14, now: at }), { now: at }))
+              }
               out.push({
                 accountId,
                 conversationId: conv.conversationId,
                 mode,
                 lastInboundAt: Number(conv.bond?.lastMessageAt ?? 0),
+                learned: learnedByAccount.get(accountId),
               })
             }
           }
@@ -1807,6 +1817,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           version: PLUGIN_VERSION,
           accountId,
           transportUp: transport !== undefined,
+          proactiveWindow: describeLearnedHours(learnActiveHours(readJournalRange(stateRoot, { accountId, days: 14 }), {})),
           modeName: current?.name ?? currentId,
           companion: isCompanionMode(current),
           config: live,

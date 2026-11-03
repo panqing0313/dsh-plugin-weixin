@@ -41,7 +41,7 @@ export const CONFIG_EFFECTS = Object.freeze({
   'memoryRecentTurns': 'live', 'memoryRecall': 'live', 'memoryRecallDays': 'live', 'memoryRecallHits': 'live', 'knowledgeEnabled': 'live', 'knowledgeHits': 'live', 'humanPacing': 'live',
   'replyDelayMaxMs': 'live', 'bubbleSplitMax': 'live', 'bubbleGapMs': 'live', 'lifeState': 'live', 'stickerEnabled': 'live',
   'stickerKeepBuiltins': 'live',
-  'proactiveEnabled': 'live', 'proactiveMinGapMinutes': 'live', 'proactiveMaxPerDay': 'live', 'proactiveWindowStart': 'live', 'proactiveWindowEnd': 'live',
+  'proactiveEnabled': 'live', 'proactiveMinGapMinutes': 'live', 'proactiveMaxPerDay': 'live', 'proactiveWindowStart': 'live', 'proactiveWindowEnd': 'live', 'proactiveLearnedWindow': 'live',
   'groupChatEnabled': 'live', 'groupReplyWhen': 'live', 'groupBotNames': 'live', 'groupKeywords': 'live', 'packsIndexUrl': 'live',
   'groupShareMemory': 'live', 'videoFrames': 'live', 'richContent': 'live', 'codeFileThreshold': 'live', 'locale': 'live',
   'toolNotices': 'live', 'quietHoursEnabled': 'live', 'quietHoursStart': 'live', 'quietHoursEnd': 'live', 'senderRatePerMinute': 'live',

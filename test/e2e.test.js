@@ -79,7 +79,13 @@ const ALLOWED = 'wxid_abc'
  */
 function createFakeAgents({ reply, tools }) {
   const agents = new Map()
+  // The prompts this fake agent was handed, in order. Tests that assert on what
+  // the plugin BUILT read this instead of the outbound bubble: a reply has to
+  // survive pacing, stickers and the outbox before it shows up as `sent`, while
+  // the prompt is here the moment the inbound path runs.
+  const prompts = []
   return {
+    prompts,
     get: (id) => agents.get(id),
     resume: async ({ resumeSessionId }) => {
       let seq = 0
@@ -89,6 +95,7 @@ function createFakeAgents({ reply, tools }) {
         session: { id: resumeSessionId, snapshotEvents: () => events },
         inbox: { clear() {} },
         followup(message) {
+          prompts.push(message.content[0].text)
           ev('user/message', { message })
           ev('turn/start', {})
           setTimeout(() => {
@@ -1462,23 +1469,23 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
 
       const disposers = []
       const warnings = []
+      const fakeAgents = createFakeAgents({ reply: 'pong: ' })
       const ctx = {
         logger: { info: () => {}, warn: (l) => warnings.push(l) },
         effect(fn) { disposers.push(fn()); return { dispose() {} } },
-        get: (name) => (name === 'agents' ? createFakeAgents({ reply: 'pong: ' }) : undefined),
+        get: (name) => (name === 'agents' ? fakeAgents : undefined),
       }
       plugin.apply(ctx, config)
 
-      // Waiting for the second answer is only a safety net: the assertions below
-      // are about what the PROMPT contains, not about how fast the machine is.
-      // The whole file runs beside a dozen other files that each spin up real
-      // host sessions, so the wall clock here is a measure of the runner, not of
-      // the plugin — 10s was enough idle, 60s was not always enough loaded, and
-      // the failure message prints `waited` so a real slowdown stays visible.
+      // This waits on the prompts the fake agent received, not on the replies the
+      // server saw: an answer has to survive pacing, sticker stripping and the
+      // outbox before it counts as `sent`, and any of those can park it for
+      // minutes while the plugin itself is long done. The prompt is the thing
+      // under test, and it is in hand as soon as the inbound path runs.
       const startedWaiting = Date.now()
-      const deadline = startedWaiting + 150_000
-      while (sent.length < 2 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50))
+      const deadline = startedWaiting + 20_000
+      while (fakeAgents.prompts.length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
       }
       // How long the second poll took to get an answer. If this ever climbs
       // near the deadline again, the number says whether it was the machine or
@@ -1488,10 +1495,10 @@ test('persona + memory: the prompt carries the mode block and the stored facts; 
       await new Promise((resolve) => setTimeout(resolve, 100))
       server.close()
 
-      const progress = `memoryEnabled=${memoryEnabled}; sent=${sent.length} after ${waited}s; getupdates=${seen.getupdates}; delivered=${seen.delivered}; warnings: ${warnings.join(' | ') || 'none'}`
-      assert.ok(sent.length >= 2, `expected two replies — ${progress}`)
-      const prompt = sent[0].msg.item_list[0].text_item.text
-      const warmPrompt = sent[1].msg.item_list[0].text_item.text
+      const progress = `memoryEnabled=${memoryEnabled}; prompts=${fakeAgents.prompts.length} after ${waited}s; sent=${sent.length}; getupdates=${seen.getupdates}; delivered=${seen.delivered}; warnings: ${warnings.join(' | ') || 'none'}`
+      assert.ok(fakeAgents.prompts.length >= 2, `expected two prompts — ${progress}`)
+      const prompt = fakeAgents.prompts[0]
+      const warmPrompt = fakeAgents.prompts[1]
       if (memoryEnabled) {
         // Persona first, then memory, then the user text — one tag each.
         const personaAt = prompt.indexOf('<weixin_persona mode="女友">')

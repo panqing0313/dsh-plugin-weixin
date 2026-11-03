@@ -665,6 +665,15 @@ export const FIELDS = [
           hint: "HH:mm，必须晚于开始时间；填反了会回落到默认的 09:00–23:00。",
           hintEn: "HH:mm, later than the start; an inverted window falls back to 09:00–23:00.",
         },
+        {
+          path: "proactiveLearnedWindow",
+          type: T.boolean,
+          default: true,
+          label: "按作息收窄时段",
+          labelEn: "Narrow by when you write",
+          hint: "从消息流水里看对方通常几点在线，把上面的时段收窄到那一段（只收窄、不放宽；样本不足两周 20 条时不启用）。",
+          hintEn: "Learn the hours the other person actually writes from the journal and narrow the window above to them (narrow only; off until 14 days hold 20 inbound messages).",
+        },
       ],
     },
     {

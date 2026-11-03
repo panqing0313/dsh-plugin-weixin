@@ -30,6 +30,7 @@ function clock(ms) {
  * @param {number} [input.reminders]
  * @param {number} [input.subscriptions]
  * @param {{ count?: number, lastAt?: number, misses?: number }} [input.proactive]
+ * @param {string} [input.proactiveWindow] one line from describeLearnedHours()
  * @param {number} [input.journalToday]
  * @param {number} [input.conversations]
  * @param {number} [input.allowlist]
@@ -63,6 +64,9 @@ export function buildDiagReport(input) {
     const cap = config.proactiveMaxPerDay ?? 3
     const last = proactive.lastAt === undefined ? '无' : clock(proactive.lastAt)
     lines.push(`主动开口：今天 ${proactive.count ?? 0}/${cap} 条 · 上次 ${last} · 连发未回 ${proactive.misses ?? 0} 次`)
+    if (typeof input.proactiveWindow === 'string' && input.proactiveWindow !== '') {
+      lines.push(`主动时段：${input.proactiveWindow}`)
+    }
   }
 
   lines.push(

@@ -210,3 +210,73 @@ test('describePlan turns a refusal into one readable line', () => {
   assert.equal(describePlan({ fire: true, reason: 'ok', waitMs: 0 }), 'proactive message: yes')
   assert.match(describePlan({ fire: false, reason: 'too-soon', waitMs: 90 * 60_000 }), /too-soon.*90 分钟/)
 })
+
+test('a learned window narrows the configured one, and never widens it', () => {
+  const learned = { ok: true, startHour: 19, endHour: 22, wraps: false, samples: 40, dayCount: 9, share: 0.8 }
+
+  // 20:00 is inside both windows: the learning does not change the answer.
+  const evening = planProactive({ now: at(20), state: null, lastInboundAt: at(1), config: ENABLED, rng: () => 0, learned })
+  assert.equal(evening.fire, true)
+
+  // 14:00 is inside the configured window but outside the learned one.
+  const afternoon = planProactive({ now: at(14), state: null, lastInboundAt: at(1), config: ENABLED, rng: () => 0, learned })
+  assert.equal(afternoon.fire, false)
+  assert.equal(afternoon.reason, 'outside-learned-window')
+
+  // Switching it off puts the configured window back in charge.
+  const off = planProactive({
+    now: at(14),
+    state: null,
+    lastInboundAt: at(1),
+    config: { ...ENABLED, proactiveLearnedWindow: false },
+    rng: () => 0,
+    learned,
+  })
+  assert.equal(off.fire, true)
+})
+
+test('a learned band that misses the window leaves the config in charge', () => {
+  // The person writes at 01:00–03:00; the window is 09:00–23:00. Something is
+  // wrong with the picture, and the safe reading is "keep doing what you did".
+  const learned = { ok: true, startHour: 1, endHour: 4, wraps: false, samples: 30, dayCount: 8, share: 0.7 }
+  const plan = planProactive({ now: at(10), state: null, lastInboundAt: at(1), config: ENABLED, rng: () => 0, learned })
+  assert.equal(plan.fire, true)
+})
+
+test('a night-owl band keeps both of its halves', () => {
+  // The configured window has to cover the small hours for this to matter at
+  // all: the window is checked first, and 09:00–23:00 already excludes 02:00.
+  const WIDE = { ...ENABLED, proactiveWindowStart: '00:00', proactiveWindowEnd: '23:00' }
+  const learned = { ok: true, startHour: 22, endHour: 3, wraps: true, samples: 30, dayCount: 8, share: 0.75 }
+
+  const lateEvening = planProactive({ now: at(22, 30), state: null, lastInboundAt: at(1), config: WIDE, rng: () => 0, learned })
+  assert.equal(lateEvening.fire, true, 'the evening half is inside')
+  const smallHours = planProactive({ now: at(2), state: null, lastInboundAt: at(20, 0, 25), config: WIDE, rng: () => 0, learned })
+  assert.equal(smallHours.fire, true, 'and so is the 02:00 half')
+  const midday = planProactive({ now: at(13), state: null, lastInboundAt: at(1), config: WIDE, rng: () => 0, learned })
+  assert.equal(midday.reason, 'outside-learned-window')
+
+  const narrow = planProactive({ now: at(2), state: null, lastInboundAt: at(20, 0, 25), config: ENABLED, rng: () => 0, learned })
+  assert.equal(narrow.reason, 'outside-window', 'the configured window still comes first')
+})
+
+test('data that is not ready yet changes nothing', () => {
+  for (const learned of [undefined, { ok: false, reason: 'not-enough-data', samples: 5, dayCount: 2 }]) {
+    const plan = planProactive({ now: at(14), state: null, lastInboundAt: at(1), config: ENABLED, rng: () => 0, learned })
+    assert.equal(plan.fire, true, 'the configured window still decides')
+  }
+})
+
+test('being ignored twice costs far more than being busy once', () => {
+  const base = 3 * 60 * 60_000
+  const lastAt = at(10)
+  const sevenHoursLater = lastAt + 7 * 3_600_000
+
+  const oneMiss = planProactive({ now: sevenHoursLater, state: { lastAt, misses: 1 }, lastInboundAt: 0, config: ENABLED, rng: () => 0 })
+  assert.equal(oneMiss.fire, true, 'one unanswered message waits 6 hours, so 7 is enough')
+
+  const twoMisses = planProactive({ now: sevenHoursLater, state: { lastAt, misses: 2 }, lastInboundAt: 0, config: ENABLED, rng: () => 0 })
+  assert.equal(twoMisses.reason, 'backoff', 'the second unanswered message keeps it quiet')
+  assert.ok(twoMisses.waitMs > 6 * 3_600_000, `and the wait is much longer than doubling (${twoMisses.waitMs})`)
+  assert.ok(twoMisses.waitMs <= 24 * 3_600_000, 'still capped at a day')
+})

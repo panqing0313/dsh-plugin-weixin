@@ -3953,3 +3953,13 @@ release run `41485882140` success）。
 - `/draft` 命令（persona bundle）：不带参数只念草稿、`send` 发出去并清空、`换一句` 轮换、`skip` 丢掉；发送失败时草稿保留并说明原因。`helpRank` 32。
 - 关键取舍：`/draft` 不带参数**不重拟**——「看一眼」和「换一句」是两个意图，混在一起会让你正要看的那句被换掉。
 - 测试：`test/drafts.test.js` 7 条（模板分支、轮换回环、清理与超长拒绝、36 小时过期与账号隔离、`composeReminder` 有/无草稿、命令四态含发送失败保留、无日子时不臆造）；`test/session-commands.test.js` 一条端到端（种子草稿 → `/draft` 念出 → `/draft send` 收到同一句 → 再 send 提示没有草稿，全程不开会话）。
+
+## 主动开口学会看作息（2026-11-03，1.4.4 item 3）
+
+原来只有配置窗口 + 5 分钟一掷，不看这个人实际什么时候在线。这一项让它从流水里学。
+
+- 新增 `src/message/proactive-timing.js`：`hourlyHistogram()` 只数 `dir: 'in'` 且落在最近 14 天内的条目；`learnActiveHours()` 要求 ≥20 条、≥4 天，否则返回 `not-enough-data`（`no-activity` 单独区分）；`busiestBand()` 找最活跃的连续 8 小时，支持跨零点（22:00–03:00）；`intersectWindow()` 返回**若干段**（跨零点时可能是两段），`describeLearnedHours()` 给 `/diag` 一行中文说明。
+- `src/message/proactive.js`：`planProactive()` 接 `learned`，在配置窗口判定之后再做一次「学到的时段」判定，失败原因记为 `outside-learned-window`；`intersectWindow` 为空（两边不重合）时保持配置窗口原样。退避系数：`misses >= 2` 时从 `2^miss` 改成 `3^miss`（封顶仍 24 小时），区分「一次忙」与「连着不理」。
+- `src/index.js`：`candidates()` 每个账号每 tick 用 `learnActiveHours(readJournalRange(..., days: 14))` 现算一次（不落盘）；新增配置 `proactiveLearnedWindow`（默认 `true`）；`/diag` 增加「主动时段」一行。
+- 设置卡「主动开口」组加「按作息收窄时段」开关；`src/config-effect.js` 标 `live`。
+- 测试：`test/proactive-timing.test.js` 6 条（直方图只数入站与窗口、样本不足两种原因、最忙时段与跨零点、交集只收窄/不重合/跨零点两段、说明文案、真实两周作息）；`test/proactive.test.js` 新增 5 条（收窄与关闭开关、不重合照旧、夜猫子两半、数据未就绪不改、被无视两次代价更大）。
