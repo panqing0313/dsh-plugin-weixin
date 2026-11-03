@@ -36,7 +36,7 @@ macOS `/usr/local/bin/python3.14` has it when the Homebrew one does not.
 import sys
 
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+    from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 except ModuleNotFoundError:  # the one thing that stops this script cold
     sys.stderr.write(
         "make-stickers needs Pillow: %s -m pip install Pillow\n"
@@ -57,9 +57,9 @@ CW, CH = W * SS, H * SS
 # --- figure skeleton, in final-image pixels (y grows downwards) -------------
 CX = 180.0                  # centre line
 FOOT_Y = 336.0              # baseline: feet, and the anchor every figure scales from
-HEAD_CY = 91.0
-HEAD_RX = 38.0
-HEAD_RY = 43.0              # head is 86 tall; body is ~202 -> ratio 1:2.35
+HEAD_CY = 96.0              # mascot head: bigger and rounder than a human one
+HEAD_RX = 52.0
+HEAD_RY = 47.0              # head is 94 tall; body is ~206 -> ratio 1:2.19
 NECK_Y = 133.0
 SHOULDER_Y = 144.0
 SHOULDER_X = 50.0           # half distance between shoulder joints
@@ -70,9 +70,9 @@ HIP_X = 44.0
 FOOT_X = 17.0
 
 # --- palette -----------------------------------------------------------------
-INK = (54, 46, 42, 255)
-HAIR_INK = (44, 36, 40, 255)
-SHADE_A = (40, 30, 34, 40)      # right-side shading, translucent
+INK = (34, 48, 107, 255)       # deep navy lineart everywhere, never pure black
+HAIR_INK = (34, 48, 107, 255)
+SHADE_A = (34, 48, 107, 40)      # right-side shading, translucent
 LIGHT_A = (255, 255, 255, 56)   # top-left highlight, translucent
 BLUSH = (255, 148, 162, 120)
 
@@ -93,93 +93,73 @@ def lighten(c, k=0.30):
 # ============================================================================
 # CHARACTERS — one look per companion mode
 # ============================================================================
-# skin, hair, hair2, style, top, top2 (accent/cuff), bottom, shoe, acc, scale, bottom_kind
+# Every mode is the SAME whale. Body, belly and outline colours are fixed so all
+# 68 stickers read as one mascot; only the outfit tags and the accent colours
+# change. Daughter is the small one, boyfriend / jarvis / oneesan the tall ones —
+# the proportions never change, only the scale.
+#   skin  = belly / light colour      hair  = headwear + accent colour
+#   hair2 = second accent             top   = garment (cap / scarf / jacket)
+#   top2  = garment trim              bottom / shoe = fin + flipper tip tint
+#   acc   = accessory tags            scale = overall size
+#   lip   = blush colour (None = the default pink)
+BODY_BLUE = (77, 107, 254, 255)
+BODY_DEEP = (40, 62, 178, 255)
+BELLY_WHITE = (234, 241, 255, 255)
+OUTLINE_BLUE = (34, 48, 107, 255)
+GLOW_BLUE = (150, 205, 255, 255)
+WHALE_PINK = (255, 150, 178, 255)
+WHALE_MINT = (86, 178, 150, 255)
+WHALE_WARM = (244, 196, 140, 255)
+WHALE_SKY = (96, 196, 255, 255)
+
+
+def _whale(label, acc, hair=None, hair2=None, top=None, top2=None, shoe=None,
+           scale=1.0, lip=None):
+    """One row of CHARACTERS: the fixed whale wearing one outfit."""
+    hair = hair or BODY_BLUE
+    return dict(label=label, skin=BELLY_WHITE, hair=hair, hair2=hair2 or hair,
+                style='whale', top=top or BODY_BLUE, top2=top2 or BELLY_WHITE,
+                bottom=BODY_DEEP, shoe=shoe or BELLY_WHITE, sleeve=hair,
+                acc=list(acc), scale=scale, bottom_kind='tail', lip=lip)
+
+
 CHARACTERS = {
-    # The shared packs are available in every mode, so they belong to no mode:
-    # a neutral companion in a mint top with a soft brown bob.
-    'default': dict(
-        label='通用', skin=(255, 224, 205, 255), hair=(96, 76, 66, 255), hair2=None,
-        style='bob', top=(150, 214, 190, 255), top2=(120, 182, 160, 255),
-        bottom=(108, 138, 186, 255), shoe=(84, 70, 66, 255), acc=[], scale=1.0,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'neko': dict(
-        label='猫娘', skin=(255, 228, 212, 255), hair=(178, 152, 232, 255), hair2=(226, 196, 246, 255),
-        style='bob', top=(198, 204, 250, 255), top2=(160, 166, 224, 255),
-        bottom=(112, 106, 152, 255), shoe=(74, 66, 100, 255),
-        acc=['cat_ears', 'cat_tail', 'whiskers', 'fangs'], scale=0.985,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'whale-girl': dict(
-        label='鲸鱼娘', skin=(255, 232, 218, 255), hair=(118, 190, 236, 255), hair2=(176, 224, 248, 255),
-        style='bob', top=(190, 232, 248, 255), top2=(142, 200, 228, 255),
-        bottom=(86, 142, 180, 255), shoe=(70, 106, 140, 255),
-        acc=['whale_hood', 'drop', 'blowhole'], scale=0.985,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'daughter': dict(
-        label='闺女', skin=(255, 230, 216, 255), hair=(228, 168, 122, 255), hair2=(250, 206, 168, 255),
-        style='twin_tails', top=(255, 205, 218, 255), top2=(250, 240, 240, 255),
-        bottom=(170, 196, 232, 255), shoe=(228, 120, 140, 255),
-        acc=['bow', 'round_cheeks'], scale=0.84,
-        bottom_kind='dress', sleeve='puff', lip=None),
-
-    'girlfriend': dict(
-        label='女友', skin=(255, 226, 210, 255), hair=(76, 56, 52, 255), hair2=(122, 88, 78, 255),
-        style='long_straight', top=(250, 214, 208, 255), top2=(232, 186, 182, 255),
-        bottom=(168, 150, 188, 255), shoe=(150, 122, 140, 255),
-        acc=['earring', 'knit'], scale=0.99,
-        bottom_kind='skirt', sleeve='long', lip=None),
-
-    'boyfriend': dict(
-        label='男友', skin=(255, 226, 202, 255), hair=(52, 44, 50, 255), hair2=(96, 86, 92, 255),
-        style='short', top=(142, 178, 216, 255), top2=(112, 146, 186, 255),
-        bottom=(70, 76, 100, 255), shoe=(48, 44, 52, 255),
-        acc=['collar'], scale=1.03,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'friend': dict(
-        label='朋友', skin=(255, 226, 200, 255), hair=(100, 76, 60, 255), hair2=(140, 110, 88, 255),
-        style='messy', top=(126, 198, 180, 255), top2=(246, 246, 244, 255),
-        bottom=(96, 106, 124, 255), shoe=(238, 238, 236, 255),
-        acc=['cap', 'hood'], scale=1.0,
-        bottom_kind='pants', sleeve='short', lip=None),
-
-    'jarvis': dict(
-        label='贾维斯', skin=(250, 228, 208, 255), hair=(44, 42, 58, 255), hair2=(86, 92, 120, 255),
-        style='slick', top=(40, 48, 70, 255), top2=(122, 200, 244, 255),
-        bottom=(32, 38, 56, 255), shoe=(28, 30, 44, 255),
-        acc=['suit', 'bowtie', 'glow', 'headset'], scale=1.0,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'oneesan': dict(
-        label='御姐', skin=(255, 224, 208, 255), hair=(58, 44, 48, 255), hair2=(96, 74, 78, 255),
-        style='wavy_long', top=(200, 74, 92, 255), top2=(246, 240, 240, 255),
-        bottom=(62, 56, 68, 255), shoe=(150, 62, 76, 255),
-        acc=['lapel', 'earring', 'heels'], scale=1.0,
-        bottom_kind='skirt', sleeve='long', lip=(226, 74, 92, 255)),
-
-    'big-sister': dict(
-        label='大姐姐', skin=(255, 228, 208, 255), hair=(112, 72, 54, 255), hair2=(160, 116, 90, 255),
-        style='low_ponytail', top=(240, 198, 152, 255), top2=(214, 168, 124, 255),
-        bottom=(208, 168, 128, 255), shoe=(150, 116, 92, 255),
-        acc=['knit'], scale=1.0,
-        bottom_kind='long_skirt', sleeve='long', lip=None),
-
-    'warm-guy': dict(
-        label='暖男', skin=(255, 228, 204, 255), hair=(84, 66, 58, 255), hair2=(130, 106, 92, 255),
-        style='soft_short', top=(222, 172, 122, 255), top2=(196, 146, 100, 255),
-        bottom=(122, 112, 106, 255), shoe=(92, 74, 64, 255),
-        acc=['scarf', 'glasses'], scale=1.01,
-        bottom_kind='pants', sleeve='long', lip=None),
-
-    'tsundere': dict(
-        label='傲娇', skin=(255, 226, 208, 255), hair=(242, 214, 150, 255), hair2=(240, 140, 172, 255),
-        style='two_tone', top=(242, 242, 246, 255), top2=(96, 120, 172, 255),
-        bottom=(74, 78, 108, 255), shoe=(88, 76, 84, 255),
-        acc=['tie', 'collar'], scale=0.97,
-        bottom_kind='skirt', sleeve='long', lip=None),
+    # The shared packs show in every mode, so they belong to no mode: the plain
+    # whale, wearing nothing at all.
+    'default': _whale('大肥鱼', []),
+    # girl / boy / friend / assistant / the big sisters and brothers
+    'girlfriend': _whale('女友鱼', ['bow', 'knit', 'lashes'], hair=WHALE_PINK,
+                         top=(255, 196, 214, 255), top2=WHALE_PINK, scale=0.99,
+                         lip=(255, 150, 178, 165)),
+    'boyfriend': _whale('男友鱼', ['collar', 'tie'], hair=(70, 96, 230, 255),
+                        top=(226, 234, 255, 255), top2=(70, 96, 230, 255),
+                        scale=1.04),
+    'friend': _whale('朋友鱼', ['cap'], hair=WHALE_MINT, top=WHALE_MINT,
+                     top2=(58, 140, 118, 255), scale=1.0),
+    'jarvis': _whale('贾维斯鱼', ['headset', 'visor', 'glow', 'bowtie'],
+                     hair=(52, 66, 128, 255), top=(52, 66, 128, 255),
+                     top2=GLOW_BLUE, scale=1.03),
+    'oneesan': _whale('御姐鱼', ['pearls', 'lashes', 'lapel'],
+                      hair=(206, 52, 84, 255), top=(206, 52, 84, 255),
+                      top2=BELLY_WHITE, scale=1.04, lip=(226, 74, 108, 175)),
+    'big-sister': _whale('大姐姐鱼', ['scarf'], hair=WHALE_WARM, top=WHALE_WARM,
+                         top2=(216, 160, 108, 255), scale=1.0),
+    'warm-guy': _whale('暖男鱼', ['glasses', 'scarf'], hair=(126, 156, 238, 255),
+                       top=(255, 209, 178, 255), top2=(228, 174, 140, 255),
+                       scale=1.03),
+    'daughter': _whale('闺女鱼', ['bow', 'tuft'], hair=WHALE_PINK,
+                       top=(255, 196, 214, 255), top2=WHALE_PINK, scale=0.88,
+                       lip=(255, 150, 178, 150)),
+    'neko': _whale('猫娘鱼', ['cat_ears', 'cat_tail', 'whiskers'],
+                   hair=(124, 112, 236, 255), top=(150, 140, 250, 255),
+                   top2=WHALE_PINK, scale=0.98),
+    'whale-girl': _whale('鲸鱼娘鱼', ['bib', 'drop', 'blowhole'], hair=WHALE_SKY,
+                         top=WHALE_SKY, top2=BELLY_WHITE, scale=0.99),
+    'tsundere': _whale('傲娇鱼', ['tie', 'band'], hair=(255, 214, 130, 255),
+                       top=(246, 248, 255, 255), top2=(90, 110, 220, 255),
+                       scale=0.97),
 }
+
 
 # ============================================================================
 # ARM POSES — (upper arm angle, forearm angle), degrees, 0 = straight down,
@@ -194,7 +174,7 @@ A = {
     'reach': (96, 120),
     'chest': (26, -66),
     'hug': dict(t1=34, t2=-30, l1=42, l2=44),
-    'clap': dict(t1=-10, t2=-125, l1=42, l2=42),
+    'clap': dict(t1=-6, t2=-118, l1=44, l2=40),
     'support': dict(t1=24, t2=24, l1=46, l2=48),
     'ledge': dict(t1=22, t2=6, l1=44, l2=46),
     'heart': (32, -72),
@@ -711,545 +691,642 @@ def hand_points(spec):
 # ============================================================================
 # body
 # ============================================================================
-def draw_legs(d, t, ch):
-    top = ch['top']
-    bottom = ch['bottom']
-    kind = ch['bottom_kind']
-    skin = ch['skin']
-    shoe = ch['shoe']
-
-    if kind in ('skirt', 'dress', 'long_skirt'):
-        hem = {'skirt': 300.0, 'dress': 296.0, 'long_skirt': 322.0}[kind]
-        spread = {'skirt': 54.0, 'dress': 52.0, 'long_skirt': 44.0}[kind]
-        # bare legs under the hem
-        for s in (-1, 1):
-            limb(d, t, [(CX + s * 15, 268), (CX + s * 16, 322)], 15, skin)
-        for s in (-1, 1):
-            ell(d, t, (CX + s * 16 - 15, 320, CX + s * 16 + 15, 340), fill=shoe, outline=INK)
-        if kind == 'dress':
-            body_pts = [(CX - WAIST_X, WAIST_Y - 2), (CX + WAIST_X, WAIST_Y - 2),
-                        (CX + 30, 200), (CX - 30, 200)]
-            ink_shape(d, t, body_pts, ch['top2'],
-                      shade_pts=[(CX + 8, 200), (CX + 30, 200), (CX + 30, 300), (CX + 8, 300)][::-1])
-        skirt_pts = [(CX - WAIST_X, WAIST_Y - 4), (CX + WAIST_X, WAIST_Y - 4),
-                     (CX + spread, hem), (CX - spread, hem)]
-        ink_shape(d, t, skirt_pts, ch['top'],
-                  shade_pts=[(CX + 6, WAIST_Y), (CX + WAIST_X, WAIST_Y),
-                             (CX + spread, hem), (CX + 6, hem)],
-                  light_pts=[(CX - WAIST_X + 8, WAIST_Y + 6), (CX - 12, WAIST_Y + 6),
-                             (CX - 20, hem - 6), (CX - spread + 6, hem - 6)])
-    else:
-        if kind == 'pants':
-            for s in (-1, 1):
-                limb(d, t, [(CX + s * 16, 238), (CX + s * 17, 322)], 26, bottom)
-            for s in (-1, 1):
-                rrect(d, t, (CX + s * 17 - 19, 318, CX + s * 17 + 17, 340), 8,
-                      fill=shoe, outline=INK)
-        if kind == 'dress':
-            pass
-
-
-def draw_torso(d, t, ch):
-    top = ch['top']
-    top2 = ch['top2']
-    kind = ch['bottom_kind']
-    if kind == 'dress':
-        return                                   # the dress covers the whole torso
-    if kind == 'long_skirt':
-        bottom = ch['bottom']
-        pts = [(CX - SHOULDER_X + 2, SHOULDER_Y - 6), (CX + SHOULDER_X - 2, SHOULDER_Y - 6),
-               (CX + WAIST_X, WAIST_Y), (CX + 40, 340), (CX - 40, 340), (CX - WAIST_X, WAIST_Y)]
-        ink_shape(d, t, pts, top,
-                  shade_pts=[(CX + 8, SHOULDER_Y), (CX + SHOULDER_X - 2, SHOULDER_Y - 6),
-                             (CX + WAIST_X, WAIST_Y), (CX + 40, 340), (CX + 8, 340)],
-                  light_pts=[(CX - SHOULDER_X + 12, SHOULDER_Y), (CX - 16, SHOULDER_Y),
-                             (CX - WAIST_X + 6, WAIST_Y), (CX - 22, 338), (CX - 38, 338)])
-        # sleeve caps read as a knit cardigan
-        for s in (-1, 1):
-            arc(d, t, (CX + s * SHOULDER_X - 22, SHOULDER_Y - 8, CX + s * SHOULDER_X + 22, SHOULDER_Y + 30),
-                0, 360, fill=top2, width=3.0)
-        return
-
-    pts = [(CX - 15, SHOULDER_Y - 16), (CX - SHOULDER_X, SHOULDER_Y + 4),
-           (CX - WAIST_X - 2, WAIST_Y), (CX + WAIST_X + 2, WAIST_Y),
-           (CX + SHOULDER_X, SHOULDER_Y + 4), (CX + 15, SHOULDER_Y - 16)]
-    light = [(CX - 15, SHOULDER_Y - 12), (CX - SHOULDER_X + 12, SHOULDER_Y + 6),
-             (CX - 16, WAIST_Y - 4), (CX - WAIST_X + 4, WAIST_Y - 4)]
-    shade = [(CX + 12, SHOULDER_Y + 2), (CX + SHOULDER_X, SHOULDER_Y + 4),
-             (CX + WAIST_X + 2, WAIST_Y), (CX + 12, WAIST_Y)]
-    ink_shape(d, t, pts, top, shade_pts=shade, light_pts=light)
-
-    # neckline: a shallow skin-coloured V, plus a collar band when the character wears one
-    poly(d, t, [(CX - 14, SHOULDER_Y - 14), (CX, SHOULDER_Y + 6), (CX + 14, SHOULDER_Y - 14)],
-         fill=ch['skin'], outline=None)
-    if 'collar' in ch['acc'] or 'suit' in ch['acc'] or 'tie' in ch['acc']:
-        poly(d, t, [(CX - 16, SHOULDER_Y - 16), (CX - 2, SHOULDER_Y + 8), (CX + 2, SHOULDER_Y + 8),
-                    (CX + 16, SHOULDER_Y - 16), (CX + 16, SHOULDER_Y - 22), (CX - 16, SHOULDER_Y - 22)],
-             fill=top2, outline=None)
-
-    if kind == 'skirt':
-        skirt = [(CX - WAIST_X + 2, WAIST_Y - 2), (CX + WAIST_X - 2, WAIST_Y - 2),
-                 (CX + 56, 302), (CX - 56, 302)]
-        ink_shape(d, t, skirt, ch['bottom'],
-                  shade_pts=[(CX + 8, WAIST_Y), (CX + WAIST_X, WAIST_Y), (CX + 56, 302), (CX + 8, 302)],
-                  light_pts=[(CX - WAIST_X + 6, WAIST_Y + 6), (CX - 14, WAIST_Y + 6),
-                             (CX - 40, 296), (CX - 54, 296)])
-    elif kind == 'pants':
-        hip = [(CX - WAIST_X - 2, WAIST_Y - 2), (CX + WAIST_X + 2, WAIST_Y - 2),
-               (CX + HIP_X, HIP_Y + 14), (CX - HIP_X, HIP_Y + 14)]
-        ink_shape(d, t, hip, ch['bottom'],
-                  shade_pts=[(CX + 10, WAIST_Y), (CX + WAIST_X + 2, WAIST_Y),
-                             (CX + HIP_X, HIP_Y + 14), (CX + 10, HIP_Y + 14)])
-
-    acc = ch['acc']
-    if 'suit' in acc:
-        for s in (-1, 1):
-            poly(d, t, [(CX + s * 12, SHOULDER_Y - 6), (CX + s * 40, SHOULDER_Y - 4),
-                        (CX + s * 30, SHOULDER_Y + 62), (CX + s * 10, SHOULDER_Y + 40)],
-                 fill=lighten(top, 0.10), outline=None)
-            line(d, t, [(CX + s * 30, SHOULDER_Y + 4), (CX + s * 26, SHOULDER_Y + 58)],
-                 fill=lighten(top, 0.22), width=2.0)
-    if 'tie' in acc:
-        poly(d, t, [(CX - 8, SHOULDER_Y - 2), (CX + 8, SHOULDER_Y - 2),
-                    (CX + 6, SHOULDER_Y + 14), (CX, SHOULDER_Y + 26), (CX - 6, SHOULDER_Y + 14)],
-             fill=ch['top2'], outline=None)
-    if 'lapel' in acc:
-        for s in (-1, 1):
-            poly(d, t, [(CX + s * 10, SHOULDER_Y - 6), (CX + s * 36, SHOULDER_Y - 2),
-                        (CX + s * 26, SHOULDER_Y + 56), (CX + s * 8, SHOULDER_Y + 30)],
-                 fill=ch['top2'], outline=None)
-    if 'knit' in acc:
-        for y in range(int(SHOULDER_Y) + 16, int(WAIST_Y) - 6, 14):
-            line(d, t, [(CX - WAIST_X + 8, y), (CX + WAIST_X - 8, y)],
-                 fill=dark(top, 0.10), width=1.6)
-    if 'pocket' in acc or True:
-        pass
-    if 'buttons' in acc:
-        for y in range(int(SHOULDER_Y) + 14, int(WAIST_Y) - 10, 22):
-            ell(d, t, (CX - 4, y - 4, CX + 4, y + 4), fill=dark(top, 0.30), outline=None)
-    if 'scarf' in acc:
-        ink_shape(d, t, [(CX - 30, NECK_Y - 4), (CX + 30, NECK_Y - 4),
-                         (CX + 26, NECK_Y + 20), (CX - 26, NECK_Y + 20)],
-                  (208, 118, 110, 255),
-                  shade_pts=[(CX + 8, NECK_Y), (CX + 30, NECK_Y), (CX + 26, NECK_Y + 20), (CX + 8, NECK_Y + 20)])
-        poly(d, t, [(CX + 14, NECK_Y + 16), (CX + 30, NECK_Y + 18), (CX + 26, NECK_Y + 54),
-                    (CX + 12, NECK_Y + 48)], fill=(230, 138, 128, 255), outline=INK, ow=2.6)
-
-
-def draw_neck(d, t, ch):
-    limb(d, t, [(CX, NECK_Y - 10), (CX, NECK_Y + 14)], 21, ch['skin'])
-
-
 # ============================================================================
-# head, hair, accessories
+# the whale rig
 # ============================================================================
-def draw_hair_back(d, t, ch):
-    style = ch['style']
-    hair = ch['hair']
-    hair2 = ch['hair2'] or dark(hair, 0.14)
-    # skull-hugging cap: the hairline follows the cranium instead of a straight band
-    short = style in ('short', 'messy', 'slick', 'soft_short')
-    cap_rx = HEAD_RX + (4.0 if short else 7.0)
-    cap_bot = HEAD_CY + (HEAD_RY * 0.28 if short else HEAD_RY * 0.60)
-    ell(d, t, (CX - cap_rx, HEAD_CY - HEAD_RY - 6, CX + cap_rx, cap_bot),
-        fill=hair, outline=INK, ow=3.2)
-    if style == 'long_straight':
-        ink_shape(d, t, [(CX - 48, HEAD_CY - 8), (CX + 48, HEAD_CY - 8),
-                         (CX + 56, 210), (CX + 40, 236), (CX - 40, 236), (CX - 56, 210)],
-                  hair, shade_pts=[(CX + 14, HEAD_CY), (CX + 48, HEAD_CY - 8),
-                                   (CX + 56, 210), (CX + 40, 236), (CX + 14, 236)],
-                  light_pts=[(CX - 44, HEAD_CY + 4), (CX - 20, HEAD_CY + 4),
-                             (CX - 24, 230), (CX - 50, 226)])
-        for s in (-1, 1):
-            line(d, t, [(CX + s * 34, HEAD_CY + 30), (CX + s * 42, 212)], fill=hair2, width=2.4)
-    elif style == 'wavy_long':
-        ink_shape(d, t, [(CX - 50, HEAD_CY - 10), (CX + 50, HEAD_CY - 10),
-                         (CX + 60, 160), (CX + 44, 186), (CX + 58, 214),
-                         (CX + 38, 242), (CX - 38, 242), (CX - 58, 214),
-                         (CX - 44, 186), (CX - 60, 160)],
-                  hair, shade_pts=[(CX + 16, HEAD_CY), (CX + 50, HEAD_CY - 10),
-                                   (CX + 60, 160), (CX + 58, 214), (CX + 38, 242), (CX + 16, 242)])
-    elif style == 'twin_tails':
-        for s in (-1, 1):
-            ink_shape(d, t, [(CX + s * 34, HEAD_CY - 6), (CX + s * 62, HEAD_CY + 16),
-                             (CX + s * 70, 148), (CX + s * 52, 168), (CX + s * 40, HEAD_CY + 30)],
-                      hair, shade_pts=[(CX + s * 52, HEAD_CY + 8), (CX + s * 70, 148),
-                                       (CX + s * 52, 168), (CX + s * 48, HEAD_CY + 34)])
-            ell(d, t, (CX + s * 58 - 11, 142, CX + s * 58 + 11, 164), fill=(240, 120, 148, 255), outline=INK, ow=2.4)
-    elif style == 'low_ponytail':
-        ink_shape(d, t, [(CX + 30, HEAD_CY + 6), (CX + 66, 150), (CX + 84, 206),
-                         (CX + 60, 214), (CX + 44, 168)],
-                  hair, shade_pts=[(CX + 56, 156), (CX + 84, 206), (CX + 60, 214), (CX + 52, 172)])
-        for s in (-1, 1):
-            ink_shape(d, t, [(CX + s * 40, HEAD_CY - 4), (CX + s * 52, HEAD_CY + 40),
-                             (CX + s * 46, 176), (CX + s * 30, 150)],
-                      hair, shade_pts=[(CX + s * 46, HEAD_CY + 20), (CX + s * 52, HEAD_CY + 40),
-                                       (CX + s * 46, 176), (CX + s * 40, 160)])
-    elif style in ('bob', 'two_tone'):
-        ink_shape(d, t, [(CX - 44, HEAD_CY - 18), (CX + 44, HEAD_CY - 18),
-                         (CX + 50, HEAD_CY + 30), (CX + 34, HEAD_CY + 50),
-                         (CX - 34, HEAD_CY + 50), (CX - 50, HEAD_CY + 30)],
-                  hair, shade_pts=[(CX + 16, HEAD_CY - 12), (CX + 44, HEAD_CY - 18),
-                                   (CX + 50, HEAD_CY + 30), (CX + 34, HEAD_CY + 50), (CX + 16, HEAD_CY + 50)])
-        if style == 'two_tone' and ch['hair2']:
-            for s in (-1, 1):
-                ink_shape(d, t, [(CX + s * 30, HEAD_CY + 4), (CX + s * 50, HEAD_CY + 26),
-                                 (CX + s * 50, HEAD_CY + 48), (CX + s * 28, HEAD_CY + 44)],
-                          ch['hair2'], ow=2.6)
-    else:                                   # short / messy / soft_short / slick
-        ink_shape(d, t, [(CX - 43, HEAD_CY - 30), (CX + 43, HEAD_CY - 30),
-                         (CX + 46, HEAD_CY + 18), (CX + 34, HEAD_CY + 26),
-                         (CX - 34, HEAD_CY + 26), (CX - 46, HEAD_CY + 18)],
-                  hair, shade_pts=[(CX + 14, HEAD_CY - 26), (CX + 43, HEAD_CY - 30),
-                                   (CX + 46, HEAD_CY + 18), (CX + 34, HEAD_CY + 26), (CX + 14, HEAD_CY + 26)])
+# One chubby DeepSeek-blue whale. The silhouette is parametric, so a shape, its
+# gradient, its cel shadow and its outline all share one path: that is what makes
+# the flat "vector mascot" read as a rounded, lit character. Faces ride on the
+# head transform, so a pose can still tilt or turn the head (hdx / hdy).
+
+# body silhouette control points: (y, half width), cosine-eased between stations
+WH_PROFILE = [(118.0, 24.0), (126.0, 36.0), (140.0, 45.0), (162.0, 52.0),
+              (192.0, 57.0), (222.0, 59.0), (252.0, 57.0), (282.0, 53.0),
+              (308.0, 45.0), (326.0, 30.0)]
+EYE_X = 22.0
+EYE_Y = HEAD_CY + 4.0
+MOUTH_Y = HEAD_CY + 27.0
+_GRADS = {}
 
 
-def draw_ears(d, t, ch):
-    for s in (-1, 1):
-        ell(d, t, (CX + s * 38 - 8, HEAD_CY + 2, CX + s * 38 + 8, HEAD_CY + 22),
-            fill=ch['skin'], outline=INK, ow=2.6)
+def sh(c, k=0.24):
+    """Cel shadow: mix towards the navy ink so every shade stays in palette."""
+    return mix(c, OUTLINE_BLUE, k)
 
 
-def draw_head(d, t, ch):
-    """Head layer: ears, skull, front hair and accessories all follow the head offset."""
-    draw_ears(d, t, ch)
-    draw_head_shape(d, t, ch)
-    draw_hair_front(d, t, ch)
-    draw_head_accessories(d, t, ch)
+def gl(c, k=0.30):
+    """Gloss / rim light: mix towards white."""
+    return mix(c, (255, 255, 255, 255), k)
 
 
-def draw_head_shape(d, t, ch):
-    skin = ch['skin']
-    # egg-shaped head: full width at the temples, a gentle taper to a round chin
-    pts = []
-    n = 40
+def ellipse_pts(cx, cy, rx, ry, n=48):
+    return [(cx + rx * math.sin(2 * math.pi * i / n),
+             cy - ry * math.cos(2 * math.pi * i / n)) for i in range(n)]
+
+
+def _smooth(y0, w0, y1, w1, n=5):
+    out = []
+    for k in range(n):
+        f = k / float(n)
+        e = (1.0 - math.cos(math.pi * f)) / 2.0
+        out.append((y0 + (y1 - y0) * f, w0 + (w1 - w0) * e))
+    return out
+
+
+def body_pts():
+    """The whale's body: a chubby pear, widest at the hips, tucked under the head."""
+    right = []
+    for i in range(len(WH_PROFILE) - 1):
+        right += _smooth(WH_PROFILE[i][0], WH_PROFILE[i][1],
+                         WH_PROFILE[i + 1][0], WH_PROFILE[i + 1][1])
+    y_end, w_end = WH_PROFILE[-1]
+    out = [(CX + w, y) for y, w in right]
+    for k in range(1, 7):
+        a = math.pi * k / 7.0
+        out.append((CX + w_end * math.cos(a), y_end + 15.0 * math.sin(a)))
+    out += [(CX - w, y) for y, w in reversed(right)]
+    return out
+
+
+def belly_pts():
+    return ellipse_pts(CX, 228.0, 44.0, 78.0, 56)
+
+
+def chin_pts():
+    return ellipse_pts(CX, HEAD_CY + 18.0, 38.0, 27.0, 48)
+
+
+def head_pts():
+    """Head blob: a round mascot head with slightly heavy cheeks and a soft chin."""
+    out = []
+    n = 64
     for i in range(n):
         a = 2 * math.pi * i / n
-        c = math.cos(a)
-        taper = 1.0 - (0.30 * (-c) if c < 0 else 0.0)
-        x = CX + HEAD_RX * taper * math.sin(a)
-        y = HEAD_CY - HEAD_RY * c
-        pts.append((x, y))
-    ink_shape(d, t, pts, skin, ow=3.4)
-    soft(d, t, (CX - 30, HEAD_CY - 38, CX + 2, HEAD_CY - 6), (255, 255, 255, 42))
+        low = max(0.0, -math.cos(a))
+        out.append((CX + HEAD_RX * (1.0 + 0.10 * low) * math.sin(a),
+                    HEAD_CY - HEAD_RY * (1.0 - 0.07 * low) * math.cos(a)))
+    return out
 
 
-def fringe_pts(inner, grow=3.0):
-    """Outer arc over the crown + the wavy inner edge, as one closed path."""
-    rx = HEAD_RX + grow
-    ry = HEAD_RY + grow
-    pts = []
-    for a in range(268, 453, 6):
-        r = math.radians(a % 360)
-        pts.append((CX + rx * math.sin(r), HEAD_CY - ry * math.cos(r)))
-    pts.extend(inner)
-    return pts
+def _tp(t, pts):
+    return [t.pt(x, y) for x, y in pts]
 
 
-def draw_hair_front(d, t, ch):
-    style = ch['style']
-    hair = ch['hair']
-    hair2 = ch['hair2']
-    if style == 'twin_tails':
-        inner = [(CX + 40, HEAD_CY - 6), (CX + 16, HEAD_CY - 3), (CX - 8, HEAD_CY + 3),
-                 (CX - 40, HEAD_CY - 6)]
-        grow = 5.0
-    elif style == 'messy':
-        inner = [(CX + 41, HEAD_CY - 9), (CX + 18, HEAD_CY - 2), (CX - 2, HEAD_CY - 11),
-                 (CX - 24, HEAD_CY + 1), (CX - 41, HEAD_CY - 6)]
-        grow = 4.0
-    elif style == 'slick':
-        inner = [(CX + 40, HEAD_CY - 11), (CX + 4, HEAD_CY - 6), (CX - 40, HEAD_CY - 9)]
-        grow = 2.0
-    elif style in ('short', 'soft_short'):
-        inner = [(CX + 41, HEAD_CY - 8), (CX + 12, HEAD_CY - 13), (CX - 16, HEAD_CY - 2),
-                 (CX - 41, HEAD_CY - 6)]
-        grow = 3.0
-    else:                                   # bob / long / wavy / low ponytail
-        inner = [(CX + 42, HEAD_CY - 4), (CX + 14, HEAD_CY - 15), (CX - 10, HEAD_CY + 1),
-                 (CX - 42, HEAD_CY - 5)]
-        grow = 3.0
-    pts = fringe_pts(inner, grow)
-    shade = [p for p in pts if p[0] >= CX + 6]
-    ink_shape(d, t, pts, hair, shade_pts=shade)
-
-    if style == 'messy':
-        for dx in (-30, -8, 16, 32):
-            poly(d, t, [(CX + dx, HEAD_CY - 52), (CX + dx + 13, HEAD_CY - 40),
-                        (CX + dx + 4, HEAD_CY - 30)], fill=hair, outline=INK, ow=2.4)
-    if hair2 and style == 'two_tone':
-        poly(d, t, [(CX - 24, HEAD_CY - 42), (CX - 6, HEAD_CY - 36), (CX - 14, HEAD_CY - 6),
-                    (CX - 26, HEAD_CY - 14)], fill=hair2, outline=None)
-        poly(d, t, [(CX + 2, HEAD_CY - 44), (CX + 18, HEAD_CY - 38), (CX + 10, HEAD_CY - 16),
-                    (CX - 2, HEAD_CY - 22)], fill=hair2, outline=None)
-    if hair2 and style == 'bob':
-        poly(d, t, [(CX - 22, HEAD_CY - 40), (CX - 6, HEAD_CY - 36), (CX - 14, HEAD_CY - 8)],
-             fill=hair2, outline=None)
+def _mask_of(pts_t):
+    mk = Image.new('L', (CW, CH), 0)
+    ImageDraw.Draw(mk).polygon([(float(x), float(y)) for x, y in pts_t], fill=255)
+    return mk
 
 
-def draw_head_accessories(d, t, ch):
-    acc = ch['acc']
-    if 'cat_ears' in acc:
-        for s in (-1, 1):
-            poly(d, t, [(CX + s * 22, HEAD_CY - 34), (CX + s * 46, HEAD_CY - 40),
-                        (CX + s * 40, HEAD_CY - 76)], fill=ch['hair'], outline=INK, ow=2.6)
-            poly(d, t, [(CX + s * 28, HEAD_CY - 38), (CX + s * 41, HEAD_CY - 42),
-                        (CX + s * 38, HEAD_CY - 62)], fill=(255, 186, 202, 255), outline=None)
-    if 'bow' in acc:
-        bx, by = CX + 34, HEAD_CY - 36
-        for s in (-1, 1):
-            ell(d, t, (bx + s * 16 - 13, by - 13, bx + s * 16 + 13, by + 13),
-                fill=(255, 138, 158, 255), outline=INK, ow=2.4)
-        ell(d, t, (bx - 7, by - 7, bx + 7, by + 7), fill=(255, 106, 134, 255), outline=INK, ow=2.2)
-    if 'cap' in acc:
-        ink_shape(d, t, [(CX - 44, HEAD_CY - 26), (CX + 44, HEAD_CY - 26),
-                         (CX + 44, HEAD_CY - 8), (CX - 44, HEAD_CY - 8)],
-                  (236, 122, 112, 255),
-                  shade_pts=[(CX + 12, HEAD_CY - 24), (CX + 44, HEAD_CY - 26),
-                             (CX + 44, HEAD_CY - 8), (CX + 12, HEAD_CY - 8)], ow=2.8)
-        for s in (-1, 1):
-            poly(d, t, [(CX + s * 30, HEAD_CY - 12), (CX + s * 62, HEAD_CY - 6),
-                        (CX + s * 60, HEAD_CY + 6), (CX + s * 30, HEAD_CY + 4)],
-                 fill=(214, 100, 92, 255), outline=INK, ow=2.6)
-    if 'whale_hood' in acc:
-        ink_shape(d, t, [(CX - 50, HEAD_CY - 30), (CX + 50, HEAD_CY - 30),
-                         (CX + 52, HEAD_CY + 16), (CX + 30, HEAD_CY + 30),
-                         (CX - 30, HEAD_CY + 30), (CX - 52, HEAD_CY + 16)],
-                  ch['top'],
-                  shade_pts=[(CX + 16, HEAD_CY - 26), (CX + 50, HEAD_CY - 30),
-                             (CX + 52, HEAD_CY + 16), (CX + 30, HEAD_CY + 30), (CX + 16, HEAD_CY + 30)],
-                  ow=3.2)
-        # whale tail fin on top and a soft belly patch
-        poly(d, t, [(CX - 4, HEAD_CY - 30), (CX + 4, HEAD_CY - 30),
-                    (CX + 22, HEAD_CY - 52), (CX + 8, HEAD_CY - 40)], fill=ch['top2'], outline=INK, ow=2.4)
-        poly(d, t, [(CX - 4, HEAD_CY - 30), (CX + 4, HEAD_CY - 30),
-                    (CX - 22, HEAD_CY - 52), (CX - 8, HEAD_CY - 40)], fill=ch['top2'], outline=INK, ow=2.4)
-        ell(d, t, (CX - 22, HEAD_CY + 6, CX + 22, HEAD_CY + 30), fill=(240, 250, 255, 190), outline=None)
-    if 'headset' in acc:
-        arc(d, t, (CX - 46, HEAD_CY - 52, CX + 46, HEAD_CY + 22), 180, 360, fill=(120, 200, 244, 255), width=5.0)
-        for s in (-1, 1):
-            ell(d, t, (CX + s * 46 - 10, HEAD_CY - 12, CX + s * 46 + 10, HEAD_CY + 16),
-                fill=(60, 74, 104, 255), outline=(120, 200, 244, 255), ow=2.6)
-    if 'glasses' in acc:
-        for s in (-1, 1):
-            arc(d, t, (CX + s * 16 - 14, HEAD_CY - 8, CX + s * 16 + 14, HEAD_CY + 20),
-                0, 360, fill=(72, 58, 52, 255), width=3.0)
-            line(d, t, [(CX + s * 30, HEAD_CY + 2), (CX + s * 40, HEAD_CY - 2)], fill=(72, 58, 52, 255), width=2.4)
-        line(d, t, [(CX - 2, HEAD_CY + 2), (CX + 2, HEAD_CY + 2)], fill=(72, 58, 52, 255), width=2.4)
+def _multi(ms):
+    m = ms[0]
+    for other in ms[1:]:
+        m = ImageChops.multiply(m, other)
+    return m
 
 
-# ============================================================================
-# face
-# ============================================================================
-def eye_pair_y():
-    return HEAD_CY + 6.0
+def vgrad(c_top, c_bot, steps=64):
+    """A canvas-sized vertical gradient, cached because the palette repeats."""
+    key = (tuple(c_top[:3]), tuple(c_bot[:3]), steps)
+    got = _GRADS.get(key)
+    if got is None:
+        got = Image.new('RGBA', (CW, CH), c_top)
+        gd = ImageDraw.Draw(got)
+        for i in range(steps):
+            y0 = CH * i // steps
+            y1 = max(y0 + 1, CH * (i + 1) // steps)
+            gd.rectangle((0, y0, CW, y1), fill=mix(c_top, c_bot, i / float(steps - 1)))
+        _GRADS[key] = got
+    return got
 
 
+def clip(d, t, shapes, fn):
+    """Draw fn on a scratch layer but keep only what falls inside every shape."""
+    sc = Image.new('RGBA', (CW, CH), (0, 0, 0, 0))
+    fn(Canvas(sc))
+    sc.putalpha(ImageChops.multiply(sc.getchannel('A'),
+                                    _multi([_mask_of(_tp(t, p)) for p in shapes])))
+    d.im.alpha_composite(sc)
+
+
+def grad_in(d, t, shapes, top, bot):
+    """Fill the intersection of `shapes` with a soft vertical gradient."""
+    sc = vgrad(top, bot).copy()
+    sc.putalpha(ImageChops.multiply(sc.getchannel('A'),
+                                    _multi([_mask_of(_tp(t, p)) for p in shapes])))
+    d.im.alpha_composite(sc)
+
+
+def outline(d, t, pts, col=None, ow=4.4, closed=True):
+    p = _tp(t, pts)
+    if closed:
+        p = p + [p[0]]
+    d.line(p, fill=col or OUTLINE_BLUE, width=t.w(ow), joint='curve')
+
+
+# ---------------------------------------------------------------- body & tail
+def draw_fluke(d, t, ch):
+    """The whale's tail: one fluke out to the lower right, behind the body."""
+    base = gl(BODY_BLUE, 0.08)
+    pts = [(CX + 34, 258), (CX + 108, 266), (CX + 62, 298), (CX + 104, 330),
+           (CX + 30, 316)]
+    poly(d, t, pts, fill=base, outline=OUTLINE_BLUE, ow=4.0)
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX + 56 - 74, 330 - 74,
+                                             CX + 56 + 74, 330 + 74),
+                                     fill=sh(base, 0.24)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX + 60, 262, CX + 116, 286),
+                                     fill=(255, 255, 255, 110)))
+
+
+def draw_dorsal(d, t, ch):
+    """Small dorsal fin, poking up behind the right shoulder."""
+    base = gl(BODY_BLUE, 0.10)
+    pts = [(CX + 34, 168), (CX + 84, 108), (CX + 100, 172)]
+    poly(d, t, pts, fill=base, outline=OUTLINE_BLUE, ow=3.8)
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX + 70 - 56, 190 - 56,
+                                             CX + 70 + 56, 190 + 56),
+                                     fill=sh(base, 0.22)))
+    pts2 = [(CX - 40, 150), (CX - 78, 128), (CX - 86, 176)]
+    poly(d, t, pts2, fill=base, outline=OUTLINE_BLUE, ow=3.4)
+
+
+def draw_cat_tail(d, t, ch):
+    """Neko mode: a cat tail curled out from behind the body."""
+    arc(d, t, (CX + 34, 196, CX + 122, 292), 200, 20, fill=ch['hair'], width=13.0)
+    arc(d, t, (CX + 34, 196, CX + 122, 292), 200, 20, fill=OUTLINE_BLUE, width=3.0)
+    soft(d, t, (CX + 92, 214, CX + 112, 240), (255, 255, 255, 90))
+
+
+def draw_body(d, t, ch):
+    """Body, belly and the set of shadows/highlights that give it volume."""
+    draw_dorsal(d, t, ch)
+    draw_fluke(d, t, ch)
+    pts = body_pts()
+    base = BODY_BLUE
+
+    d.polygon(_tp(t, pts), fill=base)
+    grad_in(d, t, [pts], gl(base, 0.22), sh(base, 0.10))
+    # first cel step, then a deeper one right at the bottom edge
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX + 34 - 150, 348 - 150,
+                                             CX + 34 + 150, 348 + 150),
+                                     fill=sh(base, 0.26)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX + 46 - 150, 430 - 150,
+                                             CX + 46 + 150, 430 + 150),
+                                     fill=sh(base, 0.40)))
+    # rim light down the left edge + a specular gloss on the upper belly
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 96, 118, CX + 6, 350),
+                                     fill=(255, 255, 255, 88)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 62, 150, CX - 4, 226),
+                                     fill=(255, 255, 255, 120)))
+
+    # the pale belly panel
+    bpts = belly_pts()
+    d.polygon(_tp(t, bpts), fill=BELLY_WHITE)
+    grad_in(d, t, [bpts], (255, 255, 255, 255), (198, 216, 248, 255))
+    clip(d, t, [bpts], lambda dd: ell(dd, t, (CX + 24 - 90, 320 - 90,
+                                              CX + 24 + 90, 320 + 90),
+                                      fill=(178, 200, 242, 190)))
+    for i in range(3):
+        arc(d, t, (CX - 30, 176 + i * 38, CX + 30, 220 + i * 38), 20, 160,
+            fill=(194, 210, 242, 210), width=2.8)
+    outline(d, t, bpts, OUTLINE_BLUE, 3.0)
+    outline(d, t, pts, OUTLINE_BLUE, 4.6)
+
+
+# ------------------------------------------------------------------------ head
+def draw_head(d, t, ch):
+    """Head blob, pale throat, blowhole. Face and accessories come on top."""
+    pts = head_pts()
+    base = BODY_BLUE
+    d.polygon(_tp(t, pts), fill=base)
+    grad_in(d, t, [pts], gl(base, 0.26), sh(base, 0.08))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 130, HEAD_CY + 10,
+                                             CX + 130, HEAD_CY + 190),
+                                     fill=sh(base, 0.22)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 120, HEAD_CY + 44,
+                                             CX + 120, HEAD_CY + 210),
+                                     fill=sh(base, 0.34)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 88, HEAD_CY - 74,
+                                             CX + 44, HEAD_CY + 64),
+                                     fill=(255, 255, 255, 92)))
+    clip(d, t, [pts], lambda dd: ell(dd, t, (CX - 44, HEAD_CY - 46,
+                                             CX + 6, HEAD_CY - 4),
+                                     fill=(255, 255, 255, 140)))
+    # pale throat, clipped to the head so it never spills over the silhouette
+    cpts = chin_pts()
+    grad_in(d, t, [pts, cpts], (255, 255, 255, 255), (200, 218, 248, 255))
+    clip(d, t, [pts, cpts], lambda dd: ell(dd, t, (CX - 90, HEAD_CY + 44,
+                                                   CX + 90, HEAD_CY + 170),
+                                           fill=(180, 202, 244, 170)))
+    arc(d, t, (CX - 15, HEAD_CY - 38, CX + 15, HEAD_CY - 16), 190, 350,
+        fill=(206, 220, 250, 235), width=3.2)
+    if not ch['acc'] or 'blowhole' in ch['acc']:
+        for k, kx in enumerate((0, 15, 30)):
+            r = 4.0 + k * 1.6
+            ell(d, t, (CX - 6 + kx, HEAD_CY - 52 - k * 9 - r, CX - 6 + kx + 2 * r,
+                       HEAD_CY - 52 - k * 9 + r), fill=(198, 230, 255, 225))
+    outline(d, t, pts, OUTLINE_BLUE, 4.6)
+
+
+# ---------------------------------------------------------------- arms & hands
+def draw_hand(d, t, pt, side, base, style='open'):
+    x, y = pt
+    col = gl(base, 0.34)
+    if style == 'flat':
+        box = (x - 18, y - 12, x + 18, y + 12)
+    elif style == 'point':
+        pts = [(x - 13, y - 13), (x + 20, y - 5), (x + 20, y + 6), (x - 13, y + 13)]
+        poly(d, t, pts, fill=col, outline=OUTLINE_BLUE, ow=3.8)
+        soft(d, t, (x - 8, y - 9, x + 8, y - 1), (255, 255, 255, 120))
+        return
+    else:
+        box = (x - 15, y - 15, x + 15, y + 15)
+    ell(d, t, box, fill=col, outline=OUTLINE_BLUE, ow=3.8)
+    w, h = box[2] - box[0], box[3] - box[1]
+    grad_in(d, t, [ellipse_pts(x, y, w / 2.0, h / 2.0, 28)], gl(col, 0.22),
+            sh(col, 0.12))
+    soft(d, t, (x - w * 0.36, y - h * 0.42, x + w * 0.06, y - h * 0.02),
+         (255, 255, 255, 160))
+    if style == 'paw':
+        for k in (-6, 0, 6):
+            ell(d, t, (x + k - 3, y - h / 2 - 3, x + k + 3, y - h / 2 + 6),
+                fill=col, outline=OUTLINE_BLUE, ow=2.6)
+    elif style == 'grip':
+        arc(d, t, (x - 12, y - 11, x + 12, y + 12), 200, 340,
+            fill=OUTLINE_BLUE, width=3.4)
+
+
+def draw_fin(d, t, ch, spec, side, style='open'):
+    """A flipper standing in for an arm: capsule limb plus a rounded tip."""
+    (sx, sy), (ex, ey), (hx, hy) = arm_geom(spec, side)
+    base = BODY_BLUE
+    limb(d, t, [(sx, sy), (ex, ey)], 30.0, base, OUTLINE_BLUE, 4.2)
+    limb(d, t, [(ex, ey), (hx, hy)], 25.0, base, OUTLINE_BLUE, 4.2)
+    # volume: rim along the outer edge, shadow along the inner one
+    limb(d, t, [(sx + side * 5, sy - 6), (ex + side * 5, ey - 6)], 12.0,
+         (255, 255, 255, 92), None, 0)
+    limb(d, t, [(ex + side * 3, ey - 4), (hx + side * 3, hy - 4)], 8.0,
+         (255, 255, 255, 78), None, 0)
+    limb(d, t, [(sx + side * 3, sy + 10), (ex + side * 2, ey + 11)], 10.0,
+         sh(base, 0.30), None, 0)
+    draw_hand(d, t, (hx, hy), side, base, style)
+
+
+def draw_arms(d, t, ch, spec):
+    """Both flippers, in front of the body (left first, then right)."""
+    draw_fin(d, t, ch, spec['arms'][1], -1, spec['hand_style'])
+    draw_fin(d, t, ch, spec['arms'][0], 1, spec['hand_style'])
+
+
+# ----------------------------------------------------------------------- face
 def draw_eyes(d, t, kind, look=0.0):
-    lx, rx = CX - 15.5, CX + 15.5
-    ey = eye_pair_y()
-    sk = (255, 255, 255, 255)
-    if kind == 'open':
-        for x in (lx, rx):
-            ell(d, t, (x - 12, ey - 14, x + 12, ey + 16), fill=INK, outline=None)
-            ell(d, t, (x - 7 + look * 0.6, ey - 9, x - 1 + look * 0.6, ey - 3), fill=sk, outline=None)
-            ell(d, t, (x + 2 + look * 0.6, ey + 3, x + 6 + look * 0.6, ey + 7), fill=(255, 255, 255, 200), outline=None)
-    elif kind == 'happy':
-        for x in (lx, rx):
-            arc(d, t, (x - 15 + look, ey - 10, x + 15 + look, ey + 14), 200, 340, fill=INK, width=5.0)
-    elif kind == 'closed':
-        for x in (lx, rx):
-            arc(d, t, (x - 14 + look, ey - 6, x + 14 + look, ey + 12), 200, 340, fill=INK, width=4.6)
-    elif kind == 'wide':
-        for x in (lx, rx):
-            ell(d, t, (x - 14, ey - 17, x + 14, ey + 19), fill=sk, outline=INK, ow=3.0)
-            ell(d, t, (x - 7 + look * 0.8, ey - 4, x + 7 + look * 0.8, ey + 14), fill=INK, outline=None)
-            ell(d, t, (x - 4 + look * 0.8, ey - 1, x + 1 + look * 0.8, ey + 5), fill=sk, outline=None)
-    elif kind == 'plead':
-        for x in (lx, rx):
-            ell(d, t, (x - 14, ey - 15, x + 14, ey + 17), fill=sk, outline=INK, ow=3.0)
-            ell(d, t, (x - 8 + look * 0.7, ey - 2, x + 8 + look * 0.7, ey + 15), fill=INK, outline=None)
-            ell(d, t, (x - 5 + look * 0.7, ey + 1, x + 1 + look * 0.7, ey + 7), fill=sk, outline=None)
-            ell(d, t, (x - 3, ey - 11, x + 4, ey - 5), fill=(255, 214, 226, 200), outline=None)
-    elif kind == 'angry':
-        for x, s in ((lx, -1), (rx, 1)):
-            line(d, t, [(x - 16, ey - 16), (x + 16, ey - 6)], fill=INK, width=5.0)
-            ell(d, t, (x - 8, ey + 2, x + 8, ey + 15), fill=INK, outline=None)
-    elif kind == 'flat':
-        for x in (lx, rx):
-            line(d, t, [(x - 14, ey + 2), (x + 14, ey + 2)], fill=INK, width=4.4)
+    for side in (1, -1):
+        x = CX + side * EYE_X + look * 3.0 * side
+        draw_eye(d, t, x, EYE_Y, side, kind, look)
+
+
+def draw_eye(d, t, x, y, side, kind, look=0.0):
+    rx, ry = 14.5, 16.5
+    if kind in ('closed', 'happy'):
+        arc(d, t, (x - 13, y - 13, x + 13, y + 13), 196, 344,
+            fill=OUTLINE_BLUE, width=4.2)
+        for k in (-1, 0, 1):
+            line(d, t, [(x + k * 9, y - 9 + abs(k) * 2), (x + k * 9 - 3, y - 5 + abs(k) * 3)],
+                 fill=OUTLINE_BLUE, width=2.4)
+        return
+    if kind == 'flat':
+        rrect(d, t, (x - 13, y - 4, x + 13, y + 4), 4,
+              fill=(248, 250, 255, 255), outline=OUTLINE_BLUE, ow=3.0)
+        line(d, t, [(x - 9, y - 1), (x + 9, y - 1)], fill=OUTLINE_BLUE, width=3.0)
+        return
+    if kind == 'smirk' and side > 0:
+        arc(d, t, (x - 13, y - 11, x + 13, y + 15), 196, 344,
+            fill=OUTLINE_BLUE, width=4.0)
+        return
+    wide = kind == 'wide'
+    if wide:
+        rx, ry = rx + 2.5, ry + 2.5
+    box = (x - rx, y - ry, x + rx, y + ry)
+    ell(d, t, box, fill=(248, 250, 255, 255), outline=OUTLINE_BLUE, ow=3.4)
+    # iris: gradient from the deep navy top to a lit blue bottom
+    iris_r = 11.5 if not wide else 10.0
+    ibox = (x - iris_r, y - iris_r + (2.5 if not wide else 3.5),
+            x + iris_r, y + iris_r + (2.5 if not wide else 3.5))
+    ipts = ellipse_pts(x, (ibox[1] + ibox[3]) / 2.0, iris_r, iris_r, 32)
+    d.polygon(_tp(t, ipts), fill=(58, 84, 190, 255))
+    grad_in(d, t, [ipts], (34, 46, 110, 255), (108, 142, 246, 255))
+    clip(d, t, [ipts], lambda dd: ell(dd, t, (x - iris_r, y - iris_r - 2,
+                                              x + iris_r, y + iris_r + 11),
+                                      fill=(150, 186, 255, 90)))
+    # pupil
+    ell(d, t, (x - 6.5, y - 5.5, x + 6.5, y + 9.5), fill=(24, 32, 78, 255))
+    if kind == 'love':
+        heart(d, t, x, y + 2, 8.5, WHALE_PINK)
+    elif kind in ('star', 'sparkle_eyes'):
+        star(d, t, x, y + 1, 9.0, (255, 232, 150, 255))
+        star(d, t, x + 1, y - 2, 4.0, (255, 255, 255, 235))
+    # two highlights: the big one upper-left, the small one lower-right
+    ell(d, t, (x - 9.5, y - 12, x - 1.5, y - 4), fill=(255, 255, 255, 240))
+    ell(d, t, (x + 2.5, y + 3.5, x + 7.5, y + 8.5), fill=(255, 255, 255, 205))
+    if kind == 'scan':
+        arc(d, t, (x - 12, y - 12, x + 12, y + 12), 300, 60,
+            fill=(150, 205, 255, 230), width=2.6)
+        line(d, t, [(x - 10, y + 10), (x + 10, y - 10)], fill=(180, 220, 255, 190), width=2.0)
+    # upper lid, heavier for the annoyed faces
+    lid = 0.0
+    if kind == 'angry':
+        lid = 6.0
     elif kind == 'side':
-        for x in (lx, rx):
-            ell(d, t, (x - 12, ey - 13, x + 12, ey + 15), fill=sk, outline=INK, ow=3.0)
-            ell(d, t, (x - 9 + look, ey - 2, x + 3 + look, ey + 11), fill=INK, outline=None)
-    elif kind == 'smirk':
-        for x in (lx, rx):
-            arc(d, t, (x - 15, ey - 8, x + 15, ey + 12), 200, 350, fill=INK, width=4.6)
-    elif kind == 'scan':
-        for x in (lx, rx):
-            ell(d, t, (x - 12, ey - 14, x + 12, ey + 16), fill=(96, 200, 246, 255), outline=INK, ow=2.8)
-            ell(d, t, (x - 7, ey - 9, x - 1, ey - 3), fill=sk, outline=None)
-            arc(d, t, (x - 12, ey - 14, x + 12, ey + 16), 0, 360, fill=(198, 244, 255, 255), width=2.0)
-    elif kind == 'love':
-        for x in (lx, rx):
-            heart(d, t, x, ey, 13, (232, 72, 96, 255))
-            heart(d, t, x - 2, ey - 2, 6, (255, 168, 180, 220))
-    elif kind == 'star':
-        for x in (lx, rx):
-            d.polygon([t.pt(a, b) for a, b in star_pts(x, ey, 15, -90)], fill=(240, 176, 40, 255))
-            d.polygon([t.pt(a, b) for a, b in star_pts(x, ey, 6, -90)], fill=(255, 240, 190, 255))
-    elif kind == 'sparkle_eyes':
-        for x in (lx, rx):
-            ell(d, t, (x - 13, ey - 16, x + 13, ey + 17), fill=INK, outline=None)
-            ell(d, t, (x - 9, ey - 12, x - 1, ey - 4), fill=(255, 255, 255, 255), outline=None)
-            spark(d, t, x + 10, ey - 10, 6, (255, 244, 200, 255))
+        lid = 2.5
+    arc(d, t, (x - rx - 1, y - ry - 1 + lid, x + rx + 1, y + ry - 1 + lid),
+        186, 354, fill=OUTLINE_BLUE, width=3.6)
+    if kind in ('angry', 'side'):
+        poly(d, t, [(x - rx - 1, y - ry + lid), (x + rx + 1, y - ry - 3 + lid),
+                    (x + rx + 1, y - ry + 3 + lid), (x - rx - 1, y - ry + 6 + lid)],
+             fill=OUTLINE_BLUE)
+    if kind == 'plead':
+        soft(d, t, (x - 10, y + 5, x + 10, y + 15), (255, 255, 255, 150))
+        ell(d, t, (x + 12, y + 14, x + 18, y + 22), fill=(170, 214, 255, 235))
 
 
 def draw_brows(d, t, kind):
     if not kind:
         return
-    lx, rx = CX - 15.5, CX + 15.5
-    by = HEAD_CY - 14
-    if kind == 'angry':
-        for x, s in ((lx, -1), (rx, 1)):
-            line(d, t, [(x - 12, by - 6 + (0 if s < 0 else 0)), (x + 12, by + 4)], fill=HAIR_INK, width=3.6)
-    elif kind == 'sad':
-        for x, s in ((lx, -1), (rx, 1)):
-            line(d, t, [(x - 12, by + 4), (x + 12, by - 6)], fill=HAIR_INK, width=3.6)
-    elif kind == 'up':
-        for x in (lx, rx):
-            arc(d, t, (x - 13, by - 12, x + 13, by + 8), 190, 350, fill=HAIR_INK, width=3.4)
+    y = EYE_Y - 24.0
+    for side in (1, -1):
+        x = CX + side * EYE_X
+        if kind == 'angry':
+            pts = [(x - 12 * side, y - 3), (x + 11 * side, y + 6)]
+        elif kind == 'sad':
+            pts = [(x - 12 * side, y + 6), (x + 11 * side, y - 2)]
+        else:                                   # 'up': raised, round brows
+            arc(d, t, (x - 12, y - 9, x + 12, y + 9), 186, 354,
+                fill=OUTLINE_BLUE, width=4.0)
+            continue
+        limb(d, t, pts, 6.4, OUTLINE_BLUE)
 
 
 def draw_mouth(d, t, kind, lip=None):
-    mx, my = CX, HEAD_CY + 27
-    if kind in (None, 'none'):
+    x, y = CX, MOUTH_Y
+    navy = OUTLINE_BLUE
+    if kind == 'none':
         return
-    if kind == 'smile':
-        arc(d, t, (mx - 17, my - 10, mx + 17, my + 12), 20, 160, fill=INK, width=4.4)
-    elif kind == 'grin':
-        pts = [(mx - 19, my - 6)] + [(mx - 19 + 38 * i / 8, my - 6 + 20 * math.sin(math.pi * i / 8)) for i in range(9)]
-        d.polygon([t.pt(x, y) for x, y in pts], fill=(168, 74, 84, 255))
-        arc(d, t, (mx - 20, my - 8, mx + 20, my + 16), 0, 180, fill=INK, width=4.0)
-        line(d, t, [(mx - 20, my - 6), (mx + 20, my - 6)], fill=INK, width=3.4)
-        rrect(d, t, (mx - 9, my + 8, mx + 9, my + 14), 3, fill=(255, 150, 158, 255), outline=None)
-    elif kind == 'grin_small':
-        arc(d, t, (mx - 12, my - 6, mx + 12, my + 10), 10, 170, fill=INK, width=4.0)
-    elif kind == 'frown':
-        arc(d, t, (mx - 15, my + 2, mx + 15, my + 22), 200, 340, fill=INK, width=4.4)
-    elif kind == 'wavy':
-        line(d, t, [(mx - 15, my + 7), (mx - 7, my + 1), (mx, my + 8), (mx + 7, my + 1), (mx + 15, my + 7)],
-             fill=INK, width=4.0)
-    elif kind == 'pout':
-        ell(d, t, (mx - 9, my - 2, mx + 9, my + 12), fill=(196, 96, 104, 255), outline=INK, ow=3.4)
-    elif kind == 'o':
-        ell(d, t, (mx - 6, my - 2, mx + 6, my + 13), fill=(150, 74, 82, 255), outline=INK, ow=3.2)
-    elif kind == 'o_big':
-        ell(d, t, (mx - 11, my - 8, mx + 11, my + 20), fill=(120, 62, 70, 255), outline=INK, ow=3.4)
-        arc(d, t, (mx - 8, my + 8, mx + 8, my + 18), 0, 180, fill=(255, 140, 150, 255), width=3.0)
-    elif kind == 'flat':
-        line(d, t, [(mx - 11, my + 6), (mx + 11, my + 6)], fill=INK, width=4.0)
-    elif kind == 'smirk':
-        arc(d, t, (mx - 6, my - 4, mx + 20, my + 14), 40, 150, fill=INK, width=4.2)
-    elif kind == 'kiss':
-        poly(d, t, [(mx - 8, my), (mx - 4, my - 5), (mx, my), (mx + 4, my - 5), (mx + 8, my),
-                    (mx + 4, my + 7), (mx, my + 4), (mx - 4, my + 7)], fill=(226, 88, 104, 255), outline=None)
-    elif kind == 'talk':
-        ell(d, t, (mx - 9, my - 4, mx + 9, my + 14), fill=(150, 74, 82, 255), outline=INK, ow=3.6)
-    elif kind == 'tongue':
-        arc(d, t, (mx - 8, my - 4, mx + 8, my + 10), 0, 180, fill=INK, width=3.6)
-        ell(d, t, (mx - 6, my + 2, mx + 7, my + 16), fill=(240, 140, 156, 255), outline=INK, ow=2.8)
-    if lip:
-        # a soft lipstick mark over the mouth
-        arc(d, t, (mx - 14, my - 6, mx + 14, my + 12), 20, 170, fill=lip, width=2.6)
+    if kind in ('smile', 'grin_small'):
+        w = 17 if kind == 'smile' else 12
+        arc(d, t, (x - w, y - 12, x + w, y + 12), 20, 160, fill=navy, width=3.8)
+        return
+    if kind in ('grin', 'tongue', 'talk'):
+        w, h = (21, 13) if kind == 'grin' else (17, 15)
+        box = (x - w, y - h, x + w, y + h)
+        ell(d, t, box, fill=(46, 40, 84, 255), outline=navy, ow=3.6)
+        arc(d, t, (x - w + 5, y - h + 4, x + w - 5, y + h + 5), 20, 160,
+            fill=(255, 150, 178, 255), width=int(max(3, h - 3) * SS / 3))
+        if kind == 'tongue':
+            ell(d, t, (x - 9, y + 6, x + 9, y + 22), fill=(255, 150, 178, 255),
+                outline=navy, ow=3.0)
+        elif kind == 'talk':
+            ell(d, t, (x - 7, y - 2, x + 7, y + 10), fill=(255, 168, 190, 255))
+        return
+    if kind in ('o', 'o_big'):
+        r = 7.0 if kind == 'o' else 11.0
+        ell(d, t, (x - r, y - r, x + r, y + r + 2), fill=(46, 40, 84, 255),
+            outline=navy, ow=3.4)
+        ell(d, t, (x - r * 0.5, y + r * 0.1, x + r * 0.5, y + r * 0.9),
+            fill=(255, 150, 178, 220))
+        return
+    if kind == 'frown':
+        arc(d, t, (x - 15, y - 4, x + 15, y + 22), 190, 350, fill=navy, width=3.8)
+        return
+    if kind == 'wavy':
+        line(d, t, [(x - 16, y + 3), (x - 8, y - 3), (x, y + 3), (x + 8, y - 3),
+                    (x + 16, y + 3)], fill=navy, width=3.4)
+        return
+    if kind == 'flat':
+        line(d, t, [(x - 11, y + 2), (x + 11, y + 2)], fill=navy, width=3.4)
+        return
+    if kind == 'smirk':
+        line(d, t, [(x - 13, y + 4), (x - 2, y + 8), (x + 12, y - 4)],
+             fill=navy, width=3.6)
+        return
+    if kind == 'kiss':
+        ell(d, t, (x - 9, y - 5, x + 9, y + 7), fill=(255, 150, 178, 255),
+            outline=navy, ow=3.2)
+        line(d, t, [(x - 4, y - 2), (x + 4, y - 2)], fill=navy, width=2.4)
+        return
+    if kind == 'pout':
+        ell(d, t, (x - 10, y - 4, x + 10, y + 9), fill=(255, 160, 186, 255),
+            outline=navy, ow=3.2)
+        line(d, t, [(x - 7, y + 2), (x + 7, y + 2)], fill=navy, width=2.4)
 
 
 def draw_blush(d, t, ch, hearts=False, big=False):
-    if 'round_cheeks' in ch['acc'] or hearts or big:
-        for x in (CX - 27, CX + 27):
-            if hearts:
-                heart(d, t, x, HEAD_CY + 16, 8, (255, 126, 148, 160))
-            else:
-                r = 11 if not big else 13
-                ell(d, t, (x - r, HEAD_CY + 12 - r * 0.7, x + r, HEAD_CY + 12 + r * 0.7),
-                    fill=BLUSH, outline=None)
-    else:
-        for x in (CX - 28, CX + 28):
-            ell(d, t, (x - 10, HEAD_CY + 12, x + 10, HEAD_CY + 24), fill=BLUSH, outline=None)
+    col = ch['lip'] or (255, 146, 172, 165)
+    rx = 14.0 if big else 12.0
+    ry = 8.5 if big else 7.5
+    for side in (1, -1):
+        x = CX + side * (EYE_X + 13.0)
+        y = EYE_Y + 13.0
+        ell(d, t, (x - rx, y - ry, x + rx, y + ry),
+            fill=(col[0], col[1], col[2], col[3] - 60))
+        ell(d, t, (x - rx * 0.78, y - ry * 0.8, x + rx * 0.78, y + ry * 0.8), fill=col)
+        for k in (-1, 1):
+            line(d, t, [(x + k * 5, y - 4), (x + k * 8, y + 4)],
+                 fill=(255, 255, 255, 150), width=2.2)
 
 
-# ============================================================================
-# arms
-# ============================================================================
-def draw_arm(d, t, ch, spec, side, hand_style='open', skin_only=False):
-    sh, el, hd = arm_geom(spec, side)
-    top = ch['top']
-    top2 = ch['top2']
-    skin = ch['skin']
-    short = ch['sleeve'] == 'short'
-    if short:
-        # short sleeve: sleeve down to the elbow, bare forearm
-        limb(d, t, [sh, el], 17, top)
-        limb(d, t, [el, hd], 12.5, skin)
-        c = ((el[0] + hd[0]) / 2, (el[1] + hd[1]) / 2)
-        limb(d, t, [el, c], 14.5, top2, outline=None)
-    elif ch['sleeve'] == 'puff':
-        ell(d, t, (sh[0] - 15, sh[1] - 16, sh[0] + 15, sh[1] + 16), fill=top, outline=INK, ow=2.8)
-        limb(d, t, [el, hd], 12.0, skin)
-    else:
-        limb(d, t, [sh, el], 17, top)
-        limb(d, t, [el, hd], 13, top)
-        limb(d, t, [el, el], 13, top, outline=None)
-        cuff = (el[0] + (hd[0] - el[0]) * 0.86, el[1] + (hd[1] - el[1]) * 0.86)
-        limb(d, t, [cuff, hd], 13.6, top2, outline=None)
-    draw_hand(d, t, hd, side, skin, hand_style)
+def draw_face(d, t, ch, spec):
+    """Brows, eyes, mouth and blush — all on the head transform."""
+    draw_brows(d, t, spec['brows'])
+    draw_eyes(d, t, spec['eyes'], spec['look'])
+    draw_mouth(d, t, spec['mouth'], ch['lip'])
+    draw_blush(d, t, ch,
+               hearts=('heart_blush' in spec['deco']) or spec['eyes'] in ('love', 'plead'),
+               big=bool(ch['lip']))
 
 
-def draw_hand(d, t, pt, side, skin, style='open'):
-    x, y = pt
-    if style == 'fist':
-        rrect(d, t, (x - 10, y - 10, x + 10, y + 10), 7, fill=skin, outline=INK, ow=3.0)
-        arc(d, t, (x - 6, y - 8, x + 6, y + 2), 200, 340, fill=dark(skin, 0.22), width=2.0)
-    elif style == 'flat':
-        rrect(d, t, (x - 11, y - 8, x + 11, y + 9), 6, fill=skin, outline=INK, ow=3.0)
-        for k in (-5, 0, 5):
-            line(d, t, [(x + k, y - 6), (x + k, y + 7)], fill=dark(skin, 0.16), width=1.4)
-    elif style == 'point':
-        ell(d, t, (x - 9, y - 9, x + 9, y + 9), fill=skin, outline=INK, ow=3.0)
-        limb(d, t, [(x + side * 6, y - 4), (x + side * 20, y - 8)], 5.5, skin)
-    elif style == 'paw':
-        ell(d, t, (x - 10, y - 10, x + 10, y + 11), fill=skin, outline=INK, ow=3.0)
-        for k in (-4, 0, 4):
-            ell(d, t, (x + k - 2, y - 8, x + k + 2, y - 2), fill=(255, 176, 190, 255), outline=None)
-    elif style == 'grip':
-        rrect(d, t, (x - 10, y - 8, x + 10, y + 8), 6, fill=skin, outline=INK, ow=3.0)
-    else:
-        ell(d, t, (x - 10, y - 10, x + 10, y + 11), fill=skin, outline=INK, ow=3.0)
-        ell(d, t, (x + side * 9 - 4, y - 2, x + side * 9 + 4, y + 6), fill=skin, outline=INK, ow=2.4)
+# ---------------------------------------------------------------- accessories
+def draw_head_accessories(d, t, ch):
+    """The mode's outfit, drawn over the face. One whale, eleven wardrobes."""
+    acc = ch['acc']
+    top, top2, hair = ch['top'], ch['top2'], ch['hair']
+    ty = HEAD_CY - HEAD_RY
+    by = HEAD_CY + HEAD_RY
+    if 'cap' in acc:                            # friend: baseball cap
+        ell(d, t, (CX - HEAD_RX - 5, ty - 16, CX + HEAD_RX + 5, HEAD_CY - 4),
+            fill=top, outline=OUTLINE_BLUE, ow=3.8)
+        clip(d, t, [ellipse_pts(CX, HEAD_CY - 10, HEAD_RX + 5, 30, 40)],
+             lambda dd: ell(dd, t, (CX - 90, HEAD_CY + 4, CX + 90, HEAD_CY + 90),
+                            fill=sh(top, 0.22)))
+        pts = [(CX + 4, HEAD_CY - 16), (CX + 74, HEAD_CY - 8), (CX + 70, HEAD_CY + 10),
+               (CX + 8, HEAD_CY + 2)]
+        poly(d, t, pts, fill=sh(top, 0.14), outline=OUTLINE_BLUE, ow=3.4)
+        ell(d, t, (CX - 6, ty - 24, CX + 6, ty - 12), fill=top2,
+            outline=OUTLINE_BLUE, ow=2.6)
+    if 'headset' in acc:                        # jarvis: headset band + earpieces
+        arc(d, t, (CX - HEAD_RX - 12, ty - 22, CX + HEAD_RX + 12, HEAD_CY + 12),
+            186, 354, fill=top, width=7.0)
+        arc(d, t, (CX - HEAD_RX - 12, ty - 22, CX + HEAD_RX + 12, HEAD_CY + 12),
+            186, 354, fill=OUTLINE_BLUE, width=2.4)
+        for side in (1, -1):
+            x = CX + side * (HEAD_RX + 6)
+            rrect(d, t, (x - 11, HEAD_CY - 20, x + 11, HEAD_CY + 12), 8,
+                  fill=top2, outline=OUTLINE_BLUE, ow=3.2)
+        line(d, t, [(CX + HEAD_RX + 6, HEAD_CY + 12), (CX + HEAD_RX + 2, HEAD_CY + 44)],
+             fill=OUTLINE_BLUE, width=3.4)
+        ell(d, t, (CX + HEAD_RX - 4, HEAD_CY + 42, CX + HEAD_RX + 10, HEAD_CY + 54),
+            fill=GLOW_BLUE, outline=OUTLINE_BLUE, ow=2.6)
+    if 'visor' in acc:                          # jarvis: translucent HUD over one eye
+        rrect(d, t, (CX - HEAD_RX - 2, EYE_Y - 17, CX + HEAD_RX + 2, EYE_Y + 15), 13,
+              fill=(120, 190, 255, 82))
+        for i in range(3):
+            line(d, t, [(CX - HEAD_RX + 4, EYE_Y - 10 + i * 9),
+                        (CX + HEAD_RX - 4, EYE_Y - 12 + i * 9)],
+                 fill=(170, 225, 255, 170), width=2.0)
+    if 'glasses' in acc:                        # warm-guy: round frames
+        for side in (1, -1):
+            x = CX + side * EYE_X
+            ell(d, t, (x - 19, EYE_Y - 19, x + 19, EYE_Y + 19),
+                outline=OUTLINE_BLUE, ow=4.0)
+            arc(d, t, (x - 16, EYE_Y - 17, x + 16, EYE_Y + 8), 200, 340,
+                fill=(255, 255, 255, 90), width=3.0)
+        line(d, t, [(CX - 4, EYE_Y - 2), (CX + 4, EYE_Y - 2)], fill=OUTLINE_BLUE, width=4.0)
+        for side in (1, -1):
+            line(d, t, [(CX + side * (EYE_X + 18), EYE_Y - 4),
+                        (CX + side * (EYE_X + 30), EYE_Y - 8)],
+                 fill=OUTLINE_BLUE, width=3.6)
+    if 'cat_ears' in acc:                       # neko: ears + whiskers
+        for side in (1, -1):
+            x = CX + side * 34
+            pts = [(x - 17, ty + 12), (x + side * 2, ty - 26), (x + 17, ty + 8)]
+            poly(d, t, pts, fill=hair, outline=OUTLINE_BLUE, ow=3.6)
+            poly(d, t, [(x - 9, ty + 8), (x + side * 1, ty - 14), (x + 9, ty + 5)],
+                 fill=WHALE_PINK)
+        whiskers_face(d, t)
+    if 'tuft' in acc:                           # daughter: a little sprout
+        line(d, t, [(CX + 2, ty - 2), (CX + 12, ty - 26)], fill=hair, width=5.0)
+        ell(d, t, (CX + 6, ty - 34, CX + 22, ty - 18), fill=hair,
+            outline=OUTLINE_BLUE, ow=2.8)
+    if 'bow' in acc:                            # girlfriend / daughter: ribbon bow, not ears
+        bx, byy = CX - HEAD_RX + 12, ty - 4
+        for side in (1, -1):
+            poly(d, t, [(bx, byy), (bx + side * 27, byy - 17), (bx + side * 25, byy + 13)],
+                 fill=WHALE_PINK, outline=OUTLINE_BLUE, ow=3.2)
+            poly(d, t, [(bx + side * 6, byy - 2), (bx + side * 22, byy - 12),
+                        (bx + side * 21, byy + 7)], fill=gl(WHALE_PINK, 0.22), outline=None)
+        ell(d, t, (bx - 8, byy - 8, bx + 8, byy + 8), fill=gl(WHALE_PINK, 0.28),
+            outline=OUTLINE_BLUE, ow=3.0)
+    if 'band' in acc:                           # tsundere: pale streak over the head
+        rrect(d, t, (CX - HEAD_RX - 3, ty + 10, CX + HEAD_RX + 3, ty + 30), 9,
+              fill=top, outline=OUTLINE_BLUE, ow=3.0)
+    if 'lashes' in acc:                         # girlfriend / oneesan: long lashes
+        for side in (1, -1):
+            x = CX + side * EYE_X
+            for k in (-1, 0, 1):
+                line(d, t, [(x + side * (EYE_X * 0.35) + k * 7, EYE_Y - 15),
+                            (x + side * (EYE_X * 0.95) + k * 9, EYE_Y - 24)],
+                     fill=OUTLINE_BLUE, width=2.6)
+    if 'drop' in acc:                           # whale-girl: a water bead
+        ell(d, t, (CX - HEAD_RX - 6, ty + 22, CX + HEAD_RX - 18, ty + 40),
+            fill=(198, 230, 255, 240), outline=OUTLINE_BLUE, ow=2.6)
+    if 'glow' in acc:                           # jarvis: a soft glow ring
+        arc(d, t, (CX - HEAD_RX - 14, ty - 14, CX + HEAD_RX + 14, HEAD_CY + 40),
+            170, 300, fill=(150, 205, 255, 170), width=3.0)
+    draw_neckwear(d, t, ch)
 
 
-# ============================================================================
-# props
-# ============================================================================
+def whiskers_face(d, t):
+    for side in (1, -1):
+        for dy in (-9, 2, 13):
+            line(d, t, [(CX + side * (EYE_X + 30), MOUTH_Y + dy * 0.5),
+                        (CX + side * (EYE_X + 62), MOUTH_Y + dy - side * 3)],
+                 fill=(86, 104, 176, 200), width=2.6)
+
+
+def draw_neckwear(d, t, ch):
+    """Everything the mode wears at the throat: scarf, tie, collar, pearls."""
+    acc = ch['acc']
+    top, top2, hair = ch['top'], ch['top2'], ch['hair']
+    ny = HEAD_CY + HEAD_RY + 6
+    if 'scarf' in acc or 'knit' in acc:
+        rrect(d, t, (CX - 52, ny - 14, CX + 52, ny + 16), 15, fill=top,
+              outline=OUTLINE_BLUE, ow=3.6)
+        for i in range(3):
+            arc(d, t, (CX - 40 + i * 26, ny - 12, CX + 26 + i * 26, ny + 14), 200, 340,
+                fill=sh(top, 0.16), width=2.4)
+        rrect(d, t, (CX + 28, ny + 6, CX + 52, ny + 52), 9, fill=top2,
+              outline=OUTLINE_BLUE, ow=3.2)
+    if 'collar' in acc:
+        for side in (1, -1):
+            poly(d, t, [(CX + side * 6, ny - 16), (CX + side * 44, ny - 10),
+                        (CX + side * 38, ny + 12), (CX + side * 8, ny + 6)],
+                 fill=top, outline=OUTLINE_BLUE, ow=3.4)
+    if 'tie' in acc:
+        poly(d, t, [(CX - 13, ny - 14), (CX + 13, ny - 14), (CX + 11, ny + 2),
+                    (CX - 11, ny + 2)], fill=top2, outline=OUTLINE_BLUE, ow=3.0)
+        poly(d, t, [(CX - 11, ny + 4), (CX + 11, ny + 4), (CX + 16, ny + 34),
+                    (CX, ny + 48), (CX - 16, ny + 34)], fill=top2,
+             outline=OUTLINE_BLUE, ow=3.2)
+    if 'bowtie' in acc:
+        for side in (1, -1):
+            poly(d, t, [(CX, ny + 1), (CX + side * 30, ny - 15),
+                        (CX + side * 30, ny + 15)], fill=top2,
+                 outline=OUTLINE_BLUE, ow=3.2)
+        ell(d, t, (CX - 6, ny - 5, CX + 6, ny + 7), fill=gl(top2, 0.22),
+            outline=OUTLINE_BLUE, ow=2.6)
+    if 'pearls' in acc:
+        for i in range(9):
+            a = math.pi * (0.12 + 0.76 * i / 8.0)
+            px = CX - 46 * math.cos(a)
+            py = ny + 6 + 26 * math.sin(a)
+            ell(d, t, (px - 5, py - 5, px + 5, py + 5), fill=(246, 250, 255, 255),
+                outline=OUTLINE_BLUE, ow=2.2)
+            ell(d, t, (px - 3, py - 3, px - 1, py - 1), fill=(255, 255, 255, 235))
+    if 'bib' in acc:                            # whale-girl: a tiny tail bib
+        poly(d, t, [(CX - 30, ny + 16), (CX + 30, ny + 16), (CX + 34, ny + 54),
+                    (CX - 34, ny + 54)], fill=top2, outline=OUTLINE_BLUE, ow=3.4)
+        for side in (1, -1):
+            poly(d, t, [(CX + side * 12, ny + 50), (CX + side * 36, ny + 66),
+                        (CX + side * 14, ny + 70)], fill=top2,
+                 outline=OUTLINE_BLUE, ow=3.0)
+    if 'lapel' in acc:
+        for side in (1, -1):
+            poly(d, t, [(CX + side * 6, ny - 14), (CX + side * 40, ny - 8),
+                        (CX + side * 34, ny + 10), (CX + side * 10, ny + 4)],
+                 fill=top, outline=OUTLINE_BLUE, ow=3.2)
+        ell(d, t, (CX + 24, ny + 26, CX + 38, ny + 40), fill=top2,
+            outline=OUTLINE_BLUE, ow=2.4)
+    if 'whiskers' in acc and 'cat_ears' not in acc:
+        whiskers_face(d, t)
+
 def prop_chibi(d, t, spec, ch):
-    """The small blanket-bundle figure the arms wrap around (the person you hug)."""
+    """The little chibi whale the mascot hugs, pats or carries."""
     x, y = spec.get('chibi', (CX, 200))
     tt = T(t.s, t.rot + spec.get('chibi_rot', 0.0), t.dx, t.dy)
-    poly(d, tt, [(x - 30, y + 4), (x + 30, y + 4), (x + 34, y + 56), (x - 34, y + 56)],
-         fill=(255, 236, 214, 255), outline=INK, ow=3.0)
-    poly(d, tt, [(x + 6, y + 8), (x + 30, y + 4), (x + 34, y + 56), (x + 6, y + 56)],
-         fill=SHADE_A, outline=None)
-    ell(d, tt, (x - 24, y - 26, x + 24, y + 16), fill=(255, 232, 216, 255), outline=INK, ow=3.2)
-    ell(d, tt, (x - 25, y - 32, x + 25, y - 11), fill=(96, 76, 66, 255), outline=INK, ow=2.8)
-    ell(d, tt, (x - 14, y - 22, x + 4, y - 6), fill=(255, 255, 255, 40), outline=None)
+    base = (210, 231, 255, 255)                # pale calf: has to read against the parent
+    body = ellipse_pts(x, y + 12, 30, 46, 44)
     for s in (-1, 1):
-        poly(d, tt, [(x + s * 8, y - 26), (x + s * 24, y - 22), (x + s * 20, y - 4)],
-             fill=(226, 150, 120, 255), outline=None)
+        poly(d, tt, [(x + s * 8, y + 40), (x + s * 36, y + 50), (x + s * 12, y + 62)],
+             fill=base, outline=OUTLINE_BLUE, ow=3.0)
+    ell(d, tt, (x - 30, y - 34, x + 30, y + 58), fill=base, outline=OUTLINE_BLUE, ow=3.8)
+    grad_in(d, tt, [body], gl(base, 0.24), sh(base, 0.14))
+    clip(d, tt, [body], lambda dd: ell(dd, tt, (x + 12 - 60, y + 70 - 60,
+                                                x + 12 + 60, y + 70 + 60),
+                                       fill=sh(base, 0.26)))
+    ell(d, tt, (x - 19, y - 7, x + 19, y + 50), fill=(250, 252, 255, 255))
+    outline(d, tt, ellipse_pts(x, y + 21, 19, 29, 32), OUTLINE_BLUE, 2.6)
     for s in (-1, 1):
-        arc(d, tt, (x + s * 12 - 8, y - 8, x + s * 12 + 8, y + 6), 200, 340, fill=INK, width=3.0)
-    arc(d, tt, (x - 6, y - 2, x + 6, y + 8), 20, 160, fill=INK, width=3.0)
-    for s in (-1, 1):
-        ell(d, tt, (x + s * 10 - 3, y + 60, x + s * 10 + 3, y + 66), fill=INK, outline=None)
+        ell(d, tt, (x + s * 12 - 8, y - 25, x + s * 12 + 8, y - 9),
+            fill=(252, 253, 255, 255), outline=OUTLINE_BLUE, ow=2.8)
+        ell(d, tt, (x + s * 12 - 3.4, y - 20, x + s * 12 + 3.4, y - 12),
+            fill=(30, 42, 96, 255))
+        ell(d, tt, (x + s * 12 - 6, y - 22, x + s * 12 - 1, y - 17),
+            fill=(255, 255, 255, 240))
+        ell(d, tt, (x + s * 18 - 5, y - 6, x + s * 18 + 5, y + 3),
+            fill=(255, 146, 172, 170))
+    arc(d, tt, (x - 7, y - 6, x + 7, y + 6), 20, 160, fill=OUTLINE_BLUE, width=3.0)
+    for k in range(3):
+        ell(d, tt, (x - 9 + k * 9, y - 62 + abs(k - 1) * 7, x - 3 + k * 9,
+                    y - 52 + abs(k - 1) * 7), fill=(198, 230, 255, 235))
 
 
 def prop_heart(d, t, x, y):
@@ -1379,19 +1456,23 @@ def prop_clapline(d, t, x, y):
 
 
 def prop_pat_hand(d, t, x, y):
-    """A hand belonging to the viewer, patting the character's head."""
-    px, py = CX + 52, HEAD_CY - HEAD_RY - 22
-    limb(d, t, [(px + 26, py - 46), (px, py)], 26, (255, 226, 208, 255))
-    rrect(d, t, (px - 26, py - 16, px + 20, py + 12), 9, fill=(255, 214, 196, 255), outline=INK, ow=3.0)
-    for k in range(3):
-        limb(d, t, [(px - 22 + k * 15, py + 6), (px - 22 + k * 15, py + 18)], 9, (255, 214, 196, 255))
+    """A flipper from outside the frame, patting the mascot's head."""
+    px, py = CX + 58, HEAD_CY - HEAD_RY - 14
+    col = gl(BODY_BLUE, 0.26)
+    limb(d, t, [(px + 36, py - 52), (px, py)], 27, col, OUTLINE_BLUE, 4.0)
+    limb(d, t, [(px + 30, py - 46), (px + 4, py - 6)], 10, (255, 255, 255, 95), None, 0)
+    ell(d, t, (px - 27, py - 16, px + 23, py + 13), fill=col, outline=OUTLINE_BLUE, ow=3.8)
+    soft(d, t, (px - 20, py - 12, px + 2, py + 2), (255, 255, 255, 150))
 
 
 def prop_tap_hand(d, t, pt):
+    """A flipper tip tapping along, for the 'there there' pats."""
     x, y = pt
-    ell(d, t, (x - 10, y - 10, x + 10, y + 11), fill=(255, 226, 208, 255), outline=INK, ow=3.0)
-    for k in (-4, 1, 6):
-        limb(d, t, [(x + k, y - 6), (x + k + 4, y - 16)], 4.0, (255, 216, 198, 255))
+    col = gl(BODY_BLUE, 0.26)
+    ell(d, t, (x - 13, y - 13, x + 13, y + 14), fill=col, outline=OUTLINE_BLUE, ow=3.4)
+    for k in (-6, 0, 6):
+        limb(d, t, [(x + k, y - 8), (x + k + 3, y - 20)], 4.6, col)
+    soft(d, t, (x - 9, y - 10, x + 3, y + 1), (255, 255, 255, 150))
 
 
 def prop_scanner(d, t, x, y):
@@ -1418,16 +1499,15 @@ def prop_handhold(d, t, x, y):
 
 
 def prop_coat(d, t, ch):
-    """A coat draped over the character's shoulders."""
-    col = (222, 172, 122, 255)
+    """A jacket draped over the mascot's shoulders."""
+    col = (122, 158, 236, 255)
     for s in (-1, 1):
-        poly(d, t, [(CX + s * 18, SHOULDER_Y - 20), (CX + s * 62, SHOULDER_Y - 6),
-                    (CX + s * 66, 190), (CX + s * 30, 200)],
-             fill=col, outline=INK, ow=3.2)
-    for s in (-1, 1):
-        poly(d, t, [(CX + s * 30, SHOULDER_Y - 16), (CX + s * 62, SHOULDER_Y - 4),
-                    (CX + s * 64, 130), (CX + s * 30, 140)],
-             fill=lighten(col, 0.14), outline=None)
+        pts = [(CX + s * 16, 126), (CX + s * 72, 150), (CX + s * 78, 236),
+               (CX + s * 34, 250)]
+        poly(d, t, pts, fill=col, outline=OUTLINE_BLUE, ow=3.4)
+        clip(d, t, [pts], lambda dd, k=s: ell(dd, t, (CX + k * 90 - 80, 300 - 80,
+                                                     CX + k * 90 + 80, 300 + 80),
+                                              fill=sh(col, 0.20)))
 
 
 def prop_umbrella(d, t, pt):
@@ -1699,39 +1779,19 @@ def draw_ledge(d, t, box):
     """A low wall / desk edge the character leans on, hands resting on top."""
     x0, y0, x1, y1 = box
     poly(d, t, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
-         fill=(226, 216, 204, 255), outline=INK, ow=3.4)
-    poly(d, t, [(x0, y0), (x1, y0), (x1, y0 + 11), (x0, y0 + 11)],
-         fill=(248, 244, 238, 255), outline=None)
-    line(d, t, [(x0 + 5, y0 + 11), (x1 - 5, y0 + 11)], fill=(204, 194, 184, 255), width=2.2)
+         fill=(150, 174, 226, 255), outline=INK, ow=3.6)
+    poly(d, t, [(x0, y0), (x1, y0), (x1, y0 + 12), (x0, y0 + 12)],
+         fill=(228, 238, 255, 255), outline=None)
+    line(d, t, [(x0 + 5, y0 + 12), (x1 - 5, y0 + 12)], fill=(104, 128, 190, 255), width=2.4)
     for i in range(3):
         x = x0 + 88 + i * 88
-        line(d, t, [(x, y0 + 22), (x, y1)], fill=(219, 211, 202, 255), width=1.8)
-
-
-def draw_body(d, t, ch):
-    """Torso, legs and neck — everything between the hair and the chin."""
-    draw_legs(d, t, ch)
-    draw_torso(d, t, ch)
-    draw_neck(d, t, ch)
-
-
-def draw_arms(d, t, ch, spec):
-    """Both arms, drawn in front of the torso (left first, then right)."""
-    draw_arm(d, t, ch, spec['arms'][1], -1, spec['hand_style'])
-    draw_arm(d, t, ch, spec['arms'][0], 1, spec['hand_style'])
-
-
-def draw_face(d, t, ch, spec):
-    """Brows, eyes, mouth and blush."""
-    draw_brows(d, t, spec['brows'])
-    draw_eyes(d, t, spec['eyes'], spec['look'])
-    draw_mouth(d, t, spec['mouth'], ch['lip'])
-    draw_blush(d, t, ch,
-               hearts=('heart_blush' in spec['deco']) or spec['eyes'] in ('love', 'plead') or bool(ch['lip']))
+        line(d, t, [(x, y0 + 24), (x, y1)], fill=(126, 150, 208, 255), width=2.0)
+        poly(d, t, [(x - 14, y0 + 54), (x + 14, y0 + 54), (x + 14, y0 + 84),
+                    (x - 14, y0 + 84)], fill=(140, 164, 218, 255), outline=None)
 
 
 def draw_prop(d, t, ch, spec, layer):
-    """The pose's prop: layer='back' tucks it behind the arms, 'hand' puts it in the hand."""
+    """The pose's prop: layer='back' tucks it behind the flippers, 'hand' puts it in one."""
     prop = spec['prop']
     if layer == 'back':
         if prop == 'coat':
@@ -1757,31 +1817,29 @@ def draw_figure(d, t, ch, spec):
     # the head rides on its own offset, so a pose can tilt or turn it
     th = T(t.s, t.rot, t.dx + spec['hdx'], t.dy + spec['hdy'])
 
-    # 1. behind the body: the hair mass and the cat tail
-    draw_hair_back(d, t, ch)
+    # 1. behind the body: the cat tail, then the fins and the fluke
     if 'cat_tail' in ch['acc']:
-        arc(d, t, (CX + 40, 210, CX + 124, 310), 200, 20, fill=ch['hair'], width=12.0)
-        arc(d, t, (CX + 40, 210, CX + 124, 310), 200, 20, fill=INK, width=2.4)
+        draw_cat_tail(d, t, ch)
 
-    # 2. the body, then the props that sit behind the arms
+    # 2. the body, then the props that sit behind the flippers
     draw_body(d, t, ch)
     draw_prop(d, t, ch, spec, 'back')
 
-    # 3. head and face
+    # 3. head, face, then the outfit that goes over both
     draw_head(d, th, ch)
     draw_face(d, th, ch, spec)
+    draw_head_accessories(d, th, ch)
 
-    # 4. the ledge the character leans on: hides the lower body, hands rest on its rim
+    # 4. the ledge the whale leans on: hides the lower body, flippers rest on its rim
     if spec['ledge']:
         draw_ledge(d, t, spec['ledge'])
 
-    # 5. arms in front of the torso, then whatever they hold
+    # 5. flippers in front of the body, then whatever they hold
     draw_arms(d, t, ch, spec)
     draw_prop(d, t, ch, spec, 'hand')
 
     # 6. decorations
     deco(d, t, spec['deco'], ch)
-
 
 def draw_caption(d, caption, display):
     size = int(40 * SS)
@@ -1797,7 +1855,7 @@ def draw_caption(d, caption, display):
     x0 = (CW - bw) / 2
     y0 = 352 * SS
     r = bh / 2
-    d.rounded_rectangle((x0, y0, x0 + bw, y0 + bh), radius=r, fill=(52, 44, 42, 180))
+    d.rounded_rectangle((x0, y0, x0 + bw, y0 + bh), radius=r, fill=(28, 40, 96, 200))
     d.text((x0 + pad_x - box[0], y0 + pad_y - box[1]), label, font=f, fill=(255, 255, 255, 255))
 
 
@@ -1812,10 +1870,12 @@ def render(spec):
     # a wall the character peeks out from, and a ledge it leans on
     if spec['wall']:
         x0, y0, x1, y1 = spec['wall']
-        poly(d, t, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], fill=(226, 218, 208, 255), outline=INK, ow=3.4)
+        poly(d, t, [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], fill=(150, 174, 226, 255), outline=INK, ow=3.6)
         for i in range(6):
             y = y0 + 20 + i * 48
-            line(d, t, [(x0 + 8, y), (x1 - 8, y)], fill=(206, 196, 186, 255), width=2.4)
+            line(d, t, [(x0 + 8, y), (x1 - 8, y)], fill=(126, 150, 208, 255), width=2.4)
+        poly(d, t, [(x1, y0), (x1 - 22, y0), (x1 - 22, y1), (x1, y1)],
+             fill=(228, 238, 255, 255), outline=None)
         line(d, t, [(x1, y0), (x1, y1)], fill=INK, width=3.6)
     draw_caption(d, spec['caption'], spec['id'])
 
