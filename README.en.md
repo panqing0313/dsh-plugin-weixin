@@ -782,7 +782,7 @@ text adventure (second person, choice based). In WeChat:
   `/import <paste or file path>` reads it back — Markdown exports work too. A preview comes first and nothing is written until you answer `是`.
   Three policies: `append` (default, only fills gaps), `merge` (fills empty profile fields), `replace` (the pack's profile wins).
   Under every policy long-term memory is **only appended** — importing never deletes a memory; that stays a human action (`/forget`, `/undo`).
-  To move a whole machine (login token included), the **Maintenance** tab of the settings card seals everything into one encrypted file.
+  To move a whole machine (login token included), the **Maintenance** tab of the settings card seals everything into one encrypted file. The pack lands in `~/.dsh/weixin/backups/` by default and the card tells you the folder; it is written as an encrypted stream, which is why `logs/` and `asr-models/` stay out of it (the first is diagnostics, the second can be downloaded again) and why "include media" only adds media. The pack-to-open box and the export-folder box both have a **Browse…** button: the desktop shell opens the native chooser, the Web GUI has no native dialog, so the card browses folders and files through the host instead.
 - With memory on there is also a **closeness** line: which day you met, how many messages in total, the mood right now (late night / lively / quiet for a while / calm,
   produced by deterministic rules, no model cost). It appears at the very front of the prompt (`【我们】…`), in `/status`, in `/memory` and in the settings card,
   giving the tone a sense of accumulated relationship.
@@ -927,6 +927,8 @@ Three kinds of work, three budgets: conversation deserves a good model, backgrou
 | `memoryProvider` / `memoryModel` | background memory summaries, fact extraction, digest consolidation | falls back to the conversation model |
 
 Two rules: **half a pair does nothing** (both provider and model are needed, otherwise you are asking the host to guess, and that ambiguity is exactly what this switch exists to remove); **routing is re-read on every request**, so a change in the settings card applies to the next message with no restart.
+
+**You do not type model names.** All five provider/model options are dropdowns built from the host's own `~/.dsh/settings.yaml` (`llm-pi-ai.providers`), showing each model's name and context window; picking a provider fills in its first model, so the pair is never half-set. A saved value the host no longer has is flagged ("not in the host's list") instead of being silently dropped — old configs keep working, and you can see at a glance that they are stale.
 
 ### The memory model (structured profile · events · person digest · standalone model)
 

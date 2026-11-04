@@ -4232,3 +4232,17 @@ release run `41485882140` success）。
 - 核验：`dist.shasum 530edf6112c4168159d986a5abb52e266d557de6`、`dist.integrity sha512-H203dXQ2d67bWbGNyXW0HrPzwBs/yfdi8dCfxmzUCt2iRo6yzsqG8DZm1WsJLVkVAFd2uPK6/pvUIAyQfpm3SA==`、`gitHead eb2c45fe218ce029583d8ff2aa8b3da376b4c58e`（= 本地 HEAD）、`dist-tags.latest = 1.5.0`；`doctor` → `installed version 1.5.0`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.5.0)`；profile `^1.4.9 → ^1.5.0`、锁文件刷新。
 - 这一版包含 A/B/C2/C3/C4/D1/D2/D4 八件，提交依次为 `d411cef`、`c3ec936`、`c753cc4`、`6ba2ed4`、`b973078`、`dcb911e`（D1/D2/D4 与提示词页签），文档 `6490598`、`ee2006b`、`a221048`、`eb2c45f`。全量 1183/1183。
 - **发布后 CI 抓到一处毫秒边界 flake**：`test/memory.test.js:48` 在 CI 上期望 `{added:false, reason:'duplicate', confirmed:true}`，实得少了 `confirmed`。根因是 `src/memory.js` 的重复分支用 `now > updatedAt` 判断「有没有发生什么」——同一条事实在一毫秒内说两遍（快速 runner、或者紧挨着的两个 `addGlobalFact`）时 `updatedAt === now`，于是返回的**形状**取决���时钟走得多快。改成 `confirmed = now >= stamp`、`moved = now > stamp`（真的能前进时才写盘），并补一条固定 `now` 的回归用例。这是测试抓出来的真 bug，不是测试写错。
+
+## 1.5.3 三处「用起来」的修（2026-11-04）
+
+用户报了三件（外加一件需求）：账单还是 0、维护导出报 `Cannot create a string longer than 0x1fffffe8 characters`、要填路径的配置希望能点开文件选择器、选模型的地方希望是下拉框。
+
+- **账单为 0 的根因不是记账没发生**：本机 `usage-ledger.json` 里有 `turns: 7 / tokensIn: 6711 / tokensOut: 1138 / models: 默认×4 + magpie/auto/glm-5.3-flash×3`。坏在读取：`readSavedConfig()` 在本机返回 `accountId: undefined`（配置卡从没选过账号），而 `usageLedger` 只认 `config.accountId`，于是 `conversationRows(stateDir(), '')` 返回 0 行，页签显示「还没有记录」。改成 **显式参数 → 当前会话账号 → 注册表里 `lastSeenAt` 最新的那个**，并把账号一起返回。回归用例放进 `test/migrate-pack.test.js`（config.json 不带 accountId）。
+- **导出崩溃是 V8 的字符串上限**：旧 `sealState` 把所有文件 base64 进一个对象再 `JSON.stringify`；这台机器 1505 个文件 / 1083.8 MB → base64 后 1445 MB，超过 536,870,888 的上限。改成 **流式封包**：`DSHWX2` 魔数 + salt/iv + meta 行 + 每文件 `{rel,size,offset}` 行 + 1 MiB 分块喂进同一个 GCM + 尾行 `{records,end}` 与 authTag；`openState` 先探前 6 字节，`DSHWX2` 走游标式 `openStream`，其余仍按旧的 `DSHWX1`（JSON + base64）读，老包照样能开。失败时删掉半成品文件，不留一个打不开的包。
+  - 顺带把「哪些不进包」和 `src/backup.js` 对齐：`backups`（自己）、`node_modules`、`asr-models`（923 MB，可重新下载）、`logs`（80 MB，只是诊断）。导出现在会返回文件落在哪个文件夹，卡片把它显示出来。
+- **路径选择器**：新增宿主方法 `fsList(options)` 与卡片组件 `PathPicker`（详见 `docs/extras.md`）。桌面宿主仍优先用系统选择器，Web 界面用内置浏览。
+- **模型下拉**：新增 `src/model-catalog.js`（手写 YAML 子集解析 `~/.dsh/settings.yaml`）与宿主方法 `modelCatalog()`，设置卡里 `*Provider`/`*Model` 十项改成成对下拉。已有值不在目录里会被标出来，读不全时标 `partial`。
+
+踩过的坑：`src/model-catalog.js` 第一版把「模型列表项」的判断放在 provider 闸门**之后**，导致 `name` 被当成 provider 字段读掉、每个模型的标签变成它的 id；用 python 补丁时又两次把循环的结束大括号与 `return` 一起删掉（`SyntaxError: Unexpected token 'export'`）。教训是这块解析器只用 `edit` 工具改、每次改完立刻 `node -e` 跑真实文件（本机 3 个供应商 / 40 个模型 / `partial: false`）。
+
+全量 1210/1210；`check.mjs` → checked 275 files。

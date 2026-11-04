@@ -68,6 +68,17 @@ window.__ModuleLoader__.load({
 			 * reads this file and fails when the copy drifts from `src/config-effect.js`,
 			 * which is itself checked against the schema. Three sources, two guards.
 			 */
+			/**
+			 * Provider and model are chosen as a pair. Keyed by the shared prefix of
+			 * the two option names, so `chat` → chatProvider/chatModel and so on.
+			 */
+			const MODEL_PAIRS = {
+				chat: { provider: "chatProvider", model: "chatModel" },
+				side: { provider: "sideProvider", model: "sideModel" },
+				memory: { provider: "memoryProvider", model: "memoryModel" },
+				proactive: { provider: "proactiveProvider", model: "proactiveModel" },
+				report: { provider: "reportProvider", model: "reportModel" },
+			};
 			const CONFIG_EFFECT_KINDS = ["live", "restart", "login"];
 			const CONFIG_EFFECTS = {
 				"sendIntervalMs": "restart", "voiceOutbound": "restart", "ocrTimeoutMs": "restart", "notifyPort": "restart", "eventPollMs": "restart",
@@ -1139,6 +1150,150 @@ window.__ModuleLoader__.load({
 		}
 
 /**
+		 * A path box with a browse button.
+		 *
+		 * The native chooser (`pickDirectory`) is a *directory* chooser and only
+		 * exists in the desktop shell — on the Web GUI there is no dialog at all.
+		 * So the card carries its own browser: it asks the host for a listing
+		 * (`weixin.fsList`), shows folders and files, and lets the operator walk
+		 * down into a folder or click a file to take it.
+		 *
+		 * `mode: "file"` dims files that do not match `accept` (still clickable —
+		 * a mistyped suffix is a real thing); `mode: "dir"` shows folders only
+		 * and offers the folder that is currently open.
+		 */
+		function PathPicker({ ctx, t, value, onChange, placeholder, mode = "file", accept = "", onNotice }) {
+			const [open, setOpen] = react.useState(false);
+			const [listing, setListing] = react.useState(null);
+			const [error, setError] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+			const [showHidden, setShowHidden] = react.useState(false);
+
+			const load = async (target) => {
+				setBusy(true);
+				setError("");
+				try {
+					const result = await callRemote(() => ctx.remote.weixin.fsList({
+						path: target,
+						filter: mode === "dir" ? "dir" : undefined,
+						showHidden,
+					}));
+					if (result?.error) {
+						setError(result.error);
+						return;
+					}
+					setListing(result ?? null);
+				} catch (failure) {
+					if (!isCancellation(failure)) setError(String(failure?.message ?? failure));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const openBrowser = async () => {
+				// Where the browser starts: the operator's own path if it is
+				// absolute, otherwise the native chooser (desktop only) or home.
+				const typed = String(value ?? "").trim();
+				if (typed !== "" && (typed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(typed))) {
+					setOpen(true);
+					await load(typed);
+					return;
+				}
+				const picked = await pickDirectory(ctx);
+				if (picked.ok) {
+					onChange(picked.path);
+					return;
+				}
+				if (picked.reason === PICK_UNAVAILABLE) {
+					onNotice?.(t("当前环境没有系统选择器，用下面的内置浏览。", "This environment has no native chooser; use the built-in browser below."));
+				}
+				setOpen(true);
+				await load("");
+			};
+
+			const acceptLabel = accept === "" ? "" : t(`只关心 ${accept}`, `looking for ${accept}`);
+			const matches = (name) => accept === "" || name.toLowerCase().endsWith(accept.toLowerCase());
+			const entries = listing === null ? [] : (listing.entries ?? []);
+
+			const browser = open
+				? createElement("div", {
+					key: "browser",
+					style: {
+						display: "flex", flexDirection: "column", gap: 8, padding: 10,
+						border: `1px solid ${C.border}`, borderRadius: RADIUS.card,
+						background: C.surfaceSunken,
+					},
+				},
+					createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+						createElement("span", { style: { ...hintStyle, fontFamily: "monospace", wordBreak: "break-all", flex: "1 1 200px" } },
+							listing === null ? (busy ? t("正在读取…", "Reading…") : "") : (listing.path ?? "")),
+						createElement("button", { onClick: () => load(listing?.parent ?? ""), disabled: busy || !listing?.parent, style: buttonStyleFor(busy || !listing?.parent), title: t("上一级", "Up one level") }, "↑"),
+						createElement("button", { onClick: () => load(listing?.home ?? ""), disabled: busy, style: buttonStyleFor(busy), title: t("主目录", "Home") }, "~"),
+						createElement("button", { onClick: () => { setOpen(false); setListing(null); }, style: buttonStyle }, t("收起", "Close"))),
+					createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+						createElement("label", { style: { ...hintStyle, display: "flex", gap: 4, alignItems: "center" } },
+							createElement("input", { type: "checkbox", checked: showHidden, onChange: (event) => setShowHidden(event.target.checked) }),
+							t("显示隐藏文件", "Show hidden")),
+						acceptLabel === "" ? null : createElement("span", { style: hintStyle }, acceptLabel),
+						listing?.defaultOutDir ? createElement("button", {
+							onClick: () => load(listing.defaultOutDir),
+							disabled: busy,
+							style: buttonStyleFor(busy),
+						}, t("导出目录", "Export folder")) : null,
+						mode === "dir" && listing?.path ? createElement("button", {
+							onClick: () => { onChange(listing.path); setOpen(false); },
+							style: buttonStyle,
+						}, t("选这个文件夹", "Use this folder")) : null),
+					error === ""
+						? null
+						: createElement("div", { style: { ...noticeStyle, gap: 6 } },
+							createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
+							createElement("span", null, error)),
+					listing === null
+						? null
+						: createElement("div", { style: { display: "flex", flexDirection: "column", gap: 1, maxHeight: 260, overflowY: "auto", fontFamily: "monospace", fontSize: 12 } },
+							entries.length === 0 && listing.picked === undefined
+								? createElement("span", { style: hintStyle }, t("这个文件夹是空的。", "This folder is empty."))
+								: null,
+							listing.picked === undefined
+								? null
+								: createElement("button", {
+									onClick: () => { onChange(listing.picked.path); setOpen(false); },
+									style: { ...buttonStyle, justifyContent: "flex-start", fontFamily: "monospace" },
+								}, `✓ ${listing.picked.name}`),
+							entries.map((entry) => createElement("button", {
+								key: entry.path,
+								onClick: () => {
+									if (entry.dir) {
+										load(entry.path);
+										return;
+									}
+									onChange(entry.path);
+									setOpen(false);
+								},
+								style: {
+									...buttonStyleFor(false),
+									justifyContent: "flex-start",
+									fontFamily: "monospace",
+									fontSize: 12,
+									opacity: entry.dir || matches(entry.name) ? 1 : 0.55,
+									wordBreak: "break-all",
+								},
+							}, `${entry.dir ? "📁" : "📄"} ${entry.name}`))))
+				: null;
+
+			return createElement("div", { key: "path-picker", style: { display: "flex", flexDirection: "column", gap: 8 } },
+				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+					createElement("input", {
+						value,
+						onChange: (event) => onChange(event.target.value),
+						placeholder,
+						style: { ...inputStyle, fontFamily: "monospace", fontSize: 12, flex: "1 1 auto" },
+					}),
+					createElement("button", { onClick: openBrowser, style: buttonStyle }, t("浏览…", "Browse…"))),
+				browser);
+		}
+/**
 		 * The Maintenance tab: what a migration pack would contain, sealing one,
 		 * and restoring one. All four actions are host methods (migrateSummary /
 		 * Export / Inspect / Restore) — the card never touches the filesystem.
@@ -1154,6 +1309,7 @@ window.__ModuleLoader__.load({
 		function MigrationSection({ ctx, t }) {
 			const [summary, setSummary] = react.useState(null);
 			const [includeMedia, setIncludeMedia] = react.useState(true);
+			const [outDir, setOutDir] = react.useState("");
 			const [exportPass, setExportPass] = react.useState("");
 			const [exportResult, setExportResult] = react.useState(null);
 			const [file, setFile] = react.useState("");
@@ -1187,11 +1343,12 @@ window.__ModuleLoader__.load({
 				setNotice("");
 				setExportResult(null);
 				try {
-					const r = await callRemote(() => ctx.remote.weixin.migrateExport({ passphrase: exportPass, includeMedia }));
+					const r = await callRemote(() => ctx.remote.weixin.migrateExport({ passphrase: exportPass, includeMedia, outDir: outDir.trim() === "" ? undefined : outDir.trim() }));
 					if (r?.error) setNotice(r.error);
 					else {
 						setExportResult(r);
 						setExportPass("");
+						if (typeof r.outDir === "string") setOutDir(r.outDir);
 					}
 				} catch (e) {
 					setNotice(String(e?.code ?? e?.message ?? e));
@@ -1254,6 +1411,17 @@ window.__ModuleLoader__.load({
 						onChange: (event) => setIncludeMedia(event.target.checked === true),
 					}),
 					createElement("span", null, t(`带上媒体（${media.files} 个文件，${humanBytes(media.bytes)}）`, `Include media (${media.files} file(s), ${humanBytes(media.bytes)})`))),
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+					createElement("span", { style: hintStyle }, t("存在哪个文件夹（留空就用默认的导出目录）", "Which folder (leave empty for the default export folder)")),
+					createElement(PathPicker, {
+						ctx,
+						t,
+						value: outDir,
+						onChange: setOutDir,
+						placeholder: summary?.defaultOutDir ?? "",
+						mode: "dir",
+						onNotice: setNotice,
+					})),
 				createElement("input", {
 					value: exportPass,
 					type: "password",
@@ -1270,6 +1438,8 @@ window.__ModuleLoader__.load({
 				exportResult === null ? null : createElement("div", { style: { ...noticeStyle, flexDirection: "column", alignItems: "flex-start", gap: 4 } },
 					createElement("span", null, t(`已写出 ${exportResult.files} 个文件，${humanBytes(exportResult.bytes)}。`, `Wrote ${exportResult.files} file(s), ${humanBytes(exportResult.bytes)}.`)),
 					createElement("span", { style: { fontFamily: "monospace", wordBreak: "break-all", fontSize: 12 } }, exportResult.file),
+					exportResult.outDir === undefined ? null : createElement("span", { style: { ...hintStyle, fontFamily: "monospace", wordBreak: "break-all" } },
+						t(`所在文件夹：${exportResult.outDir}`, `Folder: ${exportResult.outDir}`)),
 					createElement("span", { style: hintStyle }, t("把这一个文件拷到新机器，然后在下面恢复。", "Copy that one file to the new machine, then restore it below."))));
 
 			const sampleLines = Array.isArray(plan?.sample) ? plan.sample : [];
@@ -1294,11 +1464,14 @@ window.__ModuleLoader__.load({
 			const restoreRow = createElement("div", { key: "restore", style: { ...panelStyle, display: "flex", flexDirection: "column", gap: 10 } },
 				createElement("p", { style: panelTitleStyle }, t("2. Open a pack on this machine", "2. 在本机打开一个迁移包")),
 				createElement("div", { style: hintStyle }, t("先看清楚它会写什么再确认；写之前会自动留一份明文回滚副本。", "It shows what would be written before anything is; a plain rollback copy is kept first.")),
-				createElement("input", {
+				createElement(PathPicker, {
+					ctx,
+					t,
 					value: file,
-					onChange: (event) => setFile(event.target.value),
+					onChange: setFile,
 					placeholder: "/path/to/migrate-20261104-090000.enc",
-					style: { ...inputStyle, fontFamily: "monospace", fontSize: 12 },
+					accept: ".enc",
+					onNotice: setNotice,
 				}),
 				createElement("input", {
 					value: restorePass,
@@ -2845,6 +3018,10 @@ window.__ModuleLoader__.load({
 			// D4: the batch filed on the wire as a JSON string (no array codec).
 			const [portable, setPortable] = react.useState("");
 			const [portableNotice, setPortableNotice] = react.useState("");
+			// Which models this machine actually has. Two boxes with the free-text
+			// "provider" and "model" are the classic way to break every turn with
+			// `no configured model`, and the host already knows the list.
+			const [catalog, setCatalog] = react.useState(null);
 			// The host answers with localized validation messages, so it needs to
 			// know which language the card is showing.
 			const { lang } = useLocaleText(ctx);
@@ -2884,6 +3061,25 @@ window.__ModuleLoader__.load({
 			react.useEffect(() => {
 				load();
 			}, [load]);
+
+			react.useEffect(() => {
+				(async () => {
+					try {
+						setCatalog(await callRemote(() => ctx.remote.weixin.modelCatalog({})));
+					} catch {
+						// No catalogue: the boxes stay free text, which still works.
+						setCatalog(null);
+					}
+				})();
+			}, [ctx]);
+
+			/** Which models the saved provider offers, and every model, for the two boxes. */
+			const catalogState = (() => {
+				if (catalog === null) return { ready: false, providers: [], models: [] };
+				const providers = Array.isArray(catalog.providers) ? catalog.providers : [];
+				const models = Array.isArray(catalog.models) ? catalog.models : [];
+				return { ready: providers.length > 0 || models.length > 0, providers, models };
+			})();
 
 			/** Which fields differ from what the host reports as saved. */
 			const dirtyPaths = [];
@@ -2961,6 +3157,9 @@ window.__ModuleLoader__.load({
 				const value = draft[field.path] ?? "";
 				const changed = String(value) !== String(field.value ?? "");
 				const set = (next) => setDraft((current) => ({ ...current, [field.path]: next }));
+				// Setting the *other* box of a provider/model pair. Kept separate so
+				// the single-field `set` above stays the obvious thing to read.
+				const set2 = (path2, next) => setDraft((current) => ({ ...current, [path2]: next }));
 				// The control is chosen by the type the host declared, so the
 				// browser enforces the same shape the host will validate.
 				let control;
@@ -3014,6 +3213,54 @@ window.__ModuleLoader__.load({
 							style: { ...inputStyle, flex: "0 0 auto", width: 160 },
 						}),
 						field.unit ? createElement("span", { style: captionStyle }, t(field.unitEn, field.unit)) : null);
+				} else if (/^(provider|model)$/.test(field.path) && catalogState.ready) {
+					// These two always come in pairs — a provider with a model the
+					// provider does not have fails every turn — so the choice is
+					// offered as two dropdowns built from the host's own catalogue
+					// instead of two boxes someone has to spell correctly.
+					const purpose = field.path.replace(/Provider$|Model$/, "");
+					const pairs = MODEL_PAIRS[purpose] ?? { provider: `${purpose}Provider`, model: `${purpose}Model` };
+					const chosenProvider = field.path === pairs.provider ? value : String(draft[pairs.provider] ?? "");
+					const providerRow = catalogState.providers.find((entry) => entry.id === chosenProvider);
+					const sameProvider = (entry) => entry.provider === undefined || chosenProvider === "" || entry.provider === chosenProvider;
+					const choices = (providerRow?.models ?? catalogState.models).filter(sameProvider);
+					const known = choices.some((entry) => entry.id === value);
+					const nothing = catalogState.partial && !known;
+					control = createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+						createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+							createElement("select", {
+								value: known ? value : "",
+								disabled: field.readOnly,
+								onChange: (event) => {
+									const picked = event.target.value;
+									if (picked === "") return;
+									set(picked);
+									// Picking a provider sets its first model too, so the pair is
+									// never half-filled — that is the state that silently breaks.
+									if (field.path === pairs.provider) {
+										const first = catalogState.providers.find((entry) => entry.id === picked)?.models?.[0];
+										if (first !== undefined) set2(pairs.model, first.id);
+									}
+								},
+								style: { ...inputStyle, flex: "1 1 260px", width: "auto" },
+							},
+								nothing || known || value === ""
+									? null
+									: createElement("option", { key: "current", value }, t(`${value}（不在宿主的模型列表里）`, `${value} (not in the host's list)`)),
+								field.path === pairs.provider
+									? catalogState.providers.map((entry) => createElement("option", { key: entry.id, value: entry.id }, entry.id))
+									: choices.map((entry) => createElement("option", { key: `${entry.provider ?? "*"}/${entry.id}`, value: entry.id },
+										entry.name && entry.name !== entry.id ? `${entry.name}  ·  ${entry.id}` : entry.id))),
+							createElement("span", { style: captionStyle }, t("从宿主读取", "from the host"))),
+						value !== "" && !known
+							? createElement("span", { style: { ...captionStyle, color: C.warn } },
+								t(`当前值「${value}」不在这个选择里。宿主里没有它，可能是拼错了，也可能是这条路由已经不在。`,
+									`The current value "${value}" is not in this list. The host does not have it — a typo, or a route that is gone.`))
+							: null,
+						catalogState.partial
+							? createElement("span", { style: captionStyle },
+								t("宿主的配置文件里有这个版本读不懂的写法，列表可能不全；可以直接输入。", "The host's settings file uses a shape this build cannot read, so the list may be short; typing still works."))
+							: null);
 				} else {
 					control = createElement("input", {
 						type: "text",

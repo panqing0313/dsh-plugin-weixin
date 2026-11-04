@@ -6,6 +6,7 @@
 // unusable from the settings UI. Here the verify code is submitted by the UI
 // through submitVerifyCode() instead.
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import { TypertRemoteService, Remote, RemoteError } from "@deepseek-ai/dsh-typert-protocol";
 import { apiGetFetch, apiPostFetch } from "../vendor/openclaw-weixin/api/api.js";
 import {
@@ -45,6 +46,19 @@ import { listKnowledgeSources } from "./message/knowledge.js";
 import { buildOnboardingChecklist } from "./onboarding.js";
 import { lifeSummary, readOrInferLifeState } from "./message/life-state.js";
 import { lifeBlock } from "./message/life-state.js";
+import { readModelCatalog } from "./model-catalog.js";
+
+/**
+ * 每个「用途」对应的两个配置键。卡片用它们把下拉框里的选择标成「当前值」，
+ * 也用来在宿主目录里找不到已保存的组合时如实说明。
+ */
+const MODEL_ROUTE_KEYS = {
+    chat: { provider: "chatProvider", model: "chatModel" },
+    side: { provider: "sideProvider", model: "sideModel" },
+    memory: { provider: "memoryProvider", model: "memoryModel" },
+    proactive: { provider: "proactiveProvider", model: "proactiveModel" },
+    report: { provider: "reportProvider", model: "reportModel" },
+};
 import { buildHumanStyleBlock, isCompanionMode } from "./message/human-pace.js";
 import { buildStyleFeedbackBlock, readStyleRules } from "./message/style-feedback.js";
 import { usageAwarenessLine } from "./message/usage-ledger.js";
@@ -929,6 +943,11 @@ export class WeixinLoginController extends TypertRemoteService {
         const root = stateDir();
         const plain = { files: 0, bytes: 0 };
         const media = { files: 0, bytes: 0 };
+        // Keep in step with backup-crypto's SKIP_DIRS: what the summary counts
+        // and what the pack actually carries must be the same set, or the card
+        // promises a size the operator will not get. `asr-models` (the downloaded
+        // speech models) and `logs` are runtime caches, not state to migrate.
+        const skipped = new Set(["backups", "node_modules", "asr-models", "logs"]);
         const walk = (relative) => {
             let entries = [];
             try {
@@ -938,7 +957,7 @@ export class WeixinLoginController extends TypertRemoteService {
             }
             for (const entry of entries) {
                 if (entry.isDirectory()) {
-                    if (relative === "" && (entry.name === "backups" || entry.name === "node_modules")) continue;
+                    if (relative === "" && skipped.has(entry.name)) continue;
                     walk(relative === "" ? entry.name : `${relative}/${entry.name}`);
                 } else if (entry.isFile()) {
                     if (relative === "" && entry.name === "instance.lock") continue;
@@ -962,6 +981,7 @@ export class WeixinLoginController extends TypertRemoteService {
         walk("");
         return {
             stateRoot: root,
+            defaultOutDir: path.join(root, "backups"),
             withoutMedia: plain,
             media,
             withMedia: { files: plain.files + media.files, bytes: plain.bytes + media.bytes },
@@ -980,17 +1000,25 @@ export class WeixinLoginController extends TypertRemoteService {
         const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
         if (passphrase.length < 8) return { error: "口令至少 8 个字符 —— 它保护的是聊天原文与登录 token" };
         const stamp = new Date().toISOString().replace(/[:.]/g, "").replace("T", "-").slice(0, 17);
-        const outFile = path.join(stateDir(), "backups", `migrate-${stamp}.enc`);
+        // Where the pack lands is part of the answer: the operator asked "导出到
+        // 哪去了" and the card only ever said it failed. `outDir` is the folder
+        // chosen in the card's picker; the state root's backups/ is the default.
+        const outDir =
+            typeof options?.outDir === "string" && options.outDir.trim() !== ""
+                ? path.resolve(options.outDir.trim())
+                : path.join(stateDir(), "backups");
+        const outFile = path.join(outDir, `migrate-${stamp}.enc`);
         try {
+            fs.mkdirSync(outDir, { recursive: true });
             const result = sealState(stateDir(), {
                 passphrase,
                 outFile,
                 includeMedia: options?.includeMedia !== false,
                 warn: () => {},
             });
-            return { file: result.file, files: result.files, bytes: result.bytes };
+            return { file: result.file, outDir, files: result.files, bytes: result.bytes };
         } catch (error) {
-            return { error: String(error?.message ?? error) };
+            return { file: outFile, outDir, error: String(error?.message ?? error) };
         }
     }
 
@@ -1221,24 +1249,155 @@ export class WeixinLoginController extends TypertRemoteService {
     async usageLedger(options) {
         const opts = options ?? {};
         const live = readSavedConfig();
+        const priceInPer1k = Number(live.pricePer1kInputYuan ?? 0);
+        const priceOutPer1k = Number(live.pricePer1kOutputYuan ?? 0);
+
+        // Where the account id comes from. `config.accountId` is only what this
+        // deployment happens to be running right now, and it is empty on a
+        // machine that never saved the card — reading only that turned a ledger
+        // holding seven recorded turns into "nothing recorded yet", which is the
+        // bug the operator reported. The registry is the durable list of every
+        // account that ever logged in, so it is consulted next, newest first.
+        const registry = readRegistry();
+        const registered = Object.keys(registry).sort((a, b) =>
+            String(registry?.[b]?.lastSeenAt ?? "").localeCompare(String(registry?.[a]?.lastSeenAt ?? "")),
+        );
         const accountId =
             typeof opts.accountId === "string" && opts.accountId !== ""
                 ? opts.accountId
                 : typeof live.accountId === "string" && live.accountId !== ""
                   ? live.accountId
-                  : "";
-        const priceInPer1k = Number(live.pricePer1kInputYuan ?? 0);
-        const priceOutPer1k = Number(live.pricePer1kOutputYuan ?? 0);
+                  : registered[0] !== undefined
+                    ? registered[0]
+                    : "";
+
         const rows = conversationRows(stateDir(), accountId, {
             priceInPer1k,
             priceOutPer1k,
         });
         return {
             accountId,
+            accounts: registered,
             rows,
             totals: ledgerTotals(rows),
             prices: { priceInPer1k, priceOutPer1k },
             awareness: live.usageAwarenessEnabled !== false,
+        };
+    }
+
+    /**
+     * 列目录，给卡片里的路径输入框用（就是个文件选择器）。
+     *
+     * 插件拿不到宿主或操作系统的原生文件对话框，所以卡片自己画一个：这个
+     * 方法只负责「列一层」。命令行是唯一可信的输入，但仍然按操作者自己的
+     * 身份读盘——这不是权限提升，只是替他把 `ls` 点了。
+     *
+     * 不读文件内容，只给名字与大小；隐藏文件默认不列，想要就传 `showHidden`。
+     * 出错（不存在、没权限、不是目录）都变成一句话返回，不抛给界面。
+     *
+     * @param {{ path?: string, filter?: string, showHidden?: boolean }} options
+     */
+    async fsList(options) {
+        const opts = options ?? {};
+        const raw = typeof opts.path === "string" ? opts.path.trim() : "";
+        const target = raw === "" ? (fs.existsSync(os.homedir()) ? os.homedir() : stateDir()) : path.resolve(raw);
+        // `filter: 'dir'` 用来给「选一个文件夹」的输入框只挑目录；默认两边都给。
+        const onlyDirs = opts.filter === "dir";
+        const showHidden = opts.showHidden === true;
+        let stats;
+        try {
+            stats = fs.statSync(target);
+        } catch {
+            return { path: target, error: `找不到这个位置：${target}` };
+        }
+        let name = path.basename(target) || target;
+        if (stats.isFile()) {
+            // 传进来一个文件（比如用户粘了完整路径）就退到它所在的目录，并把
+            // 它自己标成一个快捷项——否则「选文件」的输入框一粘路径就看不到列表。
+            const parent = path.dirname(target);
+            const size = stats.size;
+            return this.fsList({ ...opts, path: parent }).then((listing) => ({
+                ...listing,
+                picked: { name, path: target, size },
+            }));
+        }
+        if (!stats.isDirectory()) return { path: target, error: `${target} 不是文件夹` };
+        let entries = [];
+        try {
+            entries = fs.readdirSync(target, { withFileTypes: true });
+        } catch (error) {
+            return { path: target, error: `读不了这个文件夹：${String(error?.code ?? error?.message ?? error)}` };
+        }
+        const rows = [];
+        for (const entry of entries) {
+            if (!showHidden && entry.name.startsWith(".")) continue;
+            const full = path.join(target, entry.name);
+            let size = null;
+            if (entry.isDirectory() === false) {
+                try {
+                    size = fs.statSync(full).size;
+                } catch {
+                    size = null;
+                }
+            }
+            if (onlyDirs && entry.isDirectory() === false) continue;
+            rows.push({ name: entry.name, path: full, dir: entry.isDirectory(), size });
+        }
+        rows.sort((a, b) => {
+            if (a.dir !== b.dir) return a.dir ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+        const parent = path.dirname(target);
+        return {
+            path: target,
+            name,
+            parent: parent === target ? "" : parent,
+            entries: rows,
+            home: os.homedir(),
+            stateRoot: stateDir(),
+            defaultOutDir: path.join(stateDir(), "backups"),
+        };
+    }
+
+    /**
+     * The models this machine actually has, for the dropdowns.
+     *
+     * The card's provider/model boxes are free text, and the value people type
+     * there fails in a way that looks like the plugin is broken: every turn dies
+     * with `no configured model`. The host keeps the real catalogue in
+     * `~/.dsh/settings.yaml`, so hand that over and let the operator pick.
+     *
+     * `configured` mirrors the saved card so the card can mark the current
+     * choice and offer "not in the list" honestly when someone has typed a
+     * provider that is no longer installed.
+     */
+    async modelCatalog(options) {
+        const catalog = readModelCatalog({ warn: (line) => logger.warn(line) });
+        const live = readSavedConfig();
+        const opts = options ?? {};
+        const purposes = {};
+        for (const [name, keys] of Object.entries(MODEL_ROUTE_KEYS)) {
+            const provider = typeof live[keys.provider] === "string" ? live[keys.provider].trim() : "";
+            const model = typeof live[keys.model] === "string" ? live[keys.model].trim() : "";
+            purposes[name] = { provider, model };
+        }
+        return {
+            file: catalog.file,
+            providers: catalog.providers.map((provider) => ({
+                id: provider.id,
+                api: provider.api ?? "",
+                models: provider.models.map((model) => ({
+                    id: model.id,
+                    name: model.name,
+                    contextWindow: model.contextWindow ?? null,
+                })),
+            })),
+            models: catalog.models,
+            partial: catalog.partial,
+            configured: purposes,
+            // Kept for the "级联" UI: one list is enough for the card, but the
+            // settings file is small enough to hand over whole.
+            requested: typeof opts.purpose === "string" ? opts.purpose : "",
         };
     }
 
@@ -1469,4 +1628,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "migrateSummary", "migrateExport", "migrateInspect", "migrateRestore", "promptPreview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "fsList", "modelCatalog", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "migrateSummary", "migrateExport", "migrateInspect", "migrateRestore", "promptPreview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

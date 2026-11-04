@@ -250,6 +250,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/contacts',
         'weixin/donateQr',
         'weixin/donateQrAlipay',
+        'weixin/fsList',
         'weixin/journal',
         'weixin/journalExport',
         'weixin/label',
@@ -266,6 +267,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/migrateInspect',
         'weixin/migrateRestore',
         'weixin/migrateSummary',
+        'weixin/modelCatalog',
         'weixin/onboarding',
         'weixin/outbox',
         'weixin/outboxDrop',
@@ -1069,4 +1071,32 @@ test('the card copy of the config-effect table matches src/config-effect.js', as
   while ((match = copyRe.exec(card)) !== null) {
     assert.equal(table[match[1]], match[2], `the card has a stale effect for ${match[1]}`)
   }
+})
+
+test('every path box offers a browser, and the browser asks the host to list a folder', () => {
+  // A path box that only accepts typing is a box most people get wrong at least
+  // once — and on the Web GUI the shell provides no native chooser at all
+  // (`pickDirectory` is document-picker only, and only in the desktop shell).
+  // The card therefore carries its own browser; it must go through the host,
+  // never touch the filesystem itself.
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  assert.match(card, /function PathPicker\(\{ ctx, t, value, onChange, placeholder, mode = "file", accept = "", onNotice \}\)/, 'the reusable picker exists')
+  assert.match(card, /ctx\.remote\.weixin\.fsList\(\{/, 'the browser lists through the host')
+  assert.match(card, /filter: mode === "dir" \? "dir" : undefined/, 'a folder box asks for folders only')
+  assert.match(card, /onNotice\?\.\(t\("当前环境没有系统选择器，用下面的内置浏览。"/, 'a missing native chooser is explained')
+  // Both migration path boxes are wired to it: the pack to open, and where to
+  // write the new one. A typed absolute path also opens the browser where the
+  // operator was looking rather than at $HOME.
+  assert.match(card, /accept: "\.enc"/, 'the pack file box filters for .enc')
+  assert.match(card, /mode: "dir",\n\t*onNotice: setNotice/, 'the export folder box is a directory picker')
+  assert.match(card, /outDir: outDir\.trim\(\) === "" \? undefined : outDir\.trim\(\)/, 'the chosen folder reaches the host')
+  assert.match(card, /listing\?\.defaultOutDir/, 'the browser offers the default export folder as a shortcut')
+})
+
+test('the model boxes come from the host catalogue instead of free text', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  assert.match(card, /ctx\.remote\.weixin\.modelCatalog\(/, 'the card asks the host which models exist')
+  assert.match(card, /const MODEL_PAIRS = \{/, 'provider and model are chosen as a pair')
+  assert.match(card, /不在宿主的模型列表里|not in the host's list/, 'a saved value the host no longer has is called out, not silently dropped')
+  assert.match(card, /catalogState\.partial/, 'a partially readable settings file says the list may be short')
 })

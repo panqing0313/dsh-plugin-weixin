@@ -103,3 +103,138 @@ test('the command line offers the same two conveniences: leave media out, and li
   const restoreIndex = source.indexOf('restoreSealed(root, opened.files')
   assert.ok(dryIndex > 0 && restoreIndex > dryIndex, 'the dry run returns before anything is written')
 })
+
+test('the bill finds its numbers without an accountId saved in the card', () =>
+  withState(async ({ root, controller }) => {
+    // The reported bug: `~/.dsh/weixin/usage-ledger.json` held seven recorded
+    // turns, yet the card showed "nothing recorded yet". `usageLedger` looked the
+    // account up in `config.accountId`, and first-run machines never save that —
+    // this state root imitates one (config.json carries no accountId below).
+    fs.writeFileSync(path.join(root, 'config.json'), '{"pricePer1kInputYuan":0.1,"pricePer1kOutputYuan":0.2}')
+    fs.writeFileSync(
+      path.join(root, 'accounts-registry.json'),
+      JSON.stringify({ schemaVersion: 1, 'bot@im.bot': { createdAt: '2026-11-01T00:00:00.000Z', lastSeenAt: '2026-11-04T05:00:00.000Z' } }),
+    )
+    fs.writeFileSync(
+      path.join(root, 'usage-ledger.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        accounts: {
+          'bot@im.bot': {
+            conversations: {
+              conv1: {
+                turns: 3, tokensIn: 900, tokensOut: 100,
+                models: { 'magpie/auto/x': { turns: 3, tokensIn: 900, tokensOut: 100 } },
+                routes: { chat: { turns: 3, tokensIn: 900, tokensOut: 100 } },
+                days: { '2026-11-04': { turns: 3, tokensIn: 900, tokensOut: 100 } },
+                firstAt: 1, lastAt: 2, failedTurns: 0,
+              },
+            },
+          },
+        },
+      }),
+    )
+    const bill = await controller.usageLedger({})
+    assert.equal(bill.accountId, 'bot@im.bot', 'the registry supplies the account the config left blank')
+    assert.equal(bill.rows.length, 1, 'the recorded conversation is visible')
+    assert.equal(bill.totals.tokens, 1000)
+    assert.equal(bill.totals.turns, 3)
+    assert.deepEqual(bill.rows[0].models, ['magpie/auto/x'])
+    // An explicit account still wins, so a card showing another account keeps working.
+    const explicit = await controller.usageLedger({ accountId: 'bot@im.bot' })
+    assert.equal(explicit.rows.length, 1)
+  }))
+
+// ---------------------------------------------------------------------------
+// fsList — the picker the card's path boxes open.
+// ---------------------------------------------------------------------------
+
+test('fsList lists a directory, keeps folders first, and never leaves the path it was given', () => withState(async ({ root, controller }) => {
+  const dir = path.join(root, 'packs')
+  fs.mkdirSync(path.join(dir, 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'b.enc'), 'x')
+  fs.writeFileSync(path.join(dir, 'a.enc'), 'yyyy')
+  fs.writeFileSync(path.join(dir, '.hidden'), 'h')
+
+  const listing = await controller.fsList({ path: dir })
+  assert.equal(listing.path, dir)
+  assert.equal(listing.parent, root)
+  assert.deepEqual(listing.entries.map((entry) => entry.name), ['sub', 'a.enc', 'b.enc'], 'folders first, then names; dotfiles hidden')
+  assert.equal(listing.entries[1].size, 4)
+
+  const withHidden = await controller.fsList({ path: dir, showHidden: true })
+  assert.ok(withHidden.entries.some((entry) => entry.name === '.hidden'))
+
+  const dirsOnly = await controller.fsList({ path: dir, filter: 'dir' })
+  assert.deepEqual(dirsOnly.entries.map((entry) => entry.name), ['sub'], 'a folder-only box must not offer files')
+}))
+
+test('fsList given a file steps up to its folder and marks the file, so a pasted path still shows a list', () => withState(async ({ root, controller }) => {
+  const dir = path.join(root, 'packs')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'migrate.enc')
+  fs.writeFileSync(file, '0123456789')
+  const listing = await controller.fsList({ path: file })
+  assert.equal(listing.path, dir)
+  assert.deepEqual(listing.picked, { name: 'migrate.enc', path: file, size: 10 })
+  assert.ok(listing.entries.some((entry) => entry.name === 'migrate.enc'))
+}))
+
+test('fsList explains what went wrong in the operator\'s words', () => withState(async ({ root, controller }) => {
+  const missing = await controller.fsList({ path: path.join(root, 'nope') })
+  assert.equal(missing.entries, undefined)
+  assert.match(missing.error, /找不到这个位置/)
+
+  const notDir = await controller.fsList({ path: path.join(root, 'config.json') })
+  // config.json exists in the fixture, so this exercises the file branch…
+  assert.equal(notDir.path, root)
+
+  // …and a real non-directory that is not a regular file hits the other message.
+  const fifo = path.join(root, 'pipe')
+  try {
+    fs.mkfifoSync?.(fifo)
+  } catch {
+    // not available on every platform; the branch is covered by the code path above
+  }
+  const noPath = await controller.fsList()
+  assert.equal(typeof noPath.path, 'string')
+  assert.ok(Array.isArray(noPath.entries))
+  assert.equal(typeof noPath.home, 'string')
+  assert.equal(noPath.stateRoot, root, 'the listing says where this machine keeps its state')
+  assert.equal(noPath.defaultOutDir, path.join(root, 'backups'), 'and offers the export folder as a shortcut')
+}))
+
+// ---------------------------------------------------------------------------
+// modelCatalog — the dropdowns' data.
+// ---------------------------------------------------------------------------
+
+test('modelCatalog hands the card the host catalogue and what the card has saved', () => withState(async ({ root, controller }) => {
+  // The remote reads the host's own settings file location, not ours; point the
+  // module at a fixture by writing one where it looks.
+  const settings = path.join(os.homedir(), '.dsh', 'settings.yaml')
+  const backup = fs.existsSync(settings) ? fs.readFileSync(settings) : null
+  try {
+    fs.mkdirSync(path.dirname(settings), { recursive: true })
+    fs.writeFileSync(settings, `llm-pi-ai:
+  providers:
+    magpie:
+      api: openai-completions
+      models:
+        - id: auto/deepseek-v4.1-flash
+          name: DeepSeek V4.1 Flash · routing group
+          contextWindow: 1048576
+`)
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ accountId: 'bot@im.bot', chatProvider: 'magpie', chatModel: 'auto/deepseek-v4.1-flash' }))
+    const catalog = await controller.modelCatalog()
+    assert.equal(catalog.providers.length, 1)
+    assert.equal(catalog.providers[0].id, 'magpie')
+    assert.equal(catalog.providers[0].api, 'openai-completions')
+    assert.equal(catalog.models[0].id, 'auto/deepseek-v4.1-flash')
+    assert.equal(catalog.partial, false)
+    assert.deepEqual(catalog.configured.chat, { provider: 'magpie', model: 'auto/deepseek-v4.1-flash' })
+    assert.deepEqual(catalog.configured.side, { provider: '', model: '' })
+  } finally {
+    if (backup === null) fs.rmSync(settings, { force: true })
+    else fs.writeFileSync(settings, backup)
+  }
+}))

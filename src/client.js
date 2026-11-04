@@ -258,6 +258,28 @@ window.__ModuleLoader__.load({
 				},
 
 				{
+					id: `${PKG}#weixin/fsList`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "fsList",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/fsList:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/fsList:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/modelCatalog`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "modelCatalog",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/modelCatalog:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/modelCatalog:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/onboarding`,
 					service: "weixinLoginController",
 					namespace: "weixin",
