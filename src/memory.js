@@ -297,10 +297,40 @@ function stampOf(fact) {
     return Math.max(0, Number(fact?.updatedAt ?? 0) || Number(fact?.at ?? 0) || 0)
 }
 
-function byImportanceThenRecency(a, b) {
-    return (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
-        || stampOf(b) - stampOf(a)
-        || (b.at ?? 0) - (a.at ?? 0)
+/** Days after which a confirmation counts as "just said again" — everything older is history. */
+const RECENCY_BAND_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Rank facts for the prompt: importance, then *how recently the user confirmed
+ * it*, then how recently it was first recorded.
+ *
+ * The recency term is banded on purpose. A flat `stampOf` comparison makes the
+ * ordering churn on every message that merely restates something ("我住在杭州，
+ * 今天下雨了"), so two facts of equal weight trade places for a reason nobody
+ * can see. Banding says what we actually mean: something said in the last month
+ * outranks something said a year ago, and inside the same month the order is
+ * stable. Weight still decides first — a `/remember` with weight 5 never loses
+ * to a casual remark.
+ */
+export function rankFacts(facts, now = Date.now()) {
+    // An undated fact has no claim on recency: it sorts behind every dated one
+    // of the same weight, rather than being treated as "just now".
+    const band = (fact) => {
+        const stamp = stampOf(fact)
+        return stamp === 0 ? Number.MAX_SAFE_INTEGER : Math.floor(Math.max(0, now - stamp) / RECENCY_BAND_MS)
+    }
+    return [...(Array.isArray(facts) ? facts : [])].sort((a, b) => {
+        const weight = (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
+        if (weight !== 0) return weight
+        const recency = band(a) - band(b)
+        if (recency !== 0) return recency
+        // Within a band the most recent confirmation leads; a fact with no
+        // timestamp at all has no claim on that, so it goes last.
+        const left = stampOf(a)
+        const right = stampOf(b)
+        if (left !== right) return right - left
+        return (b.at ?? 0) - (a.at ?? 0)
+    })
 }
 
 /** Comparison key for a fact: case- and whitespace-insensitive. */
@@ -863,11 +893,12 @@ export function buildMemoryBlock({
         budget -= line.length;
         if (tokenBudget > 0) tokenBudget -= estimateTokens(line);
     }
-    // Importance first, then how recently the user confirmed it, then how
-    // recently it was first recorded. The prompt budget is finite and the last
-    // lines are the first to be dropped, so the order decides what the model
-    // knows about someone it has talked to for months.
-    const ranked = [...facts].sort(byImportanceThenRecency);
+    // Importance first, then how recently the user confirmed it (banded, so
+    // restating a fact does not reshuffle the list), then how recently it was
+    // first recorded. The prompt budget is finite and the last lines are the
+    // first to be dropped, so the order decides what the model knows about
+    // someone it has talked to for months.
+    const ranked = rankFacts(facts, now);
     for (const fact of ranked) {
         const line = `- ${fact.text}`;
         if (line.length > budget || fits(line) === false) break;
