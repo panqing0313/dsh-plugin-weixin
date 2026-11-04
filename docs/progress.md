@@ -4438,3 +4438,17 @@ args fields do not match the descriptor: unexpected "path"
 
 顺带一提：`weixin/outboxDrop` 之所以在线上一直「看起来没坏」，是因为没人点过「丢弃」
 那个按钮；它一直是坏的。
+
+## 发布 1.5.9（2026-11-04）
+
+- 提交 `ab6fa20`（三处远端参数名对齐 + `test/remote-arguments.test.js` 护栏）。tag
+  `v1.5.9`，CI `release.yml` run `41819572019` success（仍走 `NPM_TOKEN` + provenance，没点 OTP）。
+- 核验：`dist-tags.latest = 1.5.9`、`dist.shasum 7fc3104015951012d61d1a2833aa470d6588fc1c`、
+  `dist.integrity sha512-N22D0N/q6zW6c2/xDGAmybGRZHM/m6NwIOpQPE1cT9My1IR2Mu8Po5EO2NANInpg0KFfM2dfSLfhXW0hv2hapw==`、
+  `gitHead ab6fa20`、GitHub release `v1.5.9`；`doctor` → `installed 1.5.9` /
+  `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.9)`；profile `^1.5.8 → ^1.5.9`、锁文件已刷。
+- 不只是靠测试：把 `npm pack` 下来的 1.5.9 **解包后再 grep**，确认发布产物里真的是
+  `async removeModel(path)` / `outboxDrop(options)` / `async modelChoices(options)` ——
+  参数的修法在包里，不是只在仓库里。
+- 推送依旧不稳：main 第 1 次就成，tag 连失败 4 次（`Permission denied (publickey)`）后
+  第 5 次成的。办法还是 `GIT_SSH_COMMAND='ssh -o BatchMode=yes'` 加重试。
