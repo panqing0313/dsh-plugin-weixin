@@ -85,6 +85,39 @@ export class AsrError extends Error {
  *   resolves no matter where the DSH host was started.
  * @returns {{ command: string, args: string[], env: Record<string, string>, cwd?: string, timeoutMs: number } | undefined}
  */
+/**
+ * The model name the bridge falls back to when nothing is configured.
+ *
+ * It lives here rather than only in the Python bridge because the settings
+ * card has to *say* what an empty box means, and a second copy of this string
+ * in the UI would be free to drift away from the one the bridge actually uses.
+ */
+const BRIDGE_DEFAULT_SIZE = 'small'
+
+/**
+ * What the bridge will resolve for each input, derived from the same rule
+ * `bin/asr-bridge.py` applies (see `resolve_model`): an explicit path wins,
+ * otherwise `DSH_WEIXIN_ASR_MODEL` names a size inside `HF_HOME`, and an empty
+ * size means `small`. Kept in one place so the form can describe it honestly.
+ *
+ * @param {{ modelDir?: string, model?: string, env?: Record<string, string> }} settings
+ * @param {string} [modelDir] a directory passed by the caller (wins over config)
+ */
+export function describeAsrModel(settings = {}, modelDir) {
+  const env = settings.env ?? {}
+  const handWritten = typeof env[ENV_MODEL_PATH] === 'string' && env[ENV_MODEL_PATH].trim() !== ''
+    ? env[ENV_MODEL_PATH].trim()
+    : (typeof env[ENV_MODEL] === 'string' ? env[ENV_MODEL].trim() : '')
+  if (handWritten !== '') return handWritten
+  const configured = typeof settings.model === 'string' ? settings.model.trim() : ''
+  if (configured !== '') return configured
+  const dir =
+    (typeof modelDir === 'string' && modelDir.trim() !== '' ? modelDir.trim() : undefined) ??
+    (typeof settings.modelDir === 'string' ? settings.modelDir.trim() : undefined)
+  if (dir === undefined || dir === '') return BRIDGE_DEFAULT_SIZE
+  return `${dir}/${BRIDGE_DEFAULT_SIZE}`
+}
+
 export function resolveAsrSettings(config, modelDir, packageDir) {
   const settings = config?.asr
   if (settings === undefined || settings === null || settings.enabled === false) return undefined

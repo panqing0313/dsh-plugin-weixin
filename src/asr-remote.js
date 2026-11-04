@@ -12,7 +12,8 @@ import http from "node:http";
 import https from "node:https";
 import { connect as tlsConnect } from "node:tls";
 import { TypertRemoteService, Remote, RemoteError } from "@deepseek-ai/dsh-typert-protocol";
-import { stateDir } from "./state.js";
+import { stateDir, readSavedConfig } from "./state.js";
+import { describeAsrModel } from "./media/asr.js";
 import { remoteMethods } from "./typert-js.js";
 
 const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
@@ -679,8 +680,20 @@ export class AsrController extends TypertRemoteService {
         const recommended = (apple ? APPLE_ASR_SIZES : OTHER_ASR_SIZES)
             .filter((entry) => installed.some((joined) => joined.value === entry.value) === false)
             .map((entry) => ({ value: entry.value, label: entry.label, installed: false }));
+        // Spell out what an empty box resolves to using the same resolver the
+        // bridge configuration uses, so a size picked in that very field shows
+        // up here too instead of this always claiming `small`. The directory is
+        // deliberately NOT passed as the override: this method receives its own
+        // model root for listing, and letting that leak into the wording would
+        // make the card explain a directory the config does not name.
+        let saved = {};
+        try {
+            saved = readSavedConfig() ?? {};
+        } catch {
+            saved = {};
+        }
         const dir = this.modelDir;
-        const implied = dir === undefined || dir === "" ? "small" : `small（${dir}）`;
+        const implied = describeAsrModel(saved.asr ?? {});
         return {
             choices: [...installed, ...recommended],
             implied,

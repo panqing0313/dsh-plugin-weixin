@@ -19,7 +19,7 @@ import { stateDir, readSavedConfig, configFile } from "./state.js";
 import { remoteMethods } from "./typert-js.js";
 import { DEFAULT_MAX_MEDIA_BYTES } from "./media/outbound.js";
 import { DEFAULT_MAX_INBOUND_MEDIA_BYTES } from "./media/inbound.js";
-import { DEFAULT_ASR_TIMEOUT_MS } from "./media/asr.js";
+import { DEFAULT_ASR_TIMEOUT_MS, describeAsrModel } from "./media/asr.js";
 
 /** Shape declarations the card understands. `number` carries min/max/step. */
 const T = {
@@ -1553,8 +1553,11 @@ export class ConfigController extends TypertRemoteService {
  * what the operator will get after pressing 保存, which is what the field says.
  */
 function impliedBy(saved) {
-  const dir = typeof saved?.asr?.modelDir === 'string' ? saved.asr.modelDir.trim() : ''
-  return dir === '' ? 'small（桥自己的默认值）' : `${dir} 里的 small`;
+  // The answer comes from the same helper the bridge configuration comes from,
+  // so the form cannot promise a model the bridge would not actually load. It
+  // used to hard-code `small`, which was wrong for anyone who had picked a
+  // size or a path in that very field.
+  return describeAsrModel(saved?.asr ?? {});
 }
 
 function deletePath(object, dotted) {

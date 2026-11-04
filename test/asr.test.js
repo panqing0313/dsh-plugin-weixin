@@ -22,7 +22,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import test from 'node:test'
 
-import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, resolveAsrSettings, transcribeVoice } from '../src/media/asr.js'
+import { AsrBridge, DEFAULT_ASR_TIMEOUT_MS, describeAsrModel, resolveAsrSettings, transcribeVoice } from '../src/media/asr.js'
 import { describeInboundMedia } from '../src/media/inbound.js'
 
 /** Directory holding the fake bridge scripts; written once per run. */
@@ -633,5 +633,21 @@ test('the model repo offered for download matches the platform that can load it'
     /useState\("mlx-community\/whisper-small-mlx"\)/.test(source),
     false,
     'the download box must not hard-code the mlx repo',
+  )
+})
+
+test('what the card says an empty model box means is what the bridge will load', async () => {
+  // The settings card used to hard-code "small"; it now asks this module, which
+  // applies the bridge's own rule (see `resolve_model` in bin/asr-bridge.py):
+  // an explicit path wins, then a size name, then the size inside the directory
+  // the config names, and `small` when nothing is configured at all.
+  assert.equal(describeAsrModel({}), 'small')
+  assert.equal(describeAsrModel({ modelDir: '/Volumes/models' }), '/Volumes/models/small')
+  assert.equal(describeAsrModel({ modelDir: '/Volumes/models', model: 'medium' }), 'medium')
+  assert.equal(describeAsrModel({ model: '/opt/models/medium' }), '/opt/models/medium')
+  assert.equal(
+    describeAsrModel({ model: 'medium', env: { DSH_WEIXIN_ASR_MODEL: 'tiny' } }),
+    'tiny',
+    'a hand-written environment variable still wins, because that is what the bridge reads first',
   )
 })
