@@ -15,6 +15,7 @@ import { readConvMemory, readGlobalMemory } from '../memory.js'
 import { readJournalRange } from './chat-export.js'
 import { dayKey, habitDigestLine, habitsList } from './habits.js'
 import { staleDigestLine, staleFacts } from './memory-stale.js'
+import { findPromotionCandidates, formatPromotionHint, readConversationFacts, withoutKnown } from './promotions.js'
 import { buildDigestPrompt } from './reports.js'
 
 /** 昨天最多引几句原话：日报是一句话的东西，不是会议纪要。 */
@@ -70,7 +71,25 @@ export function recapLine(recap) {
  * }} input
  * @returns {{ prompt: string, total: { in: number, out: number, all: number }, conversations: Array<{ conversationId: string, all: number }>, yesterday: { all: number, in: number, out: number, conversations: number, snippets: string[], day: string } }}
  */
-export function composeDigest({ stateRoot, accountId, conversationId, now = Date.now(), warn = () => {}, day, staleDays }) {
+/**
+ * The promotion line for the digest: statements that recur across different
+ * conversations, minus anything already in long-term memory.
+ *
+ * Errors are swallowed on purpose — a digest must still go out when one
+ * conversation's memory file is unreadable.
+ */
+export function promotionsLine(stateRoot, accountId, { now = Date.now(), warn = () => {}, known = [] } = {}) {
+  try {
+    const conversations = readConversationFacts(stateRoot, accountId, { now, warn })
+    const candidates = withoutKnown(findPromotionCandidates(conversations), known)
+    return formatPromotionHint(candidates)
+  } catch (error) {
+    warn(`could not look for cross-conversation facts: ${error?.message ?? error}`)
+    return ''
+  }
+}
+
+export function composeDigest({ stateRoot, accountId, conversationId, now = Date.now(), warn = () => {}, day, staleDays, promote = false }) {
   const entries = readJournalRange(stateRoot, { accountId, conversationId, days: 1, now })
   const total = { in: 0, out: 0, all: entries.length }
   const perConversation = new Map()
@@ -94,6 +113,9 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
   // ⑤ The morning after: one line about yesterday, so "接着昨天那句" is possible.
   const yesterday = yesterdayRecap({ stateRoot, accountId, now, warn })
   const recap = recapLine(yesterday)
+  // ⓒ Cross-conversation promotion, only when asked for: it reads every
+  // conversation's facts, which is more than the digest strictly needs.
+  const promoted = promote === true ? promotionsLine(stateRoot, accountId, { now, warn, known: global.facts }) : ''
   const prompt = buildDigestPrompt({
     day,
     total,
@@ -103,6 +125,7 @@ export function composeDigest({ stateRoot, accountId, conversationId, now = Date
     ...(habits === '' ? {} : { habits }),
     ...(stale === '' ? {} : { stale }),
     ...(recap === '' ? {} : { recap }),
+    ...(promoted === '' ? {} : { promote: promoted }),
   })
-  return { prompt, total, conversations, yesterday }
+  return { prompt, total, conversations, yesterday, promoted }
 }

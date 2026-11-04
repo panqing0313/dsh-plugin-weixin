@@ -737,6 +737,8 @@ text adventure (second person, choice based). In WeChat:
   A merge is always something a human asks for: phrasing rules can spot a rephrasing but not a changed subject, and an
   automatic merge would quietly drop the difference. Set `memorySimilarityRoute` to `memory` to have the memory model
   decide the unsure cases (costs one background call; off by default).
+- **The same thing across conversations**: when a statement turns up in **more than one chat line** (saying it ten times in one line does not count), the daily digest asks once whether to keep it as long-term memory — at most three questions, and nothing already remembered is asked again.
+  It only asks. Long-term memory has a character budget, and an automatic write can push out the line that mattered without anyone seeing which.
 - **Carry it across**: `/memory export json` prints the same three layers as JSON (every fact keeps its confirmation time and source);
   `/import <paste or file path>` reads it back — Markdown exports work too. A preview comes first and nothing is written until you answer `是`.
   Three policies: `append` (default, only fills gaps), `merge` (fills empty profile fields), `replace` (the pack's profile wins).

@@ -53,7 +53,7 @@ export function pickConversation(conversations) {
  * The digest prompt. Numbers first, exactly as measured, and the model's job is
  * only the framing — a report that hallucinates a busy day is worse than none.
  */
-export function buildDigestPrompt({ accountLabel = '', day, total, conversations, events, summary, habits = '', stale = '', recap = '' }) {
+export function buildDigestPrompt({ accountLabel = '', day, total, conversations, events, summary, habits = '', stale = '', recap = '', promote = '' }) {
   const lines = []
   lines.push(`现在是 ${day} 的晚上。请给主人写一条当天的简报，语气自然、像助理发的一条微信。`)
   lines.push('')
@@ -78,11 +78,21 @@ export function buildDigestPrompt({ accountLabel = '', day, total, conversations
   if (typeof recap === 'string' && recap !== '') {
     lines.push(`- ${recap}`)
   }
+  // ⓒ A statement that turned up in several conversations is a candidate for
+  // long-term memory, but the digest only *asks*: promotion stays a human
+  // decision, because global memory is a small budget and an automatic write
+  // can push out the one thing that mattered.
+  if (typeof promote === 'string' && promote !== '') {
+    lines.push(`- ${promote}`)
+  }
   lines.push('')
   lines.push('【要求】')
   lines.push('- 三到五句话，先说今天聊了什么，再提醒一两件还没做完的事')
   if (typeof recap === 'string' && recap !== '') {
     lines.push('- 昨天那句话跟今天有关的话，可以顺一句接着聊；无关就不用提')
+  }
+  if (typeof promote === 'string' && promote !== '') {
+    lines.push('- 顺口问一句要不要把这几件事记成长期记忆，用你自己的话说，别照抄格式')
   }
   lines.push('- 只用上面给出的数字与事实，不要编造没出现的对话或数据')
   lines.push('- 不要罗列格式、不要标题，就像随手发的一条消息')

@@ -947,6 +947,9 @@ export function apply(ctx, config) {
               warn,
               day,
               staleDays: Number(effectiveConfig.current.memoryStaleDays ?? 90),
+              // The scheduled digest in memory mode: a statement that turned up
+              // in several conversations gets one question, never a silent write.
+              promote: kind === 'digest' && live.memoryEnabled !== false,
             }).prompt
           }
 
