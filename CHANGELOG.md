@@ -1,5 +1,13 @@
 ## 版本
 
+- **1.5.10** —— **工具提醒说人话**：原来那条提醒长成 `🔧 要用工具了` + `` `bash`：{"command":"head -c 2000 …"} ``
+  —— 抬头是名词短语，正文把工具名加反引号当主语，参数是**原始 JSON**（`argumentText` 遇到不认识的参数
+  就 `JSON.stringify`），手机上一整段转义引号。现在抬头说「我手上要动一下东西」（有风险时「⚠️ 这一步看着有风险」），
+  正文按**动作**说一句完整的话：「在你电脑上跑一条命令「…」。」「写文件「/tmp/a.md」。」「删文件「…」。」，
+  git / 装包 / 联网取东西各有说法；拿不到参数时回落成一句通用话，不再出现 `undefined` 或半截 JSON。
+  动作映射在 `src/message/tool-guard.js` 的 `TOOL_ACTION_KEYS`，措辞在 `src/i18n.js` 的 `notice.doing.*`
+  （旧键 `notice.dangerBody` 删除 —— 它的 `{tool}{detail}` 模板正是 JSON 泄出来的地方）。
+  测试钉住新形状：不含反引号工具名、不含 `{"command"`、兜底里没有 `undefined`。
 - **1.5.9** —— **远端方法的参数名必须和它对外的名字一致**：宿主的 typert 网关在派发
   之前会把请求的 JSON 键与描述符的 `wire` 名比对，而那些 wire 名是从**方法本身的形参名**
   推出来的（marker 里没有 `parameters` 字段可用）。于是叫 `target` 的参数对 `path` 的
