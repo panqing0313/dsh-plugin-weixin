@@ -4375,3 +4375,25 @@ release run `41485882140` success）。
 - 两个提交：`a7bf1aa` 把「空着等于什么」改成问桥（`describeAsrModel`）、`1fc2399`
   记录「探针跑在真实数据目录上」的事故；版本提交 `chore(release) 1.5.8` 由本段补齐。
 - 全量 **1225/1225 pass**、`check.mjs` → `checked 276 files`。
+
+## 发布 1.5.8（2026-11-04）
+
+- 提交 `a7bf1aa`（「空着等于什么」改成问桥）+ `1fc2399`（探针事故记录）+ `1cbce0a`
+  （版本与 CHANGELOG）。tag `v1.5.8`，CI `release.yml` run `41811721499` success
+  （`npm publish --provenance`，没点任何 OTP）。
+- 核验：`dist-tags.latest = 1.5.8`、`dist.shasum 671695aefe1283f01794b326a7e22f16b56ea2c2`
+  （与 `npm pack` 下来的 tarball 逐字节一致）、
+  `dist.integrity sha512-oHgX0Gl8ve+Fbnmv32OTxdj5eUqK6gns8sdXct15w3oQsArCP58jytaqqStPEK1Bk0DBDYPrg2ssFbi8Vk/weA==`、
+  `gitHead 1cbce0a`、`fileCount 242`、GitHub release `v1.5.8`；`doctor` → `installed 1.5.8` /
+  `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.8)`。
+- 这一轮外网两个坑，都只影响过程、不影响产物：
+  1. **推送极不稳定**：`git push` 在 `Permission denied (publickey)`、`Internal Server Error`、
+     `Connection timed out` 之间反复横跳。可用的做法是在命令里加
+     `GIT_SSH_COMMAND='ssh -o BatchMode=yes'`（绕开配置里的 ssh 包装）并重试 —— main 与 tag 都是
+     在第 2 次成功的。`release.mjs --finish` 内部的 `git push` 不带这个变量，会连续失败
+     （这轮 8 次），所以要先手动把 main 推平，再跑 `--finish`。
+  2. **tarball 一度 404，且不是版本特有的**：`curl` 直连 `registry.npmjs.org/.../dsh-plugin-weixin-<v>.tgz`
+     对 1.5.6 / 1.5.7 / 1.5.8 全部 404，而 `npm view`（metadata）与 `npm pack`（走 npm 客户端）
+     都正常。这是本地 curl 那条链路的问题，不是发布失败——别把它当成版本没发出去。
+- profile 锁文件：`--finish` 因上述 404 刷新失败，npm 恢复后用宿主自带 pnpm
+  `install --prefer-offline` 补上（`- 1.5.7` / `+ 1.5.8`）。
