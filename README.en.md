@@ -337,6 +337,15 @@ key and current value; ⭐ marks the options that shape the system prompt, and t
 shows what that prompt actually looks like. "Export changed values" copies the non-secret options as
 JSON; the Maintenance tab seals the whole machine into an encrypted pack.
 
+The prompt tab is read-only: it builds **the system prompt the next message would carry** with the
+same assemblers the inbound path uses, and reports the character count, the rough token count and how
+much each layer takes (persona / speech style / your feedback / life state / memory / spend). It opens
+on **the mode that is actually live** (the one the persona tab set), not on the `personaDefaultMode`
+option, which is a rarely-set fallback — the tab says which of the two it is showing, and marks a mode
+you picked by hand as "may differ from the live one". Recall and knowledge search need a real question,
+so they never appear in a preview; when the prompt is empty the tab explains whether that is "the
+default mode simply has no persona block" or "the live mode does, switch to it above".
+
 | Field | Default | Description |
 | --- | --- | --- |
 | `enabled` | `true` | Turning it off stops the long poll from starting |

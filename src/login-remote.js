@@ -1161,13 +1161,31 @@ export class WeixinLoginController extends TypertRemoteService {
         const live = readSavedConfig();
         const root = stateDir();
         const warn = () => {};
-        const store = readPersonaStore(root, { warn });
-        const modes = (store?.modes ?? []).map((mode) => ({ id: mode.id, label: typeof mode.label === "string" && mode.label !== "" ? mode.label : mode.id }));
+        // `readPersonaStore` returns the mode LIST, not `{ modes }` (every other
+        // caller in this file reads it that way). Reading `.modes` off it yielded
+        // an always-empty dropdown — which is what the operator saw as a blank
+        // prompt tab. Built-ins are in this list too; `readPersonaStore` reseeds
+        // them, so the mode that actually runs is always selectable.
+        const modes = readPersonaStore(root, { warn });
+        const choices = modes.map((mode) => ({ id: mode.id, label: typeof mode.label === 'string' && mode.label !== '' ? mode.label : (mode.name ?? mode.id) }));
         const requested = typeof options?.modeId === "string" && options.modeId !== "" ? options.modeId : "";
         const accountId = String(live.accountId ?? "");
         const conversationId = `preview:${accountId === "" ? "account" : accountId}`;
-        const effectiveModeId = requested !== "" ? requested : (live.personaDefaultMode ?? DEFAULT_MODE_ID);
-        const mode = resolveMode(store, effectiveModeId);
+        // Which mode the preview opens on. The card's 「个性化」 tab writes the
+        // live mode into persona-active.json, while `personaDefaultMode` in
+        // config.json is a different (and usually unset) fallback — so reading
+        // only the config made the tab open on `default` and show an empty
+        // prompt on a machine that was really talking as `girlfriend`. Follow
+        // the same precedence the inbound path uses, and say where the answer
+        // came from so nobody has to guess why this mode was chosen.
+        const active = activeModeFor(root, accountId, conversationId, live.personaDefaultMode ?? DEFAULT_MODE_ID, { warn });
+        const effectiveModeId = requested !== "" ? requested : active;
+        const source = requested !== ""
+            ? "picked"
+            : active !== (live.personaDefaultMode ?? DEFAULT_MODE_ID)
+                ? "active"
+                : "config";
+        const mode = resolveMode(modes, effectiveModeId);
         const companion = isCompanionMode(mode);
 
         const personaBlock = buildPersonaBlock(mode);
@@ -1200,10 +1218,26 @@ export class WeixinLoginController extends TypertRemoteService {
         const probe = "（预览：这里会是下一条消息的原文）";
         const prompt = [...blocks, probe].join("\n\n");
 
+        // An empty prompt is not an error, but it is never what someone asked
+        // for when they opened this tab. Say which mode produced nothing and
+        // which one the live conversations actually use.
+        // Two different silences: "you are looking at the default mode, but the
+        // live one has a persona" (point at it), and "the default mode really is
+        // what runs, and it has none" (say so, so nobody hunts for a bug).
+        const liveMode = choices.find((entry) => entry.id === active);
+        const emptyNote = blocks.length > 0
+            ? ""
+            : liveMode !== undefined && liveMode.id !== DEFAULT_MODE_ID
+                ? `预览里没有人设块；实际会话用的是「${liveMode.label}」，在上面切过去就能看到。`
+                : "当前是默认模式，本来就没有人设块（提示词里只有你的话）。";
+
         return {
             modeId: typeof mode?.id === "string" ? mode.id : String(effectiveModeId),
-            modeLabel: typeof mode?.label === "string" && mode.label !== "" ? mode.label : (mode?.id ?? effectiveModeId),
-            modes,
+            modeSource: source,
+            activeModeId: active,
+            emptyNote,
+            modeLabel: typeof mode?.name === "string" && mode.name !== "" ? mode.name : (mode?.label ?? mode?.id ?? effectiveModeId),
+            modes: choices,
             chars: prompt.length,
             // Same rough factor the bill tab uses: characters ÷ 2 for mixed CJK.
             estimatedTokens: Math.ceil(prompt.length / 2),

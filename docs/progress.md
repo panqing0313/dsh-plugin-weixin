@@ -4266,3 +4266,15 @@ release run `41485882140` success）。
 - 走 CI：`git tag -a v1.5.4` → `release.yml` run `41790452240`，约 3 分 25 秒全绿（带 provenance）；`--finish 1.5.4` 四步全绿。
 - 核验：`dist-tags.latest = 1.5.4`、`dist.shasum 69b6f65c29c16f50430ef0b8a3777fdc7c8bfeaa`、`dist.integrity sha512-RLlLxRfjXx0rfF8rtAI/4iTEJfJUe/ayRHc6BUhkUQwAA09whBjV2WTtqju1E+hWG1za7RcA7KvMhPs7Z+Ey0w==`、`gitHead 0cdea2f25ad3d32e972dd27537ba87c0ef9322fb`（= 本地 HEAD）；`doctor` → `installed 1.5.4` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.4)`；profile `^1.5.3 → ^1.5.4`。
 - 用户实际导出的 82 MB 包（`migrate-2026-11-04-065919.enc`，1467 文件）头部是 `DSHWX2`、错口令时回「口令不对，或者这个包在拷贝时被改坏了」，说明流式封包与读取这条链路在真机上是通的。探测过程中我自己用 `migrateExport` 多封了两个包（`migrate-2026-11-04-070412.enc` 已删，`065821`/`065919` 是用户的），教训：在本机跑导出探针前先把 `DSH_WEIXIN_STATE_DIR` 指到临时目录。
+
+### 提示词页签看起来是空的（用户实测反馈）
+
+用户问「提示词页签干嘛用的可以用吗」，并说看到的内容是空的。查下来是**两个真 bug 叠在一起**：
+
+1. `promptPreview` 读 `store.modes`，而 `readPersonaStore` 返回的是**模式数组**（同文件另外六处都按数组用）。于是左侧模式下拉恒为空、`resolveMode` 拿不到任何模式 —— 页签永远只显示那条占位符。修：直接按数组用，`label` 优先 `label`、回退 `name`。
+2. 默认选中的模式取 `live.personaDefaultMode`（config.json 的一项，本机从没存过），而真正生效的模式在 `persona-active.json`（「个性化」页签写的）。于是停在 `default` —— 而 `default` 本来就没有人设块，看起来就是空的。修：用 `activeModeFor()` 走与入站路径完全相同的优先级，并返回 `modeSource`（`picked` / `active` / `config`）与 `activeModeId`；卡片上分别标「取自个性化」与「可能与实际会话不同」。
+3. 顺带加 `emptyNote`：提示词为空时说清是「默认模式本来就没有人设块」还是「实际会话用的是「女友」，切过去能看到」。
+
+真机验证（本机）：默认打开 → `girlfriend` / 女友 / 651 字 / 15 个模式在下拉里；手动选 `jarvis` → 693 字且标「可能不同」。
+
+测试过程中还踩了三次：「测试夹具用 `writePersonaStore(root, {modes:[...]})`」——该函数第二个参数就是模式数组，包一层对象写进去会变成 `{0:'default',1:...}` 的怪形状；`listActiveOverrides` 有意不返回 `__global__`，验全局默认要用 `readGlobalDefaultMode`；`clearActiveMode` 只清会话覆盖，清全局默认要用 `writeGlobalDefaultMode(root, '')`。三条都记在测试注释里。

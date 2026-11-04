@@ -145,6 +145,9 @@ window.__ModuleLoader__.load({
 							estimate: Number(r?.estimatedTokens ?? 0),
 							layers: Array.isArray(r?.layers) ? r.layers : [],
 							modeLabel: String(r?.modeLabel ?? ""),
+							modeSource: String(r?.modeSource ?? ""),
+							activeModeId: String(r?.activeModeId ?? ""),
+							emptyNote: String(r?.emptyNote ?? ""),
 						});
 					} catch (err) {
 						setError(String(err?.message ?? err));
@@ -165,6 +168,9 @@ window.__ModuleLoader__.load({
 								estimate: Number(r?.estimatedTokens ?? 0),
 								layers: Array.isArray(r?.layers) ? r.layers : [],
 								modeLabel: String(r?.modeLabel ?? ""),
+								modeSource: String(r?.modeSource ?? ""),
+								activeModeId: String(r?.activeModeId ?? ""),
+								emptyNote: String(r?.emptyNote ?? ""),
 							});
 						} catch (err) {
 							setError(String(err?.message ?? err));
@@ -191,7 +197,17 @@ window.__ModuleLoader__.load({
 						createElement("span", null, t(`chars ${stats.chars}`, `字数 ${stats.chars}`)),
 						createElement("span", null, t(`≈${stats.estimate} tokens`, `约 ${stats.estimate} tokens`)),
 						createElement("span", null, t(`mode: ${stats.modeLabel}`, `模式：${stats.modeLabel}`)),
+						stats.modeSource === "active"
+							? createElement("span", { style: hintStyle }, t("(current mode, taken from the persona tab)", "（当前实际生效的模式，取自「个性化」）"))
+							: stats.modeSource === "picked"
+								? createElement("span", { style: hintStyle }, t("(picked above — may differ from the live mode)", "（上面手动选择的，可能与实际会话不同）"))
+								: null,
 						createElement("span", { style: hintStyle }, t("the estimate is characters ÷ 2", "估算是字数 ÷ 2"))),
+					stats === null || String(stats.emptyNote ?? "") === ""
+						? null
+						: createElement("div", { style: { ...noticeStyle, gap: 6 } },
+							createElement("span", { style: { flex: "0 0 auto" } }, "\u25cb"),
+							createElement("span", null, stats.emptyNote)),
 					createElement("pre", {
 						style: {
 							margin: 0, padding: 12, borderRadius: RADIUS.control,

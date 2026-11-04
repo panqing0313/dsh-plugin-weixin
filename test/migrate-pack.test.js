@@ -268,3 +268,47 @@ test('an export folder that is really a file path means "put it in that folder"'
   const notAFolder = await controller.migrateExport({ passphrase: 'longenough', outDir: path.join(root, 'config.json') })
   assert.match(notAFolder.error, /是个文件，不是文件夹/)
 }))
+
+test('the prompt preview opens on the live mode, not on the config fallback', () => withState(async ({ root, controller }) => {
+  // 「个性化」 writes the live mode into persona-active.json; config.json's
+  // personaDefaultMode is a different, usually unset fallback. Reading only the
+  // config made the tab open on `default` and show an empty prompt on a machine
+  // that was really talking as a persona — which is exactly what got reported.
+  const { writeGlobalDefaultMode, writePersonaStore, readGlobalDefaultMode } = await import('../src/persona.js')
+  const warn = () => {}
+  writePersonaStore(root, [
+    { id: 'default', label: '默认' },
+    { id: 'girlfriend', label: '女友', body: '你是他的女朋友，说话短、亲昵。' },
+  ], { warn })
+  writeGlobalDefaultMode(root, 'girlfriend', { warn })
+  // The write has to be visible to the resolver, or the fixture is not testing
+  // what it claims: an early version of this test wrote nothing the card
+  // could see, and its own `emptyNote` assertion caught the mismatch.
+  assert.equal(
+    readGlobalDefaultMode(root, { warn }),
+    'girlfriend',
+    "the persona tab's write is what the preview must follow",
+  )
+
+  const live = await controller.promptPreview({})
+  assert.equal(live.modeId, 'girlfriend')
+  assert.equal(live.modeSource, 'active')
+  assert.equal(live.activeModeId, 'girlfriend')
+  assert.ok(live.chars > 17, `the persona block is in the prompt (${live.chars} chars)`)
+  assert.equal(live.emptyNote, '')
+
+  const picked = await controller.promptPreview({ modeId: 'default' })
+  assert.equal(picked.modeId, 'default')
+  assert.equal(picked.modeSource, 'picked')
+  assert.equal(picked.activeModeId, 'girlfriend')
+  assert.match(picked.emptyNote, /实际会话用的是「女友」/, 'an empty preview says which mode is really live')
+
+  // No persona chosen anywhere: the note explains that empty is expected.
+  // `writeGlobalDefaultMode('')` is how the card unsets it — the global default
+  // lives under the reserved `__global__` key, which clearActiveMode (a
+  // conversation override) does not touch.
+  writeGlobalDefaultMode(root, '', { warn })
+  const bare = await controller.promptPreview({})
+  assert.equal(bare.modeId, 'default')
+  assert.match(bare.emptyNote, /本来就没有人设块/)
+}))

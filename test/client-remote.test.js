@@ -1114,3 +1114,10 @@ test('the browse button opens the browser on the click, and asks the native choo
   assert.ok(setOpen > 0 && loadAt > setOpen, 'the panel opens before anything is awaited')
   assert.ok(body.includes('askNativeChooser()'), 'the desktop chooser is still offered, just not first')
 })
+
+test('the prompt tab says where its mode came from, and explains an empty prompt', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  assert.match(card, /current mode, taken from the persona tab/, 'a mode inherited from the persona tab says so')
+  assert.match(card, /picked above — may differ from the live mode/, 'a manually picked mode is marked as an experiment, not the truth')
+  assert.match(card, /stats\.emptyNote/, 'an empty prompt carries an explanation instead of a blank box')
+})
