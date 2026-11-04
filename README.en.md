@@ -329,6 +329,14 @@ WeChat text is **not** an authorization credential. Therefore:
 
 The `config` of that line in `cordis.patch.yml`:
 
+The table below is the **common** options, not all of them: the Options tab renders all of them,
+each with its default, its current value, where that value came from, and a **when it takes effect**
+badge (`takes effect immediately` / `after a restart` / `after signing in again`) — that badge is the
+first thing to check when a change seems to do nothing. The search box matches name, hint, option
+key and current value; ⭐ marks the options that shape the system prompt, and the **The prompt** tab
+shows what that prompt actually looks like. "Export changed values" copies the non-secret options as
+JSON; the Maintenance tab seals the whole machine into an encrypted pack.
+
 | Field | Default | Description |
 | --- | --- | --- |
 | `enabled` | `true` | Turning it off stops the long poll from starting |
