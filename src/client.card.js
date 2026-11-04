@@ -2419,6 +2419,10 @@ window.__ModuleLoader__.load({
 				load();
 			}, []);
 
+			const numberOr = (value) => {
+				const n = Number(value);
+				return Number.isFinite(n) ? n : 0;
+			};
 			const tokenText = (value) => {
 				const n = Math.max(0, Math.round(Number(value) || 0));
 				return n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
@@ -2456,23 +2460,60 @@ window.__ModuleLoader__.load({
 				hint ? createElement("span", { style: { fontSize: "10px", color: C.labelTertiary } }, hint) : null);
 
 			let rank = 0;
+			// The model column used to be a list of names with no numbers, and when
+			// nothing was configured by hand it said "default route" — which tells
+			// the operator nothing about what actually ran. Now each model gets its
+			// own line: turns, input/output tokens, and its share of the yuan. The
+			// bare name list is what got reported as "tokens are not recorded".
+			const modelLine = (row) => {
+				const breakdown = Array.isArray(row.modelBreakdown) ? row.modelBreakdown : [];
+				if (breakdown.length === 0) {
+					return createElement("div", { style: { ...captionStyle, fontSize: "10px" } },
+						t("no model was recorded for these turns (neither chat nor background had one set)",
+							"这些回合没记到模型名（聊天与后台都没单独指定）"));
+				}
+				return createElement("div", { style: { display: "flex", flexDirection: "column", gap: "2px", marginTop: "2px" } },
+					...breakdown.map((entry) => createElement("div", {
+							key: entry.model,
+							style: { display: "flex", alignItems: "baseline", gap: "8px", fontSize: "11px", color: C.labelSecondary },
+						},
+						createElement("span", { style: { color: C.labelPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "46%" } },
+							entry.model === "（未指定）" ? t("not set", "未指定") : entry.model),
+						createElement("span", null, `${entry.turns} ${t("turns", "回合")}`),
+						createElement("span", { style: { minWidth: "70px", textAlign: "right" } }, `↓${tokenText(entry.tokensIn)} ↑${tokenText(entry.tokensOut)}`),
+						priced
+							? createElement("span", { style: { minWidth: "58px", textAlign: "right", color: C.labelPrimary } },
+									yuanText(numberOr(entry.tokensIn) / 1000 * numberOr(prices.priceInPer1k)
+										+ numberOr(entry.tokensOut) / 1000 * numberOr(prices.priceOutPer1k)))
+							: null)));
+			};
 			const rowNodes = rows.slice(0, 12).map((row) => {
 				rank += 1;
-				const models = Array.isArray(row.models) && row.models.length > 0 ? row.models.join("、") : t("default route", "默认路由");
+				const share = totals.tokens > 0 ? Math.round((numberOr(row.tokens) / numberOr(totals.tokens)) * 100) : 0;
+				const shareWidth = Math.max(2, Math.min(100, share));
 				return createElement("div", {
 					key: row.conversationId,
 					style: {
-						display: "flex", alignItems: "baseline", gap: "8px",
-						padding: "6px 0", borderTop: `1px solid ${C.border}`,
+						display: "flex", flexDirection: "column", gap: "3px",
+						padding: "8px 0", borderTop: `1px solid ${C.border}`,
 						fontSize: "12px", color: C.labelPrimary,
 					},
 				},
-					createElement("span", { style: { color: C.labelTertiary, minWidth: "20px" } }, `#${rank}`),
-					createElement("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shortId(row.conversationId)),
-					createElement("span", { style: { color: C.labelSecondary } }, `${row.turns} ${t("turns", "回合")}`),
-					createElement("span", { style: { color: C.labelSecondary, minWidth: "54px", textAlign: "right" } }, tokenText(row.tokens)),
-					createElement("span", { style: { color: priced ? C.labelPrimary : C.labelTertiary, minWidth: "58px", textAlign: "right" } }, yuanText(row.cost)),
-					createElement("span", { style: { fontSize: "10px", color: C.labelTertiary, minWidth: "72px", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, models));
+					createElement("div", { style: { display: "flex", alignItems: "baseline", gap: "8px" } },
+						createElement("span", { style: { color: C.labelTertiary, minWidth: "20px" } }, `#${rank}`),
+						createElement("span", { style: { flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shortId(row.conversationId)),
+						row.failedTurns > 0
+							? createElement("span", { style: { ...captionStyle, color: C.warn } },
+									t(`${row.failedTurns} failed`, `${row.failedTurns} 次失败`))
+							: null,
+						createElement("span", { style: { color: C.labelSecondary } }, `${row.turns} ${t("turns", "回合")}`),
+						createElement("span", { style: { color: C.labelSecondary, minWidth: "54px", textAlign: "right" } }, `${tokenText(row.tokens)}`),
+						createElement("span", { style: { color: priced ? C.labelPrimary : C.labelTertiary, minWidth: "58px", textAlign: "right" } }, yuanText(row.cost))),
+					// A share bar, because "which conversation is eating the budget"
+					// is a comparison, and a column of numbers is not a comparison.
+					createElement("div", { style: { height: "3px", borderRadius: RADIUS.pill, background: C.border, overflow: "hidden" } },
+						createElement("div", { style: { width: `${shareWidth}%`, height: "100%", background: C.primaryFill } })),
+					modelLine(row));
 			});
 
 			return createElement("div", { style: panelStyle }, head,
@@ -2483,7 +2524,12 @@ window.__ModuleLoader__.load({
 				rows.length === 0
 					? createElement("div", { style: { fontSize: "12px", color: C.labelSecondary, padding: "10px 0" } },
 						t("Nothing recorded yet — say something to this account and the numbers appear here.", "还没有记录：给这个账号说一句话，这里就有数字了。"))
-					: createElement("div", { style: { marginTop: "4px" } }, rowNodes),
+					: createElement("div", { style: { marginTop: "4px" } },
+						createElement("div", { style: { ...captionStyle, display: "flex", gap: "8px", paddingBottom: "2px" } },
+							createElement("span", { style: { flex: "1 1 auto" } }, t("conversation", "会话")),
+							createElement("span", { style: { minWidth: "54px", textAlign: "right" } }, "token"),
+							createElement("span", { style: { minWidth: "58px", textAlign: "right" } }, "¥")),
+						rowNodes),
 				createElement("div", { style: captionStyle },
 					createElement("div", null,
 						t("Tokens are estimated from characters (the plugin never sees the model usage), so they are lower than the bill.", "token 由字符数估算（插件看不到真实 usage），只会小于账单。")),

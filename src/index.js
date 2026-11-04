@@ -179,6 +179,7 @@ import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
 // ignores me" with nothing to grep afterwards.
 import { logger as vendorLogger } from '../vendor/openclaw-weixin/util/logger.js'
+import { noteModelError, readRecentModelErrors, summarizeRecentModelErrors } from './model-errors.js'
 import {
   DEFAULT_CDN_BASE_URL,
   DEFAULT_MAX_INBOUND_MEDIA_BYTES,
@@ -469,7 +470,7 @@ export const Config = z.object({
  * @param {{ kind: string, accountId: string, conversationId: string, prompt?: string,
  *   reply?: string, route?: { provider?: string, model?: string } }} usage
  */
-function recordModelUsage(stateRoot, live, warn, { kind, accountId, conversationId, prompt, reply, route }) {
+function recordModelUsage(stateRoot, live, warn, { kind, accountId, conversationId, prompt, reply, route, failed = false, error }) {
   // 一条路由只有 provider 与 model 都填了才真的生效（同 schema 的说明），
   // 所以账本也按同样的规则写名字：只填一半等于没填，记成「默认」。
   const pair = (provider, model) =>
@@ -489,8 +490,14 @@ function recordModelUsage(stateRoot, live, warn, { kind, accountId, conversation
       model: requested === '' ? '默认' : requested,
       prompt: typeof prompt === 'string' ? prompt : '',
       reply: typeof reply === 'string' ? reply : '',
+      failed: failed === true,
       warn,
     })
+    // The `/diag` line answers "why is it silent in here" without making the
+    // user read the raw provider string; keeping it in memory is enough.
+    if (failed === true && typeof error === 'string' && error !== '') {
+      noteModelError(error)
+    }
   } catch (error) {
     warn(`usage ledger write failed: ${String(error)}`)
   }
@@ -1994,6 +2001,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           conversations: listConvMemories(stateRoot, accountId).length,
           allowlist: Array.isArray(live.allowedSenders) ? live.allowedSenders.length : 0,
           quietDelayMs: quietDelay(Date.now(), live),
+          modelError: summarizeRecentModelErrors(readRecentModelErrors(), { now: Date.now() }),
         })
       },
       mode: (arg) => {

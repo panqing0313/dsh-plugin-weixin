@@ -26,6 +26,8 @@ import path from 'node:path'
 import { atomicWriteJson, readJsonFile } from '../atomic.js'
 import { estimateTokens } from '../tokens.js'
 
+/** 记不了模型名时用的标签：只填了 provider 或只填了 model 都算没填。 */
+export const UNKNOWN_MODEL_LABEL = '（未指定）'
 export const USAGE_LEDGER_SCHEMA_VERSION = 1
 /** 每个会话保留多少天的日桶。 */
 export const USAGE_LEDGER_DAYS = 30
@@ -72,7 +74,7 @@ function bumpRoute(routes, key, tokensIn, tokensOut) {
  * @param {{ accountId: string, conversationId: string, route?: string, model?: string,
  *   prompt?: string, reply?: string, at?: number, warn?: (line: string) => void }} usage
  */
-export function recordUsage(stateRoot, { accountId, conversationId, route = 'chat', model = '', prompt = '', reply = '', at = Date.now(), warn } = {}) {
+export function recordUsage(stateRoot, { accountId, conversationId, route = 'chat', model = '', prompt = '', reply = '', failed = false, at = Date.now(), warn } = {}) {
   const id = String(accountId ?? '')
   const conversation = String(conversationId ?? '')
   if (id === '' || conversation === '') return { ok: false, reason: 'missing-ids' }
@@ -87,7 +89,9 @@ export function recordUsage(stateRoot, { accountId, conversationId, route = 'cha
 
   const next = {
     ...existing,
-    turns: Number(existing.turns ?? 0) + 1,
+    // A failed turn still cost tokens, but it did not produce a reply — counting
+    // it as a turn would make "N turns" disagree with what the chat shows.
+    turns: Number(existing.turns ?? 0) + (failed === true ? 0 : 1),
     tokensIn: Number(existing.tokensIn ?? 0) + tokensIn,
     tokensOut: Number(existing.tokensOut ?? 0) + tokensOut,
     routes: { ...(existing.routes ?? {}) },
@@ -95,12 +99,16 @@ export function recordUsage(stateRoot, { accountId, conversationId, route = 'cha
     days: { ...(existing.days ?? {}) },
     firstAt: Number(existing.firstAt ?? at),
     lastAt: at,
+    // A turn that failed still cost whatever the model read before it gave up.
+    // Counting it keeps the bill honest and lets the card say "N of these turns
+    // never produced a reply".
+    failedTurns: Number(existing.failedTurns ?? 0) + (failed === true ? 1 : 0),
   }
   bumpRoute(next.routes, String(route), tokensIn, tokensOut)
 
   const modelKey = String(model ?? '') === '' ? '（未指定）' : String(model)
   const modelBucket = (next.models[modelKey] ??= { turns: 0, tokensIn: 0, tokensOut: 0 })
-  modelBucket.turns += 1
+  modelBucket.turns += failed === true ? 0 : 1
   modelBucket.tokensIn += tokensIn
   modelBucket.tokensOut += tokensOut
 
@@ -169,9 +177,25 @@ export function conversationRows(stateRoot, accountId, { now = Date.now(), price
       tokensOut,
       tokens: tokensIn + tokensOut,
       cost,
-      models: Object.keys(entry.models ?? {}).filter((name) => name !== '（未指定）'),
+      models: Object.keys(entry.models ?? {}).filter((name) => name !== '（未指定）' && name !== UNKNOWN_MODEL_LABEL),
       routes: Object.keys(entry.routes ?? {}),
+      // Per-model detail, because "which model did this conversation use" is the
+      // question the tab exists to answer, and a list of names does not say how
+      // much of the work each one did.
+      modelBreakdown: Object.entries(entry.models ?? {}).map(([model, bucket]) => ({
+        model,
+        turns: Number(bucket?.turns ?? 0),
+        tokensIn: Number(bucket?.tokensIn ?? 0),
+        tokensOut: Number(bucket?.tokensOut ?? 0),
+        tokens: Number(bucket?.tokensIn ?? 0) + Number(bucket?.tokensOut ?? 0),
+      })).sort((a, b) => b.tokens - a.tokens),
+      routeBreakdown: Object.entries(entry.routes ?? {}).map(([route, bucket]) => ({
+        route,
+        turns: Number(bucket?.turns ?? 0),
+        tokens: Number(bucket?.tokensIn ?? 0) + Number(bucket?.tokensOut ?? 0),
+      })).sort((a, b) => b.tokens - a.tokens),
       today: entry.days?.[dayKey(now)] ?? { turns: 0, tokensIn: 0, tokensOut: 0 },
+      failedTurns: Number(entry.failedTurns ?? 0),
       lastAt: Number(entry.lastAt ?? 0),
     })
   }
@@ -203,6 +227,9 @@ export function usageAwarenessLine(stateRoot, accountId, conversationId, { now =
   const row = rows.find((item) => item.conversationId === String(conversationId))
   if (row === undefined || row.turns === 0) return ''
   const parts = [`本会话已用 ${row.turns} 个回合、约 ${formatTokens(row.tokens)} token`]
+  if (row.models.length > 0) parts.push(`模型 ${row.models.slice(0, 2).join(' / ')}`)
+  if (row.models.length === 0) parts.push('模型名没有记下来（聊天与后台都没单独指定）')
+  if (row.failedTurns > 0) parts.push(`其中 ${row.failedTurns} 个回合没拿到回复`)
   if (row.cost > 0) parts.push(`约 ${formatYuan(row.cost)}`)
   const todayTokens = Number(row.today?.tokensIn ?? 0) + Number(row.today?.tokensOut ?? 0)
   if (todayTokens > 0) parts.push(`其中今天约 ${formatTokens(todayTokens)} token`)

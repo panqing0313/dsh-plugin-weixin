@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import { readAssistantReply, describePending } from './session-reader.js'
 import { baseSessionIdFor, scopedLineKey, SessionLines, runSessionCommand } from './sessions.js'
+import { describeModelError } from './model-errors.js'
 
 /**
  * `@deepseek-ai/dsh-llm` resolves only from inside a DSH profile, so it is
@@ -669,7 +670,39 @@ export class AgentBridge {
       record.agent.followup(
         createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
       )
-      const settled = await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
+      let settled
+      try {
+        settled = await this.#awaitReply({ record, before, onProgress, signal, onLateReply })
+        // An in-band turn error (the turn ended with turn/end(error)) comes back
+        // as a sentence, not a throw — it still spent the turn's tokens.
+        if (typeof settled?.turnError === 'string' && settled.turnError !== '') {
+          this.onUsage?.({
+            kind: 'chat',
+            accountId,
+            conversationId,
+            prompt: text,
+            reply: typeof settled.text === 'string' ? settled.text : '',
+            failed: true,
+            error: settled.turnError,
+          })
+          return settled
+        }
+      } catch (error) {
+        // A turn that ended in an error still cost what the model read before
+        // it gave up. Reporting only successful turns made the bill quietly
+        // cheaper every time a provider was misconfigured — exactly when the
+        // numbers matter most.
+        this.onUsage?.({
+          kind: 'chat',
+          accountId,
+          conversationId,
+          prompt: text,
+          reply: '',
+          failed: true,
+          error: String(error?.message ?? error),
+        })
+        throw error
+      }
       this.onUsage?.({
         kind: 'chat',
         accountId,
@@ -742,7 +775,21 @@ export class AgentBridge {
         createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }),
       )
       // No onProgress / onLateReply: a summary must stay silent toward WeChat.
-      const settled = await this.#awaitReply({ record, before })
+      let settled
+      try {
+        settled = await this.#awaitReply({ record, before })
+      } catch (error) {
+        this.onUsage?.({
+          kind: 'summarize',
+          accountId,
+          conversationId,
+          prompt,
+          reply: '',
+          route,
+          failed: true,
+        })
+        throw error
+      }
       this.onUsage?.({
         kind: 'summarize',
         accountId,
@@ -1047,7 +1094,11 @@ export class AgentBridge {
       // message queues behind a turn that can never answer — the "one model
       // failure and everything after is stuck" report. Answer immediately.
       if (reply.turnError !== undefined) {
-        return { text: `（模型调用失败：${reply.turnError}）`, sessionId }
+        // `（模型调用失败：pi-ai provider "magpie" has no configured model ...）`
+        // is the developer's sentence, not the user's: it never says which option
+        // is wrong or what to change. The translation keeps the raw line (whoever
+        // debugs it needs it) but leads with what to do.
+        return { text: describeModelError(reply.turnError), sessionId, turnError: reply.turnError }
       }
 
       // A long tool run is invisible in WeChat. The first note goes out after

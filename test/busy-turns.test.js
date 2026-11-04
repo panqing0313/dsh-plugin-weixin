@@ -396,8 +396,10 @@ hostTest('a failed model turn is answered immediately instead of blocking the qu
   const reply = await delivery
   const elapsed = Date.now() - startedAt
 
-  // The failure becomes an answer, promptly — not a 60-second spin.
-  assert.match(reply.text, /模型调用失败/)
+  // The failure becomes an answer, promptly — not a 60-second spin. The first
+  // line is the translation (`429` classifies as a quota error), the second is
+  // the provider's own words, which whoever debugs it will want.
+  assert.match(reply.text, /额度用完或被限流/)
   assert.match(reply.text, /429/)
   assert.ok(elapsed < 5000, `a failed turn must return promptly, took ${elapsed}ms`)
 

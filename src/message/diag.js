@@ -58,6 +58,13 @@ export function buildDiagReport(input) {
 
   lines.push(`待发：提醒 ${input.reminders ?? 0} 条 · 订阅 ${input.subscriptions ?? 0} 条`)
 
+  // "为什么它不说话" 最常见的原因是模型那一层就没成功 —— 而用户收到的那句
+  // 原文（`pi-ai provider "magpie" has no configured model ...`）只有开发者在能看懂。
+  // 这里只写分类与相关配置项，原文留给需要排查的人去看日志。
+  if (typeof input.modelError === 'string' && input.modelError !== '') {
+    lines.push(`模型：${input.modelError}`)
+  }
+
   const contacts = input.contacts
   if (contacts !== undefined && (contacts.total ?? 0) > 0) {
     const staleDays = contacts.staleDays ?? 0

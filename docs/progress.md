@@ -1,6 +1,46 @@
 # 开发进度
 
-更新时间：2026-10-27
+更新时间：2026-11-04
+
+## 账单能看出是哪个模型在花钱，模型报错说人话（2026-11-04，1.5.1）
+
+用户报了两个问题（同一段消息里）：账单页签「token 没记录」，以及模型调用失败时微信里收到的原文
+`pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"`。
+
+### 一、账单：不是没记，是没拆
+
+查用户本机 `~/.dsh/weixin/usage-ledger.json`：记录**在**（会话 `o9cq804qN9Kjha_YsRWQwG8hWo3I@im.wechat`、`turns: 2`、
+`tokensIn: 1947`、`tokensOut: 82`），只是 `models` 里只有一个 `"默认"` 桶 —— 用户量的是「哪个模型花了多少」。
+
+根因链：`src/index.js:472` 的 `pair()` 要求 `chatProvider` 与 `chatModel` **都填**才记 `provider/model`，
+否则记 `'默认'`；`conversationRows` 又把 `'（未指定）'` 过滤掉，于是卡片拿到的 `models` 是空数组、显示成「默认路由」。
+宿主事件里不带 model/usage，环境变量里的 `DSH_*_MODEL` 也不是插件配置，插件看不到宿主最终用了哪个模型 ——
+所以能做的是：**把我们知道的那部分说清楚**，而不是猜宿主的。
+
+- `recordUsage` 加 `failed` 参数：`turns` 只数拿到回复的回合，新增 `failedTurns`（失败的 token 照记）；
+- `conversationRows` 每行加 `modelBreakdown`（模型名 · 回合 · 入/出 · token，按 token 降序）、`routeBreakdown`、`failedTurns`；
+- 卡片每行两段式：第一行（会话 / 「N 次失败」/ 回合 / token / ¥）+ 按 token 占比的细进度条，下面逐个模型一行；
+- 没有模型名时**明说**「这些回合没记到模型名（聊天与后台都没单独指定）」，并提示 `chatProvider` 与 `chatModel` 要成对填。
+
+### 二、模型报错：从原文到一句能照着做的话
+
+新增 `src/model-errors.js`：七种已知形态（`no-model` / `no-provider` / `auth` / `quota` / `context` / `timeout` / `network`），
+每条带「标题 + 点名哪个配置项」；`describeModelError()` 第一行说人话、第二行留原文，整条 `NOTICE_MAX_CHARS = 180`。
+认不出的归 `unknown`，原文不丢。首版 181 > 180 是 `room` 少算了一个字符，已修。
+
+- `src/agent-bridge.js`：`turnError` 分支改用 `describeModelError`；**in-band 失败也记账**（`failed: true, error`），catch 分支同样带上 `error`；
+- `src/index.js`：`recordModelUsage` 收到 `error` 时 `noteModelError(error)`（进程内环形缓冲，最多 20 条）；
+- `src/message/diag.js`：`/diag` 多一行「最近一次模型错误：… · 相关配置 X」。
+
+### 三、过程中的两个教训
+
+1. **测试不能裸跑单个文件**：`node --test test/busy-turns.test.js` 不带 `--import ./test/isolate-host-state.mjs` 时，
+   那两条 `sessionTitle` 镜像用例会因为「没有隔离的状态目录」而红；带上就 12/12。`npm test` 脚本里本来就带着，
+   所以判断红绿一律用 `npm test`（或把 `--import` 带上）。
+2. **`describeModelError` 的长度上限要算准**：`room = maxChars - head - '
+原文：'.length - 1`，少减一次就是 181。
+
+验证：`npm test` → **1193/1193 pass、0 fail**；`node bin/check.mjs` → `checked 273 files`。
 
 ## 当前状态（2026-10-26）
 

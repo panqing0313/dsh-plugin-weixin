@@ -1252,3 +1252,35 @@ DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open /tmp/migrate.enc      
 
 **记得这个页签不是逐字复刻**：检索召回与知识库要用户提问才成立，预览用固定探针代替，
 所以那两块**不会出现**在预览里 —— 页签上写明了这一点，而不是让人以为模型只收到这么点东西。
+
+## 模型报错：把原文翻译成人能照着做的一句话（1.5.1）
+
+真实的微信消息长这样（1.5.0，宿主 0.2.1-rc.5）：
+
+> （模型调用失败：pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"）
+
+用户能做的动作只有一个：来问开发者。这一版把这类错误分成七种已知形态，各自给一句「哪里错了 + 去改哪项」：
+
+| 形态 | 匹配到的原文片段 | 提示里点名的配置 |
+| --- | --- | --- |
+| `no-model` 没有可用的模型 | `has no configured model`、`unknown model` | `chatModel`（要连同 `chatProvider` 一起填） |
+| `no-provider` 供应商不认识 | `unknown provider`、`no such provider` | `chatProvider` |
+| `auth` 鉴权失败 | 401 / 403 / `invalid api key` | 去宿主里重新登录或换 key |
+| `quota` 额度或限流 | 429 / `insufficient_quota` / `rate limit` | 等一会儿，或换供应商 |
+| `context` 上下文太长 | `context length` / `maximum context` | `memoryConvMaxChars` / `memoryGlobalMaxFacts` |
+| `timeout` 超时 | `ETIMEDOUT` / `timed out` | 重发即重试；常超时是网络或供应商忙 |
+| `network` 连不上 | `fetch failed` / `ECONNREFUSED` / DNS | 检查网络与代理 |
+
+- **整条压到 180 字以内**，第二行是原文（去掉换行与控制字符），因为真去排查的人要的是那一行；
+- **认不出来的不吞**：归到「模型调用失败」，原文照留，提示是「把原文连同配置报给开发者」；
+- **`/diag` 多一行**：`最近一次模型错误：5 分钟前 · 没有配置可用的模型 · 相关配置 chatModel（最近 2 次失败都归到这一类）`。进程内只留最近 20 条，不写盘 —— 它是给人看的状态，不是审计日志。
+
+### 账单里看得见失败
+
+失败的回合照样消耗 token，所以账本从这一版起分开记：`turns` 只数拿到回复的回合，`failedTurns` 单独记。
+账单页签每行下面是按模型拆开的明细（`模型名 · N 回合 · ↓入 ↑出 · ¥`），行首标「N 次失败」，
+并加一条按 token 占比的细进度条 —— 哪个会话、哪个模型在花钱，一眼能看出来。
+
+聊天与后台都没指定路由时，账本里只有一个「默认路由」桶。以前这一桶被过滤掉、页签默默显示空白；
+现在写明「这些回合没记到模型名（聊天与后台都没单独指定）」，并说明填上 `chatProvider` 与 `chatModel` 就会分模型记账。
+

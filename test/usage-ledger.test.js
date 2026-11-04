@@ -142,3 +142,50 @@ test('a missing file is an empty ledger, not an error', () => {
   assert.equal(ledgerTotals([]).tokens, 0)
   fs.rmSync(stateRoot, { recursive: true, force: true })
 })
+test('the ledger keeps a per-model breakdown, and counts failed turns', () => {
+  // "which model did this conversation use, and how much of it" is the question
+  // the bill tab exists to answer. The first version only stored the turn count
+  // per model and showed a bare list of names with no numbers, so a
+  // conversation that never set a model by hand looked like nothing was
+  // recorded at all.
+  const root = stateDir()
+  const at = new Date(2026, 10, 4, 10, 0).getTime()
+  try {
+    recordUsage(root, { accountId: 'bot1', conversationId: 'c1', route: 'chat', model: 'deepseek/deepseek-chat', prompt: '你好', reply: '在的', at })
+    recordUsage(root, { accountId: 'bot1', conversationId: 'c1', route: 'summarize', model: 'deepseek/deepseek-chat', prompt: '摘要一下', reply: '好的', at: at + 1 })
+    // A provider that is misconfigured never answers, but the request still cost
+    // whatever the model read before it failed. Counted, not silently dropped.
+    recordUsage(root, { accountId: 'bot1', conversationId: 'c1', route: 'chat', model: 'deepseek/deepseek-chat', prompt: '还在吗', reply: '', failed: true, at: at + 2 })
+
+    const rows = conversationRows(root, 'bot1', { now: at + 2 })
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].turns, 2, 'a failed turn is not a turn')
+    assert.equal(rows[0].failedTurns, 1)
+    const [model] = rows[0].modelBreakdown
+    assert.equal(model.model, 'deepseek/deepseek-chat')
+    assert.equal(model.turns, 2, 'two turns produced a reply')
+    assert.equal(model.tokensIn, rows[0].tokensIn)
+    assert.equal(model.tokens, rows[0].tokens)
+    assert.deepEqual(rows[0].routeBreakdown.map((entry) => entry.route).sort(), ['chat', 'summarize'])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the awareness line names the model, and says so when there is none', () => {
+  const root = stateDir()
+  const at = new Date(2026, 10, 4, 10, 0).getTime()
+  try {
+    recordUsage(root, { accountId: 'bot1', conversationId: 'c1', route: 'chat', model: 'deepseek/deepseek-chat', prompt: '在吗', reply: '在', at })
+    const line = usageAwarenessLine(root, 'bot1', 'c1', { now: at })
+    assert.match(line, /deepseek\/deepseek-chat/)
+    assert.match(line, /1 个回合/)
+
+    recordUsage(root, { accountId: 'bot1', conversationId: 'c2', route: 'chat', model: '（未指定）', prompt: '在吗', reply: '在', at })
+    const quiet = usageAwarenessLine(root, 'bot1', 'c2', { now: at })
+    assert.match(quiet, /模型名没有记下来/, 'the persona should not name a model nobody chose')
+    assert.doesNotMatch(quiet, /deepseek/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

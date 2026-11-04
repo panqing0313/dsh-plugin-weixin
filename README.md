@@ -175,7 +175,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.5.0`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.5.1`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
@@ -673,9 +673,31 @@ BM25 打分，索引落在 `<状态目录>/memory/index/<账号>.json`，按天�
 - **元** 按你填的单价折算；没填单价时只显示 token，元一列是「—」；
 - **模型** 写的是**我们请求的那条路由**（`chatProvider/chatModel`，后台任务看 `sideProvider/sideModel`，摘要类调用看它自己的 `route`），不一定是宿主最终选用的那个。
 
+每行下面再按模型拆开：`模型名 · N 回合 · ↓入 ↑出 · ¥`，按 token 从多到少排。
+**失败的回合也算钱**：模型报错时 token 照样消耗，所以账本单独记 `failedTurns`，行首标「N 次失败」，
+回合数只数真正拿到回复的 —— 你看到「2 回合 / 1 次失败」时，账单和现实是一致的。
+
+如果聊天与后台都没有单独指定路由，每个会话只有一条「默认路由」，那就没有模型名可写：
+这一版开始，这种情况会**明说**「这些回合没记到模型名（聊天与后台都没单独指定）」，
+而不是假装记下来了。填上 `chatProvider` 与 `chatModel`（两个都填才生效），账本立刻开始分模型记账。
+
 记账本身**不调模型**：每个回合真正跑完时，`AgentBridge` 通过 `onUsage` 把「提示词与回复」报一次，插件折算后写进账本。
 打开 `usageAwarenessEnabled`（默认开）时，人设还会在提示词末尾看到一行「本会话已用 N 个回合、约 X token」——
 它会知道自己在花谁的钱，也能据此说得更省。`test/usage-ledger.test.js` 与 `test/e2e.test.js` 的账本用例守着这些行为。
+
+**模型报错现在会翻译成人话。** 以前模型层失败，你在微信里收到的是一句原文：
+
+> （模型调用失败：pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"）
+
+这句话对写插件的人有用，对用它的人没用 —— 既没说哪一项配错，也没说该怎么改。现在它会先归到已知形态
+（没配模型 / 供应商名字不认识 / 鉴权失败 / 额度用完 / 上下文太长 / 超时 / 连不上），
+第一行给出「哪里错了 + 去改哪个配置项」，第二行保留原始错误（真排查时要用），整条压到 180 字以内：
+
+> （没有配置可用的模型：到「配置项」里把 chatModel 与 chatProvider 一起填上（两个都填才生效）；模型名要写成供应商要求的样子）
+> 原文：pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"
+
+认不出来的错误不会被吞掉：照样带上原文，只是没有建议。**`/diag` 里多一行**「最近一次模型错误：N 分钟前 · 标题 · 相关配置 X」，
+所以「它为什么不说话」这件事不用翻日志。
 
 ### 日报与记忆核对（digestEnabled · memoryReviewEnabled）
 

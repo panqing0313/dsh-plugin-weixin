@@ -177,7 +177,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.5.0`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.5.1`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -653,9 +653,38 @@ All three numbers are **estimates**, and the tab says so:
 - **Yuan** uses the price you set. With no price configured, only tokens are shown and the money column reads "—".
 - **The model column** names the route we asked for (`chatProvider/chatModel`, or `sideProvider/sideModel` for background work), not necessarily the one the host finally picked.
 
+Under each row the ledger splits by model: `model · N turns · ↓in ↑out · ¥`, most tokens first.
+**A failed turn still costs money**, so the ledger keeps `failedTurns` separately and marks the row
+with "N failed": the turn count only counts turns that actually produced a reply, so "2 turns / 1 failed"
+adds up instead of hiding the failure.
+
+When neither chat nor background work names a route there is no model name to write, and since this
+version the tab says exactly that — "these turns never recorded a model (nothing was named for chat
+or background work)" — instead of inventing one. Fill in both `chatProvider` and `chatModel`
+(one without the other is ignored) and the ledger starts splitting per model.
+
 Recording costs nothing: when a turn really settles, `AgentBridge` reports the prompt and reply through `onUsage`, and the plugin folds them into the ledger.
 With `usageAwarenessEnabled` (on by default) the persona also sees one estimated line at the end of the prompt — how many turns and tokens this conversation has used — so it knows whose money it is spending.
 `test/usage-ledger.test.js` and the ledger case in `test/e2e.test.js` guard this.
+
+**A model failure now reads like a sentence.** Before, a failure in the model layer reached you in
+WeChat as the raw string:
+
+> (the model call failed: pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash")
+
+That line is useful to whoever wrote the plugin and useless to whoever runs it: it names neither the
+option that is wrong nor what to change. It is now sorted into a known shape (no model configured /
+unknown provider / authentication / out of quota / context too long / timeout / unreachable), the
+first line says what is wrong and which option to fix, the second keeps the original error for
+whoever debugs it, and the whole notice stays under 180 characters:
+
+> (no usable model is configured: set both chatProvider and chatModel in Options — one without the
+> other is ignored — spelling the model the way the provider does)
+> raw: pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"
+
+An unrecognised error is never swallowed: it keeps the raw line, it just has no advice attached.
+**`/diag` gained a line** — "last model error: N minutes ago · what kind · which setting" — so
+"why is it not answering" no longer means reading a log file.
 
 ### Daily digest and memory review (digestEnabled · memoryReviewEnabled)
 
