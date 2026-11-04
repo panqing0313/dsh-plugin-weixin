@@ -4278,3 +4278,9 @@ release run `41485882140` success）。
 真机验证（本机）：默认打开 → `girlfriend` / 女友 / 651 字 / 15 个模式在下拉里；手动选 `jarvis` → 693 字且标「可能不同」。
 
 测试过程中还踩了三次：「测试夹具用 `writePersonaStore(root, {modes:[...]})`」——该函数第二个参数就是模式数组，包一层对象写进去会变成 `{0:'default',1:...}` 的怪形状；`listActiveOverrides` 有意不返回 `__global__`，验全局默认要用 `readGlobalDefaultMode`；`clearActiveMode` 只清会话覆盖，清全局默认要用 `writeGlobalDefaultMode(root, '')`。三条都记在测试注释里。
+
+## 发布 1.5.5（2026-11-04）
+
+- 走 CI：`git tag -a v1.5.5` → `release.yml` run `41794527749`，5 分 32 秒全绿（带 provenance）；`--finish 1.5.5` 四步全绿。
+- 核验：`dist-tags.latest = 1.5.5`、`dist.shasum f036bd0492eb5b8e460643ddb6efd9f0137e53be`、`gitHead 5d5b045`；`doctor` → `installed 1.5.5` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.5)`；profile `^1.5.4 → ^1.5.5`。
+- 重启后复核提示词页签：默认应显示「女友」651 字并标「取自个性化」；把下拉切到别的模式应标「可能与实际会话不同」。
