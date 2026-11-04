@@ -4369,3 +4369,9 @@ release run `41485882140` success）。
 
 规矩：**任何读配置、读状态、读账本的探针都要先 `DSH_WEIXIN_STATE_DIR=$(mktemp -d)`**，
 只在需要看真实值时读、不写。这条 1.5.4 已经因为 `backups/` 写过一次，这次又犯。
+
+## 发布 1.5.8（2026-11-04）
+
+- 两个提交：`a7bf1aa` 把「空着等于什么」改成问桥（`describeAsrModel`）、`1fc2399`
+  记录「探针跑在真实数据目录上」的事故；版本提交 `chore(release) 1.5.8` 由本段补齐。
+- 全量 **1225/1225 pass**、`check.mjs` → `checked 276 files`。
