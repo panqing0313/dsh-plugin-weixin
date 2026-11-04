@@ -27,6 +27,7 @@ const CLIENT_PATH = new URL('../src/client.js', import.meta.url)
  * what matters, not the nesting depth.
  */
 const CARD_PATH = new URL('../src/client.card.js', import.meta.url)
+const CONFIG_PATH = new URL('../src/config-remote.js', import.meta.url)
 
 /** Wire names must be usable as an RPC argument key and as an object property. */
 const WIRE_RE = /^[A-Za-z0-9_$.-]+$/
@@ -305,6 +306,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixinAsr/downloadStatus',
         'weixinAsr/getDownloadSettings',
         'weixinAsr/listModels',
+        'weixinAsr/modelChoices',
         'weixinAsr/removeModel',
         'weixinAsr/setDownloadSettings',
         'weixinAsr/setModelDir',
@@ -1134,4 +1136,31 @@ test('the voice tab picks a model from a list, and deletes in two steps', () => 
   assert.match(card, /armed !== m\.path/, 'the first click only arms the row')
   assert.match(card, /Confirm delete/, 'the second click says what it will do')
   assert.match(card, /weixinAsr\.removeModel/, 'the card asks the host to delete, never the filesystem')
+})
+
+test('path and model options are chosen, not typed from memory', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  const config = fs.readFileSync(CONFIG_PATH, 'utf8')
+
+  // The option table says *how* a value is chosen; the card only renders it.
+  // A path option without a picker is how `/Users/…/python3` had to be typed by
+  // hand into a box that offered nothing.
+  assert.match(config, /picker: "dir"/, 'the working directory and the model directory are folder options')
+  assert.match(config, /picker: "file"/, 'the bridge command is a file option')
+  assert.match(card, /field\.picker\) \{[\s\S]{0,400}createElement\(PathPicker/, 'a path option reuses the shared folder browser')
+  assert.match(card, /mode: field\.picker/, 'the picker opens in the mode the option declares (dir or file)')
+
+  // A model value is a name from a roster that depends on this machine, so the
+  // field offers the roster *and* keeps the box: a local path is a legitimate
+  // answer the roster cannot contain.
+  assert.match(config, /suggestions: "asrModels"/, 'the voice model option is a suggestion field')
+  assert.match(card, /suggestions\[field\.suggestions\]/, 'the card resolves suggestion sources by name')
+  assert.match(card, /weixinAsr\.modelChoices\(\{ apple \}\)/, 'the roster comes from the host, which knows what this machine can load')
+  assert.match(card, /or a repo id \/ absolute path/, 'the free-text box stays beside the dropdown')
+  assert.match(card, /Empty means "\$\{source\.implied\}"|留空就是「\$\{source\.implied\}」/, 'the row says what leaving it empty will do')
+
+  // A non-empty default is a starting point, not a saved value: it must not
+  // appear as content, or every fresh install looks customised.
+  assert.match(config, /fallbackShown: true/, 'asr.hfEndpoint declares that its default is only a placeholder')
+  assert.match(card, /field\.fallbackShown \? field\.defaultValue : undefined/, 'the placeholder carries the default into the empty box')
 })

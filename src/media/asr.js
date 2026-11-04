@@ -43,6 +43,7 @@ export const DEFAULT_ASR_TIMEOUT_MS = 60_000
 
 /** Environment variable names the bridge itself reads. */
 const ENV_MODEL = 'DSH_WEIXIN_ASR_MODEL'
+const ENV_MODEL_PATH = 'DSH_WEIXIN_ASR_MODEL_PATH'
 const ENV_LANGUAGE = 'DSH_WEIXIN_ASR_LANGUAGE'
 
 /** Bytes kept from stderr for the "why did it fail" note. */
@@ -102,7 +103,7 @@ export function resolveAsrSettings(config, modelDir, packageDir) {
   for (const [name, value] of Object.entries(env)) {
     if (typeof value === 'string' && value.trim() === '') delete env[name]
   }
-  for (const name of [ENV_MODEL, ENV_LANGUAGE, 'HF_HOME']) {
+  for (const name of [ENV_MODEL, ENV_MODEL_PATH, ENV_LANGUAGE, 'HF_HOME']) {
     const value = env[name]
     if (typeof value === 'string') env[name] = value.trim()
   }
@@ -113,10 +114,23 @@ export function resolveAsrSettings(config, modelDir, packageDir) {
   const chosenDir =
     (typeof modelDir === 'string' && modelDir.trim() !== '' ? modelDir.trim() : undefined) ??
     (typeof settings.modelDir === 'string' && settings.modelDir.trim() !== '' ? settings.modelDir.trim() : undefined)
+  // An absolute path is unambiguous and goes where the bridge looks first.
+  // A bare name (`small`, `medium`) is a *size* to the bridge, and a size is
+  // only meaningful next to the directory that holds it — so the directory is
+  // passed as the root and the name as the size. Silently dropping the name
+  // (which is what happened while this was unwired) made every download in the
+  // UI resolve to `small` no matter which model the operator picked.
+  const configuredModel = typeof settings.model === 'string' ? settings.model.trim() : ''
+  const modelIsPath = configuredModel !== '' && (configuredModel.startsWith('/') || configuredModel.startsWith('~'))
+  const modelName = configuredModel !== '' && !modelIsPath ? configuredModel : undefined
+  const modelPath = modelIsPath ? configuredModel : undefined
+
   if (chosenDir !== undefined) {
     if (env.HF_HOME === undefined) env.HF_HOME = chosenDir
-    if (env[ENV_MODEL] === undefined) env[ENV_MODEL] = chosenDir
+    if (env[ENV_MODEL] === undefined) env[ENV_MODEL] = modelName ?? chosenDir
   }
+  if (modelName !== undefined && env[ENV_MODEL] === undefined) env[ENV_MODEL] = modelName
+  if (modelPath !== undefined && env[ENV_MODEL_PATH] === undefined) env[ENV_MODEL_PATH] = modelPath
   const configuredCwd = typeof settings.cwd === 'string' ? settings.cwd.trim() : ''
   const cwd = configuredCwd !== '' ? configuredCwd : (typeof packageDir === 'string' && packageDir.trim() !== '' ? packageDir.trim() : undefined)
   return { command, args, env, timeoutMs, ...(cwd === undefined ? {} : { cwd }) }

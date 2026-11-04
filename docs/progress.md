@@ -4323,3 +4323,20 @@ release run `41485882140` success）。
   `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.6)`；profile `^1.5.5 → ^1.5.6`。
 - 重启后核对：语音模型页签「浏览…」应当场展开文件夹浏览器（不再卡在「打开中…」）、
   每行有「删除 → 确认删除」、「下载模型」是下拉且默认选中本平台那一档。
+
+## 配置项：把「要打」改成「要选」（2026-11-04，1.5.7）
+
+- 起因：语音识别组的「模型」是一个空文本框；同类问题在其它 12 个组里还有。
+- 机制（`src/config-remote.js` 声明形状，`src/client.card.js` 只按形状渲染）：
+  `suggestions` / `picker` / `fallbackShown` 三个字段属性 + 宿主方法
+  `weixinAsr/modelChoices({ apple })`。
+- 真 bug 一并修掉：
+  - `asr.model` 从未传给桥（只有 `modelDir` 传了），所以选 `medium` 实际加载 `small`。
+    现在尺寸 → `DSH_WEIXIN_ASR_MODEL`，绝对路径 → `DSH_WEIXIN_ASR_MODEL_PATH`
+    （新增常量 `ENV_MODEL_PATH`），并补了 `test/asr.test.js` 的四种组合；
+  - `weixinAsr/removeModel` 只有客户端 descriptor、没有进 `remoteMethods`，
+    所以点删除一直 `HTTP 404`。新增 `test/remote-surface.test.js` 双向核对
+    「客户端声明的每个方法宿主都要有、宿主导出的每个方法客户端都要能调」，
+    并且验证过它在旧代码上确实报出 `weixinAsr/removeModel`。
+- 顺手：`asr.hfEndpoint` 这类默认值非空的项，值不再显示成内容（保存默认值也不会被记成
+  「已保存」），避免新装就看着像被人改过。

@@ -275,3 +275,84 @@ test('the form reports the file it writes, and every group is present', async ()
     scope.restore()
   }
 })
+
+test('an option with a roster is chosen, not typed; an empty box says what it means', async () => {
+  const state = withStateRoot()
+  try {
+    // 「模型」 was a free-text box: a misspelt repo id only showed up when a
+    // voice note failed to transcribe. It now names a roster the host builds,
+    // and keeps the box for the answers a roster cannot have (a local path).
+    const svc = controller()
+    const fresh = await svc.list()
+    const model = fieldOf(fresh, 'asr.model')
+    assert.equal(model.suggestions, 'asrModels', 'the form can resolve a roster for this option')
+    // Empty is not "no model": with a directory saved, the bridge resolves
+    // `<dir>/small`. Saying so is the difference between "unset" and "broken".
+    await svc.save(JSON.stringify([{ path: 'asr.modelDir', value: '/vol/models' }]))
+    const implied = (await controller().list())
+    const afterDir = fieldOf(implied, 'asr.model')
+    assert.equal(afterDir.source, 'default', 'nothing was stored for the model itself')
+    assert.match(afterDir.value, /\/vol\/models/, 'the empty box spells out what it would resolve to')
+
+    // Path options carry the kind of path, so the card can offer the same
+    // folder browser it uses everywhere else.
+    assert.equal(fieldOf(fresh, 'asr.command').picker, 'file')
+    assert.equal(fieldOf(fresh, 'asr.modelDir').picker, 'dir')
+    assert.equal(fieldOf(fresh, 'cwd').picker, 'dir')
+  } finally {
+    state.restore()
+  }
+})
+
+test('typing a default back does not turn it into a saved value', async () => {
+  const state = withStateRoot()
+  try {
+    // The box shows a non-empty default as a grey placeholder. Saving whatever
+    // happens to be in the box would then report "saved" on an untouched
+    // install, and the reset button would appear to undo something that was
+    // never set — so writing the default is treated as clearing the key.
+    const svc = controller()
+    const endpoint = fieldOf(await svc.list(), 'asr.hfEndpoint')
+    assert.equal(endpoint.fallbackShown, true, 'the option declares that its default is only a placeholder')
+    assert.equal(endpoint.source, 'default')
+
+    await svc.save(JSON.stringify([{ path: 'asr.hfEndpoint', value: endpoint.value }]))
+    const afterSave = fieldOf(await controller().list(), 'asr.hfEndpoint')
+    assert.equal(afterSave.source, 'default', 'a default typed back is still a default')
+    const written = JSON.parse(fs.readFileSync(nodePath.join(state.root, 'config.json'), 'utf8'))
+    assert.equal('hfEndpoint' in (written.asr ?? {}), false, 'nothing was written for the key')
+
+    // A genuinely different value saves normally.
+    await svc.save(JSON.stringify([{ path: 'asr.hfEndpoint', value: 'https://custom.example' }]))
+    const custom = fieldOf(await controller().list(), 'asr.hfEndpoint')
+    assert.equal(custom.source, 'saved')
+    assert.equal(custom.value, 'https://custom.example')
+  } finally {
+    state.restore()
+  }
+})
+
+test('the model roster carries what this machine already has, and what it could get', async () => {
+  const { AsrController } = await import('../src/asr-remote.js')
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-choices-'))
+  try {
+    for (const name of ['mlx-community__whisper-small-mlx', 'mlx-community__whisper-medium-mlx']) {
+      fs.mkdirSync(nodePath.join(dir, name))
+      fs.writeFileSync(nodePath.join(dir, name, 'config.json'), '{}')
+    }
+    const svc = new AsrController(new Context(), { modelDir: dir })
+    const apple = await svc.modelChoices({ apple: true })
+    const installed = apple.choices.filter((entry) => entry.installed).map((entry) => entry.value).sort()
+    assert.deepEqual(installed, ['medium', 'small'], 'installed models are named by their size')
+    assert.ok(apple.choices.some((entry) => entry.value === 'large-v3-turbo' && !entry.installed), 'mlx can also use large-v3-turbo')
+    assert.ok(apple.implied.includes('small'), 'the implied default is spelled out')
+
+    // The other platform gets CTranslate2 sizes instead: base exists there and
+    // large-v3-turbo's mlx spelling does not.
+    const other = await svc.modelChoices({ apple: false })
+    const offered = other.choices.filter((entry) => !entry.installed).map((entry) => entry.value).sort()
+    assert.deepEqual(offered, ['base', 'tiny'], 'a non-Apple machine is offered the sizes it can actually load')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

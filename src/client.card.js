@@ -3061,6 +3061,11 @@ window.__ModuleLoader__.load({
 			// "provider" and "model" are the classic way to break every turn with
 			// `no configured model`, and the host already knows the list.
 			const [catalog, setCatalog] = react.useState(null);
+			// A field with `suggestions` gets a dropdown beside its box. The list is
+			// fetched by name (never hard-coded in the card), and carries what an
+			// empty box would mean — that sentence is the whole point of the
+			// dropdown for options whose default is not obvious.
+			const [suggestions, setSuggestions] = react.useState({});
 			// The host answers with localized validation messages, so it needs to
 			// know which language the card is showing.
 			const { lang } = useLocaleText(ctx);
@@ -3108,6 +3113,17 @@ window.__ModuleLoader__.load({
 					} catch {
 						// No catalogue: the boxes stay free text, which still works.
 						setCatalog(null);
+					}
+				})();
+				(async () => {
+					try {
+						// Apple silicon decides which whisper sizes this machine can load.
+						const apple = /Mac/.test(String(navigator?.userAgent ?? ""));
+						const asr = await callRemote(() => ctx.remote.weixinAsr.modelChoices({ apple }));
+						setSuggestions({ asrModels: asr });
+					} catch {
+						// Without the list the field is still a text box.
+						setSuggestions({});
 					}
 				})();
 			}, [ctx]);
@@ -3300,11 +3316,63 @@ window.__ModuleLoader__.load({
 							? createElement("span", { style: captionStyle },
 								t("宿主的配置文件里有这个版本读不懂的写法，列表可能不全；可以直接输入。", "The host's settings file uses a shape this build cannot read, so the list may be short; typing still works."))
 							: null);
+				} else if (field.picker) {
+					// A path is not something to type from memory. This is the same
+					// folder browser the 「维护」 and 「语音模型」 tabs use, so a path
+					// option behaves the same wherever it appears.
+					control = createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+						createElement(PathPicker, {
+							ctx,
+							t,
+							value,
+							onChange: (next) => set(next),
+							placeholder: field.picker === "dir" ? t("/path/to/folder", "/path/to/folder") : t("/path/to/file", "/path/to/file"),
+							mode: field.picker,
+							onNotice: (message) => setMessage(message),
+						}));
+				} else if (field.suggestions) {
+					// A dropdown *and* the box: the list has the answers that exist
+					// here, the box has the ones it cannot (an absolute path, a repo
+					// id nobody has downloaded yet). Picking a row fills the box, so
+					// a value is never silently "both".
+					const source = suggestions[field.suggestions] ?? null;
+					const rows = Array.isArray(source?.choices) ? source.choices : [];
+					control = createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+						createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+							createElement("select", {
+								value: rows.some((row) => row.value === value) ? value : "",
+								disabled: field.readOnly || rows.length === 0,
+								onChange: (event) => {
+									if (event.target.value !== "") set(event.target.value);
+								},
+								style: { ...inputStyle, flex: "0 1 280px", width: "auto" },
+							},
+								createElement("option", { key: "auto", value: "" },
+									source?.implied ? t(`自动：${source.implied}`, `Automatic: ${source.implied}`) : t("自动（用默认值）", "Automatic (use the default)")),
+								...rows.map((row) => createElement("option", { key: row.value, value: row.value },
+									(row.installed ? "\u2713 " : "\u2193 ") + row.label))),
+							createElement("input", {
+								type: "text",
+								value,
+								disabled: field.readOnly,
+								placeholder: t("或填仓库 id / 绝对路径", "or a repo id / absolute path"),
+								onChange: (event) => set(event.target.value),
+								style: { ...inputStyle, flex: "1 1 240px", width: "auto" },
+							})),
+						source?.implied
+							? createElement("span", { style: captionStyle },
+								t(`留空就是「${source.implied}」。✓ 已在本机，↓ 需要先下载。`,
+									`Empty means "${source.implied}". ✓ already here, ↓ needs a download.`))
+							: null);
 				} else {
 					control = createElement("input", {
 						type: "text",
 						value,
 						disabled: field.readOnly,
+						// A non-empty default is a starting point, not a choice: it
+						// shows greyed in an empty box, and saving an empty box keeps
+						// the default rather than writing it down as "saved".
+						placeholder: field.fallbackShown ? field.defaultValue : undefined,
 						onChange: (event) => set(event.target.value),
 						style: { ...inputStyle, width: "100%" },
 					});

@@ -175,7 +175,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.5.6`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.5.7`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
@@ -1235,8 +1235,25 @@ pip install faster-whisper     # 其它平台，走 CPU
 - 该目录同时驱动**下载**和**转写**两端：下载的模型落到 `<目录>/<repo>`，
   转写时 `HF_HOME` 与 `DSH_WEIXIN_ASR_MODEL` 都指向这个目录，所以下载完就能直接用，
   不用再去改配置文件；
-- 配置里的 `asr.env.HF_HOME` / `asr.env.DSH_WEIXIN_ASR_MODEL` 优先级更高——
-  手写过的值不会被界面覆盖。
+- 配置里的 `asr.env.HF_HOME` / `asr.env.DSH_WEIXIN_ASR_MODEL` / `DSH_WEIXIN_ASR_MODEL_PATH`
+  优先级更高——手写过的值不会被界面覆盖。
+
+### 要选的选项，不要打字
+
+「配置项」里凡是**答案是有限几种**的选项，现在都不再是一个空白输入框：
+
+- **模型**（`asr.model`）是一个下拉：列出本机已装的模型（前面是 ✓）和这台机器能下载的
+  尺寸（前面是 ↓），旁边保留文本框填清单外的 repo id 或绝对路径。选「自动」就什么都不存，
+  下面一行会直接写出空值等于什么，例如「留空就是「small（/Volumes/models）」」。
+- **路径**（`cwd`、`asr.command`、`asr.modelDir`）后面是「浏览…」，用的是同一个文件夹
+  浏览器（`cwd` / `asr.modelDir` 选目录，`asr.command` 选文件）。
+- **有默认值但可以为空**的项（例如 `asr.hfEndpoint`）把默认值显示成**灰色占位**而不是内容：
+  框是空的、状态标「default」。把默认值原样存回去不会变成「已保存」，所以「还原」按钮
+  不会看起来像是在撤销一个从来没设过的东西。
+
+顺带修掉一个真的 bug：`asr.model` 之前**根本没有传给 ASR 桥**，只有 `modelDir` 传下去了，
+所以在界面里选 `medium` 实际仍然加载 `small`。现在尺寸走
+`DSH_WEIXIN_ASR_MODEL`、绝对路径走 `DSH_WEIXIN_ASR_MODEL_PATH`，两者都与桥的查找顺序一致。
 
 
 **桥是可选的，也可以自己写。** 插件只依赖上面那份行协议：它调用你的 `command`，把 WAV 路径写进

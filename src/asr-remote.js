@@ -17,6 +17,23 @@ import { remoteMethods } from "./typert-js.js";
 
 const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
 
+// The sizes the 「模型」 option can mean. These are *size* names, not repo ids:
+// the bridge turns a size into `mlx-community__whisper-<size>-mlx` or
+// `Systran__faster-whisper-<size>` depending on the engine it loaded, so a size
+// is the one spelling that stays right on both platforms.
+const APPLE_ASR_SIZES = Object.freeze([
+    { value: "tiny", label: "tiny（约 75 MB，最快）" },
+    { value: "small", label: "small（约 460 MB，默认）" },
+    { value: "medium", label: "medium（约 1.5 GB，更准）" },
+    { value: "large-v3-turbo", label: "large-v3-turbo（约 1.6 GB，大模型里最快）" },
+]);
+const OTHER_ASR_SIZES = Object.freeze([
+    { value: "tiny", label: "tiny（约 75 MB，最快）" },
+    { value: "base", label: "base（约 145 MB）" },
+    { value: "small", label: "small（约 460 MB，默认）" },
+    { value: "medium", label: "medium（约 1.5 GB，更准）" },
+]);
+
 /**
  * The endpoint a plain HTTP download uses when the operator names none.
  *
@@ -628,6 +645,50 @@ export class AsrController extends TypertRemoteService {
         }
     }
 
+    /**
+     * What the 「模型」 option can sensibly be set to on this machine.
+     *
+     * Three sources, in the order that is most useful to whoever is looking:
+     *  - **installed** — directories in the model root. These are the only
+     *    values that transcribe right now without a download.
+     *  - **recommended** — the sizes that fit this platform. The list is the
+     *    same one the voice tab's download picker uses, so the two pages never
+     *    disagree about what "small" means.
+     *  - **implied** — what an empty box resolves to, spelled out. Without it,
+     *    "leave it empty" reads as "no model", which is the opposite of true.
+     *
+     * The platform is passed in by the caller: this process does not render
+     * anything, and guessing from `process.platform` would be wrong the moment
+     * the card is shown on another device.
+     */
+    async modelChoices(options) {
+        const apple = options?.apple === true;
+        // `listModels()` is the remote method (an async envelope); the plain
+        // directory scan is the module-level function.
+        const models = listModels(this.modelDir);
+        const installed = models
+            .map((model) => {
+                const size = String(model.repoId ?? model.name ?? "").replace(/^.*whisper-/, "").replace(/-mlx$/, "");
+                return {
+                    value: size === model.name ? model.name : size,
+                    label: `${model.repoId ?? model.name}（已安装）`,
+                    installed: true,
+                };
+            })
+            .filter((entry) => entry.value !== "");
+        const recommended = (apple ? APPLE_ASR_SIZES : OTHER_ASR_SIZES)
+            .filter((entry) => installed.some((joined) => joined.value === entry.value) === false)
+            .map((entry) => ({ value: entry.value, label: entry.label, installed: false }));
+        const dir = this.modelDir;
+        const implied = dir === undefined || dir === "" ? "small" : `small（${dir}）`;
+        return {
+            choices: [...installed, ...recommended],
+            implied,
+            modelDir: dir,
+            apple,
+        };
+    }
+
     /** Poll download progress from the UI. */
     async downloadStatus(repo) {
         const rec = this.downloads.get(String(repo ?? ""));
@@ -714,7 +775,13 @@ void stateDir;
 
 remoteMethods(AsrController, [
     "listModels",
+    "modelChoices",
     "setModelDir",
+    // Declaring the method here is what mints its route. The client bundle can
+    // describe `weixinAsr/removeModel` all it likes; without this line the host
+    // has no endpoint, and every delete answers `HTTP 404` — which is exactly
+    // what the first build of the delete button did.
+    "removeModel",
     "downloadModel",
     "downloadStatus",
     "getDownloadSettings",

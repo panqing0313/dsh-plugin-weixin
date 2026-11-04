@@ -65,6 +65,7 @@ export const FIELDS = [
       },
       {
         path: "cwd",
+        picker: "dir",
         type: T.string,
         default: "",
         label: "工作目录",
@@ -1122,6 +1123,7 @@ export const FIELDS = [
       },
       {
         path: "asr.command",
+        picker: "file",
         type: T.string,
         default: "",
         label: "转写命令",
@@ -1142,10 +1144,19 @@ export const FIELDS = [
         path: "asr.model",
         type: T.string,
         default: "",
+        // Not a free-text box any more: the list is built from what is actually
+        // on this machine (plus the standard sizes), because a misspelt repo id
+        // is only discovered when a voice note fails to transcribe. The value
+        // stays a string, so an absolute path still works from the text box.
+        suggestions: "asrModels",
+        // Empty is not "nothing": the bridge is told the model directory and
+        // resolves `<dir>/<size>` from there. Saying which size wins is the
+        // difference between "no model" and "small, from your directory".
+        format: "fallback",
         label: "模型",
         labelEn: "Model",
-        hint: "Hugging Face 仓库 id 或本地模型目录的绝对路径；留空使用桥的默认值。",
-        hintEn: "A Hugging Face repo id or an absolute local model directory; empty uses the bridge default.",
+        hint: "不选就用默认值；也可以直接填 Hugging Face 仓库 id 或本地模型目录的绝对路径。",
+        hintEn: "Leaving it empty uses the implied default; a repo id or an absolute local directory also works.",
       },
       {
         path: "asr.timeoutMs",
@@ -1173,6 +1184,7 @@ export const FIELDS = [
       },
       {
         path: "asr.modelDir",
+        picker: "dir",
         type: T.string,
         default: "",
         label: "模型目录",
@@ -1188,6 +1200,9 @@ export const FIELDS = [
         labelEn: "Download endpoint",
         hint: "模型下载的地址。默认 https://hf-mirror.com，国内可直连；改成 https://huggingface.co 用官网。下载就是一次普通 HTTP 传输，速度完全取决于到这个地址的线路。",
         hintEn: "Where model downloads come from. Defaults to https://hf-mirror.com, reachable from mainland China without a proxy; use https://huggingface.co for the official site. A download is a plain HTTP transfer: exactly as fast as the route to this host.",
+        // A non-empty default is a starting point, not a saved choice:
+        // showing it as the box content made every install look customised.
+        fallbackShown: true
       },
       {
         path: "asr.hfProxy",
@@ -1317,6 +1332,12 @@ function present(field, value) {
   if (field.type === T.stringList) {
     return Array.isArray(value) ? value.join('\n') : ''
   }
+  // A field with `fallbacks` shows what an empty box would actually produce,
+  // per the settings it depends on. The value is never stored — it is derived
+  // from what is saved right now, so it cannot go stale.
+  if (field.format === 'fallback' && (value === undefined || value === null || String(value) === '')) {
+    return typeof field.fallback === 'function' ? String(field.fallback() ?? '') : ''
+  }
   if (value === undefined || value === null) return ''
   if (field.type === T.boolean) return value === true
   return String(value)
@@ -1355,6 +1376,10 @@ export class ConfigController extends TypertRemoteService {
       group: group.group,
       groupEn: group.groupEn,
       fields: group.fields.map((field) => {
+        // A fallback reads other saved values, so it is computed here rather
+        // than baked into the table: change the model directory and the model
+        // row's implied answer changes with it.
+        if (field.format === 'fallback') field.fallback = () => impliedBy(saved)
         const savedValue = readPath(saved, field.path)
         const configValue = readPath(this.config, field.path)
         const hasSaved = savedValue !== undefined
@@ -1390,6 +1415,17 @@ export class ConfigController extends TypertRemoteService {
           // all" for chats: opposite meanings, so the card must not render one
           // generic "empty means all" note for both.
           emptyMeansAll: field.emptyMeansAll,
+          // A field with suggestions renders a dropdown as well as the text
+          // box: the box stays, because a path is a legitimate answer the list
+          // cannot contain.
+          suggestions: field.suggestions,
+          // `picker` says the value is a path, and which kind: the card then
+          // uses the same folder browser as the other path options instead of
+          // an input nobody can spell.
+          picker: field.picker,
+          // Where a non-empty default shows up: as a grey placeholder (the box
+          // is empty and the save writes nothing) rather than as a value.
+          fallbackShown: field.fallbackShown === true,
         }
       }),
     }))
@@ -1437,6 +1473,15 @@ export class ConfigController extends TypertRemoteService {
       // `undefined` from coerce means "the operator cleared the box": remove the
       // key rather than storing a null, so the schema default applies again.
       if (value === undefined) {
+        deletePath(patch, dotted)
+        markClear(patch, dotted)
+        continue
+      }
+      // Typing the default back must not turn it into a saved value. The box
+      // shows a default as a grey placeholder; a form that then saves whatever
+      // is in that box would report "saved" on an untouched install, and the
+      // ✕ reset button would appear to reset something that was never set.
+      if (field.fallbackShown === true && value === field.default) {
         deletePath(patch, dotted)
         markClear(patch, dotted)
         continue
@@ -1498,6 +1543,20 @@ export class ConfigController extends TypertRemoteService {
 }
 
 /** Remove `a.b` from an object, pruning a parent left empty by the removal. */
+/**
+ * What an empty box actually produces, for fields whose blank value has a
+ * meaning. Only `asr.model` needs one today: the bridge takes the model
+ * *directory* and looks for `<dir>/<size>` inside it, where `<size>` is
+ * `DSH_WEIXIN_ASR_MODEL` or the literal `small`.
+ *
+ * It reads the saved overlay rather than the live config on purpose — this is
+ * what the operator will get after pressing 保存, which is what the field says.
+ */
+function impliedBy(saved) {
+  const dir = typeof saved?.asr?.modelDir === 'string' ? saved.asr.modelDir.trim() : ''
+  return dir === '' ? 'small（桥自己的默认值）' : `${dir} 里的 small`;
+}
+
 function deletePath(object, dotted) {
   const parts = dotted.split('.')
   const chain = [object]

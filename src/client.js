@@ -37,7 +37,7 @@ window.__ModuleLoader__.load({
 		const PKG = "dsh-plugin-weixin";
 		// Kept in step with package.json by bin/release.mjs bumpVersion() — the card
 		// cannot import package.json, so the release script rewrites this line.
-		const PLUGIN_VERSION = "1.5.6";
+		const PLUGIN_VERSION = "1.5.7";
 		const NS = "dshPluginWeixin";
 
 		const TYPERT_REMOTE = {
@@ -650,6 +650,15 @@ window.__ModuleLoader__.load({
 					invocation: { kind: "direct" },
 					parameters: [],
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/listModels:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixinAsr/modelChoices`,
+					service: "asrController",
+					namespace: "weixinAsr",
+					method: "modelChoices",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/modelChoices:result`, create: _statusResult },
 				},
 				{
 					id: `${PKG}#weixinAsr/setModelDir`,

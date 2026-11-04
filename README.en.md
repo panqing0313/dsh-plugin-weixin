@@ -177,7 +177,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.5.6`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.5.7`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -1194,8 +1194,28 @@ native chooser. After choosing, click "Set directory"; the host does `mkdir -p` 
 - That directory drives **both** download and transcription: downloaded models land in `<dir>/<repo>`,
   and at transcription time `HF_HOME` and `DSH_WEIXIN_ASR_MODEL` both point at this directory, so a finished download is directly usable,
   with no need to edit config files again;
-- `asr.env.HF_HOME` / `asr.env.DSH_WEIXIN_ASR_MODEL` in the config have higher priority —
-  values written by hand are not overwritten by the UI.
+- `asr.env.HF_HOME` / `asr.env.DSH_WEIXIN_ASR_MODEL` / `DSH_WEIXIN_ASR_MODEL_PATH` in the config
+  have higher priority — values written by hand are not overwritten by the UI.
+
+### Options with a known answer are chosen, not typed
+
+In the 「配置项」 tab, an option whose answer is one of a few known values is no longer a blank box:
+
+- **Model** (`asr.model`) is a dropdown listing the models installed on this machine (marked ✓)
+  and the sizes this machine can download (marked ↓), with a text box beside it for a repo id or
+  absolute path outside the list. Choosing "Automatic" stores nothing, and the line underneath
+  spells out what empty means — e.g. "empty means "small (/Volumes/models)"".
+- **Paths** (`cwd`, `asr.command`, `asr.modelDir`) get a "Browse…" that opens the same folder
+  browser as every other path option (`cwd` and `asr.modelDir` pick a folder, `asr.command` a file).
+- An option **with a non-empty default** (e.g. `asr.hfEndpoint`) shows that default as a grey
+  placeholder, not as content: the box stays empty and the badge says "default". Saving the
+  default back does not turn it into a "saved" value, so "reset" never appears to undo something
+  that was never set.
+
+This also fixed a real bug: `asr.model` was **never passed to the ASR bridge** — only `modelDir`
+was — so choosing `medium` in the UI still loaded `small`. A size now travels as
+`DSH_WEIXIN_ASR_MODEL` and an absolute path as `DSH_WEIXIN_ASR_MODEL_PATH`, matching the bridge's
+own lookup order.
 
 
 **The bridge is optional, and you can write your own.** The plugin only depends on the line protocol above: it runs your `command`, writes the WAV path into

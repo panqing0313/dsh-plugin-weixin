@@ -203,6 +203,34 @@ test('a custom model directory reaches the bridge, so transcription uses it', ()
   assert.equal(explicit.env.HF_HOME, '/vol/explicit')
 })
 
+test('a model picked in the settings reaches the bridge as a size or as a path', () => {
+  // `asr.model` used to be dropped on the floor: the form offered it, the
+  // operator picked `medium`, and the bridge still loaded `small` because only
+  // the directory was forwarded. Both spellings now arrive, in the slot the
+  // bridge reads.
+  const sizeOnly = resolveAsrSettings({ asr: { command: 'py', model: 'medium' } })
+  assert.equal(sizeOnly.env.DSH_WEIXIN_ASR_MODEL, 'medium')
+  assert.equal('DSH_WEIXIN_ASR_MODEL_PATH' in sizeOnly.env, false)
+
+  // A size only means something next to its directory: the root goes to
+  // HF_HOME and the name stays the size, which is how the bridge builds
+  // `<root>/mlx-community__whisper-<size>-mlx`.
+  const withDir = resolveAsrSettings({ asr: { command: 'py', model: 'large-v3-turbo' } }, '/vol/models')
+  assert.equal(withDir.env.DSH_WEIXIN_ASR_MODEL, 'large-v3-turbo')
+  assert.equal(withDir.env.HF_HOME, '/vol/models')
+
+  // An absolute path is not a size; it goes where the bridge looks first, and
+  // it must not also be written into the size slot (that would make the bridge
+  // search for `__whisper-/opt/whisper-mlx`).
+  const asPath = resolveAsrSettings({ asr: { command: 'py', model: '/opt/whisper' } }, '/vol/models')
+  assert.equal(asPath.env.DSH_WEIXIN_ASR_MODEL_PATH, '/opt/whisper')
+  assert.equal(asPath.env.DSH_WEIXIN_ASR_MODEL, '/vol/models')
+
+  // A hand-written env value still wins: it is the most explicit statement.
+  const explicit = resolveAsrSettings({ asr: { command: 'py', model: 'medium', env: { DSH_WEIXIN_ASR_MODEL: 'tiny' } } })
+  assert.equal(explicit.env.DSH_WEIXIN_ASR_MODEL, 'tiny')
+})
+
 test('the bridge runs from the plugin directory, so a relative bridge path resolves', () => {
   // A shipped bridge is addressed as `bin/asr-bridge.py`. Without a cwd the
   // child inherits whatever directory the DSH host was started in, and a

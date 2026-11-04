@@ -1364,3 +1364,23 @@ settle，于是 `finally` 不执行、按钮永远停在「打开中…」，连
 
 体积写进选项里是有用的信息：460 MB 和 1.5 GB 在镜像上的耗时差着数量级，而这一点在选择时
 就该知道，不是下载到一半才发现。
+
+## 配置项：有答案的选项改成选，空框说清空等于什么（1.5.7）
+
+「配置项」里的空白输入框是一种税：它把「这个值应该是什么」的知识留给操作者。模型尤其明显：
+`asr.model` 要求同时知道 repo id 的拼法、尺寸的含义，以及本机装的是哪一档。现在这条路径是：
+
+- 服务端在选项表里声明**形状**，客户端只负责按形状渲染，不写死任何清单：
+  - `suggestions: "asrModels"` —— 值域来自宿主（`weixinAsr/modelChoices`），客户端按名字去取；
+  - `picker: "dir" | "file"` —— 这是路径，用共享的 `PathPicker`；
+  - `fallbackShown: true` —— 默认值非空，但它只是起点，显示成占位而不是内容。
+- `asrModels` 的来源是三层：**已安装**（目录里有 `config.json` 的那些，标 ✓）、
+  **本平台可下载**（Apple Silicon 是 mlx 四档，其它平台是 CTranslate2 四档，标 ↓）、
+  **空值的含义**（`implied`，例如「small（/Volumes/models）」）。
+- 下拉第一项永远是「自动」，并直接写出空值会变成什么；旁边保留文本框，因为绝对路径是清单
+  装不下的答案，而它是合法的。
+
+`asr.model` 还有个真 bug：它从来没进过桥的环境变量，只有 `modelDir` 进去了，所以界面上选
+`medium` 实际仍然加载 `small`。现在尺寸走 `DSH_WEIXIN_ASR_MODEL`、绝对路径走
+`DSH_WEIXIN_ASR_MODEL_PATH`，与 `bin/asr-bridge.py` 的查找顺序一致（绝对路径优先，
+目录里的尺寸其次，都没有才让引擎自己下）。
