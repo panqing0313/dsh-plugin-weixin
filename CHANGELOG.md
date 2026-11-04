@@ -1,5 +1,12 @@
 ## 版本
 
+- **1.5.9** —— **远端方法的参数名必须和它对外的名字一致**：宿主的 typert 网关在派发
+  之前会把请求的 JSON 键与描述符的 `wire` 名比对，而那些 wire 名是从**方法本身的形参名**
+  推出来的（marker 里没有 `parameters` 字段可用）。于是叫 `target` 的参数对 `path` 的
+  描述符、解构写法 `{ id }`、以及描述符声明 0 个参数而方法要 1 个参数的写法，都会在
+  调用前被拒，报 `args fields do not match the descriptor`。这版把
+  `weixinAsr/removeModel`、`weixin/outboxDrop`、`weixinAsr/modelChoices` 三处对齐，
+  并新增 `test/remote-arguments.test.js` 当护栏（它和网关读同一份源码、按同一条规则比）。
 - **1.5.8** —— **模型那栏不再承诺一个它没加载的模型**：上一版把「空着等于什么」
   写成了常量 `small`，现在改成照着 `bin/asr-bridge.py` 的规则现算（显式路径 → 尺寸
   名 → 目录里的尺寸 → `small`），配置表单与语音页签下拉用同一个函数；顺带把

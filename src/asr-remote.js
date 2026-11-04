@@ -6,7 +6,7 @@
 // is configured through the plugin Config schema (asr.model), so the settings
 // form already covers selection; this controller handles the download part.
 import fs from "node:fs";
-import path from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import os from "node:os";
 import http from "node:http";
 import https from "node:https";
@@ -16,7 +16,7 @@ import { stateDir, readSavedConfig } from "./state.js";
 import { describeAsrModel } from "./media/asr.js";
 import { remoteMethods } from "./typert-js.js";
 
-const DEFAULT_MODEL_DIR = path.join(os.homedir(), ".dsh", "weixin", "asr-models");
+const DEFAULT_MODEL_DIR = join(os.homedir(), ".dsh", "weixin", "asr-models");
 
 // The sizes the 「模型」 option can mean. These are *size* names, not repo ids:
 // the bridge turns a size into `mlx-community__whisper-<size>-mlx` or
@@ -210,7 +210,7 @@ export async function downloadFile(endpoint, repoId, file, dest, onProgress, { p
         throw new RemoteError("file_unavailable", `${file} 下载失败（HTTP ${res.status}）`, {});
     }
     const total = Number(res.headers["content-length"] ?? 0) || 0;
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.mkdirSync(dirname(dest), { recursive: true });
     const handle = await fs.promises.open(dest, "w");
     let written = 0;
     try {
@@ -250,8 +250,8 @@ export function normalizeEndpoint(value) {
 /** Best-effort persistence of the runtime-chosen model dir under stateDir(). */
 async function persistModelDir(dir) {
     try {
-        const file = path.join(stateDir(), ASR_CONFIG_FILE);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const file = join(stateDir(), ASR_CONFIG_FILE);
+        fs.mkdirSync(dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify({ modelDir: dir }, null, 2));
     } catch {
         // persistence is a convenience; the in-memory value still applies
@@ -261,7 +261,7 @@ async function persistModelDir(dir) {
 /** Read a previously persisted model dir, if any. */
 function readPersistedModelDir() {
     try {
-        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        const file = join(stateDir(), ASR_CONFIG_FILE);
         const raw = JSON.parse(fs.readFileSync(file, "utf8"));
         if (typeof raw?.modelDir === "string" && raw.modelDir.trim()) {
             return raw.modelDir.trim();
@@ -282,14 +282,14 @@ function readPersistedModelDir() {
  */
 async function persistDownloadSettings({ endpoint, proxy }) {
     try {
-        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        const file = join(stateDir(), ASR_CONFIG_FILE);
         let current = {};
         try {
             current = JSON.parse(fs.readFileSync(file, "utf8")) ?? {};
         } catch {
             current = {};
         }
-        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.mkdirSync(dirname(file), { recursive: true });
         fs.writeFileSync(
             file,
             JSON.stringify({ ...current, hfEndpoint: endpoint, hfProxy: proxy ?? "" }, null, 2),
@@ -303,7 +303,7 @@ async function persistDownloadSettings({ endpoint, proxy }) {
 /** Read a previously persisted download route, if any. */
 function readPersistedDownloadSettings() {
     try {
-        const file = path.join(stateDir(), ASR_CONFIG_FILE);
+        const file = join(stateDir(), ASR_CONFIG_FILE);
         const raw = JSON.parse(fs.readFileSync(file, "utf8"));
         return {
             endpoint: typeof raw?.hfEndpoint === "string" && raw.hfEndpoint.trim() ? raw.hfEndpoint.trim() : undefined,
@@ -317,7 +317,7 @@ function readPersistedDownloadSettings() {
 /**
  * The single directory a repo id downloads into.
  *
- * A repo id is `org/name`, and `path.join(modelDir, "org/name")` creates TWO
+ * A repo id is `org/name`, and `join(modelDir, "org/name")` creates TWO
  * levels -- so the model lands one level deeper than `listModels` looks and the
  * card reported "尚未安装模型" while 481 MB of weights sat on disk. Flat is
  * what the listing, and the ASR bridge's own lookup, both expect.
@@ -355,7 +355,7 @@ export function repoIdForFolder(folder) {
 /**
  * Move a model out of the pre-fix nested layout, in place.
  *
- * Before `downloadDirFor` existed, `path.join(modelDir, "org/name")` created
+ * Before `downloadDirFor` existed, `join(modelDir, "org/name")` created
  * two levels, so an existing download sits at `<dir>/<org>/<name>` where the
  * listing never looks. Moving it is cheap (a rename, no copying) and is the
  * difference between "your model is here" and re-fetching 459 MB; the moved
@@ -374,8 +374,8 @@ function adoptNestedModels(dir) {
     }
     for (const org of orgs) {
         if (!org.isDirectory()) continue;
-        const orgPath = path.join(dir, org.name);
-        if (fs.existsSync(path.join(orgPath, "config.json"))) continue; // a model in its own right
+        const orgPath = join(dir, org.name);
+        if (fs.existsSync(join(orgPath, "config.json"))) continue; // a model in its own right
         let children = [];
         try {
             children = fs.readdirSync(orgPath, { withFileTypes: true });
@@ -384,9 +384,9 @@ function adoptNestedModels(dir) {
         }
         for (const child of children) {
             if (!child.isDirectory()) continue;
-            if (!fs.existsSync(path.join(orgPath, child.name, "config.json"))) continue;
-            const from = path.join(orgPath, child.name);
-            const to = path.join(dir, downloadDirFor(`${org.name}/${child.name}`));
+            if (!fs.existsSync(join(orgPath, child.name, "config.json"))) continue;
+            const from = join(orgPath, child.name);
+            const to = join(dir, downloadDirFor(`${org.name}/${child.name}`));
             if (fs.existsSync(to)) continue; // never overwrite a good model
             try {
                 fs.renameSync(from, to);
@@ -415,15 +415,15 @@ function listModels(dir) {
     }
     for (const ent of entries) {
         if (!ent.isDirectory()) continue;
-        const modelDir = path.join(dir, ent.name);
+        const modelDir = join(dir, ent.name);
         // a downloaded HF repo snapshot has config.json + model weights
-        const hasConfig = fs.existsSync(path.join(modelDir, "config.json"));
+        const hasConfig = fs.existsSync(join(modelDir, "config.json"));
         if (!hasConfig) continue;
         let bytes = 0;
         try {
             for (const f of fs.readdirSync(modelDir)) {
                 try {
-                    bytes += fs.statSync(path.join(modelDir, f)).size;
+                    bytes += fs.statSync(join(modelDir, f)).size;
                 } catch {
                     // ignore files that vanish mid-scan
                 }
@@ -507,7 +507,7 @@ export class AsrController extends TypertRemoteService {
         if (!target || target.includes("\0")) {
             throw new RemoteError("bad_dir", "目录不能为空", {});
         }
-        const resolved = path.resolve(target);
+        const resolved = resolvePath(target);
         try {
             fs.mkdirSync(resolved, { recursive: true });
         } catch (err) {
@@ -529,13 +529,23 @@ export class AsrController extends TypertRemoteService {
      * place. The `config.json` test is the second half of the same idea: only
      * a directory this plugin put there counts as a model.
      */
-    async removeModel(target) {
-        const wanted = String(target ?? "").trim();
+    async removeModel(path) {
+        // The parameter is named `path` because that is the descriptor's wire
+        // name. The gateway derives the accepted argument keys from this very
+        // parameter list (`methodParameterNames` -> `srcDescriptor`) and
+        // compares them *before* dispatch, so any other name dies with
+        // `args fields do not match the descriptor: unexpected "path"`.
+        //
+        // This file used to `import path from "node:path"`, which a parameter of
+        // this name shadows; the module now imports the three functions it needs
+        // by name (`join`, `dirname`, `resolve as resolvePath`) so the natural
+        // spelling is also the correct one.
+        const wanted = String(path ?? "").trim();
         if (wanted === "" || wanted.includes("\0")) {
             throw new RemoteError("bad_model", "模型路径不能为空", {});
         }
         const listed = listModels(this.modelDir);
-        const known = listed.find((model) => path.resolve(model.path) === path.resolve(wanted));
+        const known = listed.find((model) => resolvePath(model.path) === resolvePath(wanted));
         if (known === undefined) {
             throw new RemoteError("bad_model", "这不是当前目录里已安装的模型", {});
         }
@@ -570,10 +580,10 @@ export class AsrController extends TypertRemoteService {
         // `startedAt` lets the card show elapsed time without inventing a rate
         // from a percentage it cannot date.
         //
-        // NOT `path.join(this.modelDir, repoId)`: the repo id contains a slash,
+        // NOT `join(this.modelDir, repoId)`: the repo id contains a slash,
         // which creates a second directory level and hides the model from
         // listModels. See downloadDirFor.
-        const target = path.join(this.modelDir, downloadDirFor(repoId));
+        const target = join(this.modelDir, downloadDirFor(repoId));
         this.downloads.set(repoId, { status: "running", message: "", percent: 0, startedAt: Date.now() });
 
         // Deliberately NOT the `hf` CLI. On 1.17.0 it requests huggingface.co
@@ -609,7 +619,7 @@ export class AsrController extends TypertRemoteService {
                     this.hfEndpoint,
                     repoId,
                     file,
-                    path.join(target, file),
+                    join(target, file),
                     (written, total) => {
                         const within = total > 0 ? written / total : 0;
                         const rec = this.downloads.get(repoId);
@@ -663,6 +673,14 @@ export class AsrController extends TypertRemoteService {
      * the card is shown on another device.
      */
     async modelChoices(options) {
+        // The parameter is named `options` because that is the descriptor's wire
+        // name: the gateway derives the accepted keys from this very parameter
+        // list, so a different name (or a destructuring pattern, whose name it
+        // cannot read) rejects every call before dispatch.
+        //
+        // The platform is decided by the caller: this process renders nothing,
+        // and `process.platform` would be the host's platform, which is the
+        // wrong answer the moment the card is shown on another device.
         const apple = options?.apple === true;
         // `listModels()` is the remote method (an async envelope); the plain
         // directory scan is the module-level function.

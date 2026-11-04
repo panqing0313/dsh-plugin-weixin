@@ -4397,3 +4397,44 @@ release run `41485882140` success）。
      都正常。这是本地 curl 那条链路的问题，不是发布失败——别把它当成版本没发出去。
 - profile 锁文件：`--finish` 因上述 404 刷新失败，npm 恢复后用宿主自带 pnpm
   `install --prefer-offline` 补上（`- 1.5.7` / `+ 1.5.8`）。
+
+## 远端方法的参数名（2026-11-04，1.5.9）
+
+用户点「删除语音模型」时，宿主报：
+
+```
+typert gateway: weixinAsr/removeModel:
+args fields do not match the descriptor: unexpected "path"
+```
+
+排查路径与结论（都在宿主源码里）：
+
+1. `assertExactArguments`（`dsh-api-gateway/src/index.ts:1612`）用**描述符的 `wire` 名**
+   作为允许的 JSON 键，多余的键直接报 `unexpected`。
+2. `resolveDescriptor`（:861）先查宿主侧注册的描述符，没有再走 `srcDescriptor`。
+3. `srcDescriptor`（:907）推 wire 名**只有一个信息源**：
+   `methodParameterNames(binding.service, marker.method, endpoint)`，即读方法书写的形参名。
+4. marker 类型 `StoredRemoteMethodMarker`（`dsh-typert-protocol/src/index.ts:197`）只有
+   `exportName / mode / invocation / resources` —— **没有 `parameters`**，所以「在 marker 里
+   声明参数」这条路在这个宿主里不存在。一度以为可以，是没读完类型就下的判断。
+5. `RemoteInvocation.request`（`dsh-typert-protocol/src/types.ts:498`）只有
+   `{namespace, method, args}`，没有 query/headers，所以「绕过 args 传参数」也不行。
+
+**唯一的契约是：形参名 = wire 名。** 三处不符合，全部对齐：
+
+| 端点 | 之前 | 现在 |
+| --- | --- | --- |
+| `weixinAsr/removeModel` | 形参 `target`，wire `path` | 形参 `path` |
+| `weixin/outboxDrop` | 解构 `{ id }`，wire `options` | 形参 `options` |
+| `weixinAsr/modelChoices` | 形参 `options`，描述符 0 个 | 描述符声明 `options` |
+
+`removeModel` 那个 `path` 有个坑：`src/asr-remote.js` 原来 `import path from "node:path"`，
+形参同名会遮蔽模块（第一次改就是在这里崩的：`path.resolve is not a function`）。现在改成
+按名导入 `{ dirname, join, resolve as resolvePath }`，于是自然拼写就是正确拼写。
+
+护栏 `test/remote-arguments.test.js`：解析 `src/client.js` 的描述符 `wire` 名与
+`src/*-remote.js` 的类方法形参名，逐位置比对 —— 和网关读同一份源码、按同一条规则。
+旧代码上它会同时报出这三处。
+
+顺带一提：`weixin/outboxDrop` 之所以在线上一直「看起来没坏」，是因为没人点过「丢弃」
+那个按钮；它一直是坏的。

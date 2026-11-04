@@ -654,9 +654,11 @@ test('a download lands where the listing looks for it', async () => {
   const host = fs.readFileSync(new URL('../src/asr-remote.js', import.meta.url), 'utf8')
 
   // The download target must be modelDir + the FLAT name, never + the raw repo.
+  // `join` rather than `path.join`: the module imports node:path by name so a
+  // method parameter can be called `path` without shadowing the module.
   assert.match(
     host,
-    /const target = path\.join\(this\.modelDir, downloadDirFor\(repoId\)\)/,
+    /const target = join\(this\.modelDir, downloadDirFor\(repoId\)\)/,
     'the download target must be flattened',
   )
   // Strip comments first: the explanation above the fix quotes the buggy line

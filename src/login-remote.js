@@ -954,10 +954,21 @@ export class WeixinLoginController extends TypertRemoteService {
         return { ok: true, ...result };
     }
 
-    /** Drop one queued item by id. */
-    outboxDrop({ id }) {
+    /**
+     * Drop one queued item by id.
+     *
+     * The parameter is `options` because that is the descriptor's wire name,
+     * and the gateway derives the accepted JSON keys from the method's own
+     * parameter list (`methodParameterNames` -> `srcDescriptor`). Destructuring
+     * in the signature would make the parameter an object pattern, whose name
+     * the gateway cannot read at all, so every call would be rejected with
+     * `args fields do not match the descriptor`. The single key is read below.
+     */
+    outboxDrop(options) {
         const drop = this.outboxDropItem;
         if (typeof drop !== "function") return { ok: false, reason: "outbox-not-wired" };
+        const id = String(options?.id ?? "");
+        if (id === "") return { ok: false, reason: "missing-id" };
         return { ok: drop(id) };
     }
 
