@@ -11,7 +11,8 @@ import {
   parseMemoryMarkdown,
   planMemoryImport,
 } from '../src/message/memory-import.js'
-import { addGlobalFact, addEvent, readGlobalMemory } from '../src/memory.js'
+import { addEvent, addGlobalFact, readGlobalMemory, saveProfile } from '../src/memory.js'
+import { parseMemoryJson, renderMemoryJson } from '../src/message/memory-export.js'
 
 const DOC = `# 记忆导出 · 2026-10-31
 
@@ -197,4 +198,78 @@ test('imported events keep their date', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+test('the three policies differ exactly where the docs say they do', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-policy-'))
+  const now = Date.now()
+  addGlobalFact(root, 'bot', '对花生过敏', { warn: () => {}, now })
+  // The profile has five fixed fields (call/schedule/likes/dislikes/dates) —
+  // `name` is not one of them, so the conflict here is on `call`.
+  saveProfile(root, 'bot', { call: '小王' }, { warn: () => {} })
+  const parsed = {
+    digest: '',
+    profile: { call: '大王', schedule: '夜猫子', likes: ['海边'] },
+    events: [{ text: '体检', when: '2026-11-20' }],
+    facts: ['对花生过敏', '养了一只猫'],
+    skipped: 0,
+  }
+  const memory = readGlobalMemory(root, 'bot', { warn: () => {} })
+
+  // fill: only empty profile fields are written.
+  const fill = planMemoryImport(parsed, memory, { maxFacts: 30 })
+  const filled = applyMemoryImport({ stateRoot: root, accountId: 'bot', plan: fill, policy: 'fill', warn: () => {} })
+  assert.equal(filled.facts, 1, 'the duplicate fact is skipped, the new one lands')
+  // `saveProfile` reports what the whole profile looks like after the write, so
+  // the number counts three fields (name unchanged, city + likes added).
+  assert.equal(filled.profile, 2, 'two fields were written; `call` stayed as it was')
+  let after = readGlobalMemory(root, 'bot', { warn: () => {} })
+  assert.equal(after.profile.call, '小王', 'fill never overwrites a field this machine already has')
+  assert.equal(after.profile.schedule, '夜猫子', 'an empty field is filled')
+
+  // replace: the pack wins on its own fields.
+  const memory2 = readGlobalMemory(root, 'bot', { warn: () => {} })
+  const replacePlan = planMemoryImport(parsed, memory2, { maxFacts: 30 })
+  const replaced = applyMemoryImport({ stateRoot: root, accountId: 'bot', plan: replacePlan, policy: 'replace', warn: () => {} })
+  assert.ok(replaced.profile >= 1)
+  after = readGlobalMemory(root, 'bot', { warn: () => {} })
+  assert.equal(after.profile.call, '大王', 'replace writes the pack value over the local one')
+  assert.equal(after.facts.some((fact) => fact.text === '对花生过敏'), true, 'facts are appended, never deleted')
+})
+
+test('a JSON export round-trips through the JSON parser, and refuses foreign JSON', () => {
+  const now = Date.UTC(2026, 10, 4, 9, 0, 0)
+  const payload = renderMemoryJson({
+    store: {
+      digest: '一个喜欢夜里聊天的人',
+      profile: { name: '小王', likes: ['海边'], city: '' },
+      events: [{ text: '体检', when: '2026-11-20', done: false }],
+      facts: [{ text: '对花生过敏', at: now, source: 'user' }],
+      superseded: [{ text: '喜欢猫', by: '养了一只狗' }],
+    },
+    conversations: [
+      { conversationId: 'c1', summary: '聊了工作', bond: { level: 3 } },
+      { conversationId: 'c2', summary: '' },
+    ],
+    dates: [{ label: '生日', date: '2026-12-01' }],
+    conversationId: 'c1',
+    now,
+  })
+  assert.equal(payload.format, 'dsh-weixin-memory')
+  assert.equal(payload.exportedAt, new Date(now).toISOString())
+  assert.equal(payload.profile.city, undefined, 'empty fields are left out rather than written as ""')
+  assert.equal(payload.conversations.length, 1, 'a conversation with no summary is not exported')
+  assert.equal(payload.facts[0].at, now, 'the confirmation time survives, so imports can rank')
+
+  const decoded = parseMemoryJson(JSON.stringify(payload))
+  assert.equal(decoded.ok, true)
+  assert.deepEqual(decoded.parsed.facts, ['对花生过敏'])
+  assert.equal(decoded.parsed.profile.name, '小王')
+  assert.equal(decoded.parsed.conversations[0].conversationId, 'c1')
+  assert.equal(decoded.parsed.events.length, 1)
+
+  assert.match(parseMemoryJson('not json').reason, /不是合法的 JSON/)
+  assert.match(parseMemoryJson('{"facts":[]}').reason, /不是本插件的记忆导出/)
+  const edited = parseMemoryJson(JSON.stringify({ format: 'dsh-weixin-memory', version: 1, facts: [{ text: '新的一条' }] }))
+  assert.equal(edited.ok, true)
+  assert.deepEqual(edited.parsed.facts, ['新的一条'], 'a hand-edited file still imports')
 })

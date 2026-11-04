@@ -1160,3 +1160,21 @@ DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open /tmp/migrate.enc      
 ```
 
 `--dry-run` 输出的就是卡片里那个计划：`↺` 是会被覆盖的文件、`+` 是新建的。
+
+## 记忆搬进搬出：JSON 与三种策略（1.5.0-B）
+
+`/memory export` 一直是 Markdown —— 给人读的。换机时更想要机器能读的那份：
+
+- **`/memory export json`**：同一份三层记忆，输出 JSON。每条长期事实带着自己的确认时间（`at`）与来源（`source`），档案只写非空字段，会话记忆只带摘要不为空的会话。**不带账号 id** —— 一段可能被粘进聊天的 JSON 不该携带微信 id。短于 3000 字符直接回复，长的落在 `exports/memory-<账号>-<会话>-<时间>.json`。
+- **`/import`** 三种来源都认：粘贴 Markdown、粘贴 JSON、以及**文件路径**（`/import /Users/you/memory.json`，走与 `/send` 同一条 `mediaDirs` 白名单，越界会被拒绝而不是被打开）。
+- **三种策略**，可以写在内容前面或后面（`/import merge <...>` 与 `/import <...> merge` 等价）：
+
+| 策略 | 长期记忆 | 档案 | 会话记忆 |
+| --- | --- | --- | --- |
+| `append` / 补缺（默认） | 只加新的 | 只填本机为空的字段 | 只加本机没有的会话 |
+| `merge` / 合并 | 只加新的 | 同上，但会告诉你几个字段不一样 | 只加本机没有的会话 |
+| `replace` / 覆盖 | **仍然只加新的** | 包里的值盖掉本机的 | 只加本机没有的会话 |
+
+最后一行是刻意的：**导入从不删记忆**。删只能由人来做（`/forget`、`/undo`），否则「从备份恢复」会变成「悄悄忘掉最近一个月」。预览里会写清「其中 N 条档案和本机不一样，这个策略下不动」，确认后才写。
+
+`./test/memory-import.test.js` 与 `test/session-commands.test.js` 的 `/import` 用例守着这三种策略的差别。

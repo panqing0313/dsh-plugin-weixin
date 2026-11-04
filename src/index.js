@@ -57,7 +57,8 @@ import { readScope, scopedConfig } from './config-scope.js'
 import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './message/sender-limit.js'
 import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { recordStranger } from './message/strangers.js'
-import { renderMemoryMarkdown, writeMemoryExport } from './message/memory-export.js'
+import { parseMemoryJson, renderMemoryJson, renderMemoryMarkdown, writeMemoryExport } from './message/memory-export.js'
+import { resolveAllowedPath } from './media/outbound.js'
 import { keywordGate, keywordStats, parseKeywordRules } from './message/keyword-reply.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
 import { ILinkTransport } from './transport/ilink.js'
@@ -102,7 +103,7 @@ import { composeDigest } from './message/digest.js'
 import { startAccounts } from './startup.js'
 import { createReadingCommands } from './message/reading.js'
 import { formatStaleReport, staleDigestLine, staleFacts } from './message/memory-stale.js'
-import { IMPORT_CONFIRM_TTL_MS, applyMemoryImport, formatImportPreview, parseMemoryMarkdown, planMemoryImport } from './message/memory-import.js'
+import { IMPORT_CONFIRM_TTL_MS, applyMemoryImport, formatImportPreview, normalizeImportPolicy, parseMemoryMarkdown, planMemoryImport } from './message/memory-import.js'
 import { MemoryConflictQueue, conflictReply, findMemoryConflict, parseConflictAnswer } from './message/memory-conflict.js'
 import { createSendCommands } from './message/send-file.js'
 import { SubscriptionScheduler, formatStamp } from './message/subscriptions.js'
@@ -1854,11 +1855,12 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     return `已导出体检包（${bundle.sections.length} 节，id 已换成短哈希、地址与凭据已抹掉）：\n${file}\n转发出去之前建议自己扫一眼。`
   }
 
-  const applyImport = (plan) => {
+  const applyImport = (plan, policy = 'fill') => {
     const written = applyMemoryImport({
       stateRoot,
       accountId,
       plan,
+      policy,
       warn,
       // `modeConfig` is defined inside the bundle below; this helper sits above it
       // so it reads the live config directly.
@@ -1869,6 +1871,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
     if (written.events > 0) parts.push(`${written.events} 条事件与待办`)
     if (written.profile > 0) parts.push(`档案 ${written.profile} 项`)
     if (written.digest === true) parts.push('人物小传')
+    if (written.conversations > 0) parts.push(`${written.conversations} 段会话记忆`)
     if (parts.length === 0) {
       return `这次没有写进去任何东西${written.failures.length > 0 ? `（${written.failures.slice(0, 3).join('；')}）` : ''}。`
     }
@@ -2104,11 +2107,11 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         // ④ An unconfirmed import is answered with the same two short words. It is
         // checked first: "是" right after /import must never be read as a fact.
         if (pendingImport !== undefined) {
-          const { plan, at } = pendingImport
+          const { plan, at, policy: importPolicy = 'fill' } = pendingImport
           const staleImport = Date.now() - at > IMPORT_CONFIRM_TTL_MS
           if (decision === 'yes' && staleImport === false) {
             pendingImport = undefined
-            return applyImport(plan)
+            return applyImport(plan, importPolicy)
           }
           pendingImport = undefined
           if (decision === 'no') return '好，什么都没改。'
@@ -2204,22 +2207,97 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (stats.every((entry) => entry.triggered === 0)) lines.push('（这些规则一次都没命中过：检查正则大小写、^$ 锚点，以及是不是只在群里生效）')
         return lines.join('\n')
       },
-      import: (arg) => {
+      import: async (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的（设置里的「会话记忆」）。'
         const text = String(arg ?? '')
         if (text.trim() === '') {
-          return '用法：/import <粘贴 /memory export 导出的内容>\n我会先念一遍要导入什么，你回「是」才真的写进去。'
+          return [
+            '用法：',
+            '1. /memory export json —— 拿到一段 JSON（或者 /memory export 的 Markdown）',
+            '2. /import <粘贴内容> [append|merge|replace]',
+            '3. 我先把要写的东西念一遍，你回「是」才真的写进去。',
+            '',
+            '策略：append/补缺（默认，只补缺）· merge/合并（档案补空字段）· replace/覆盖（档案以包为准）。',
+            '写文件也行：/import <文件路径> merge —— 只读 mediaDirs 里的文件。',
+          ].join('\n')
         }
-        const parsed = parseMemoryMarkdown(text)
-        const plan = planMemoryImport(parsed, readGlobalMemory(stateRoot, accountId, { warn }), {
-          maxFacts: modeConfig().memoryGlobalMaxFacts,
-        })
+
+        // The policy may be written at either end: `/import merge <text>` (easy to
+        // type) or `/import <text> merge` (what you get when pasting first). Both
+        // are recognised, and a bare `/import merge` with no payload explains the
+        // usage rather than importing nothing.
+        let rest = text
+        let policy = 'fill'
+        const leading = /^([A-Za-z]+)\s+/.exec(rest)
+        if (leading !== null) {
+          const word = normalizeImportPolicy(leading[1])
+          if (word !== undefined) {
+            policy = word
+            rest = rest.slice(leading[0].length)
+          }
+        }
+        const trailing = /\s+([A-Za-z]+)\s*$/.exec(rest)
+        if (trailing !== null) {
+          const word = normalizeImportPolicy(trailing[1])
+          if (word !== undefined) {
+            policy = word
+            rest = rest.slice(0, trailing.index)
+          }
+        }
+        if (rest.trim() === '') {
+          return `策略是 ${policy}，但没看到要导入的内容。用法：/import merge <粘贴的内容>`
+        }
+
+        // A path is what people reach for when moving machines: `migrate-payload.json`
+        // dropped somewhere allowed. It goes through the same allowlist as /send,
+        // so a path outside mediaDirs is refused with the reason, not opened.
+        let payload = rest
+        let source = '粘贴的内容'
+        const looksLikePath = /^[~/]/.test(rest.trim()) || /\.(json|md|markdown|txt)$/i.test(rest.trim().split('\n')[0].trim())
+        if (looksLikePath) {
+          const resolved = await resolveAllowedPath(rest.trim(), mediaDirs)
+          if (resolved.ok === true && resolved.existed === true) {
+            try {
+              payload = fs.readFileSync(resolved.path, 'utf8')
+              source = `文件 ${resolved.path}`
+            } catch (error) {
+              return `读不了这个文件：${String(error?.message ?? error)}`
+            }
+          } else if (resolved.ok === false && resolved.existed === false) {
+            return `找不到文件：${rest.trim()}`
+          } else {
+            return `这个路径不在允许的目录里（工作目录、状态目录、设置里的 mediaDirs）。`
+          }
+        }
+
+        const trimmed = payload.trimStart()
+        const isJson = trimmed.startsWith('{') || trimmed.startsWith('[') || /\.json$/i.test(source)
+        let parsed
+        if (isJson) {
+          const decoded = parseMemoryJson(payload)
+          if (decoded.ok === false) return decoded.reason
+          parsed = decoded.parsed
+        } else {
+          parsed = parseMemoryMarkdown(payload)
+        }
+
+        // Conversations already on this machine, so the plan can tell "new" from
+        // "already remembered" instead of overwriting either way.
+        const existingConversations = {}
+        for (const conv of listConvMemories(stateRoot, accountId)) {
+          existingConversations[conv.conversationId] = conv
+        }
+        const plan = planMemoryImport(
+          parsed,
+          { ...readGlobalMemory(stateRoot, accountId, { warn }), conversations: existingConversations },
+          { maxFacts: modeConfig().memoryGlobalMaxFacts },
+        )
         if (plan.nothingToDo) {
           pendingImport = undefined
-          return formatImportPreview(plan)
+          return formatImportPreview(plan, { source, policy })
         }
-        pendingImport = { plan, at: Date.now() }
-        return formatImportPreview(plan)
+        pendingImport = { plan, at: Date.now(), policy }
+        return formatImportPreview(plan, { source, policy })
       },
       undo: (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
@@ -2270,6 +2348,23 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
         const sub = String(arg ?? '').trim()
         const store = readGlobalMemory(stateRoot, accountId, { warn })
+        // /memory export json: the machine-readable twin of `export`. It carries
+        // the same three layers, one fact carrying its own confirmation time and
+        // source, so an import can rank and dedupe them instead of guessing.
+        if (/^(export\s+json|json\s+export|json|导出\s*json)$/i.test(sub)) {
+          const payload = renderMemoryJson({
+            store,
+            conversations: listConvMemories(stateRoot, accountId),
+            dates: upcomingDates(store, new Date(), { leadDays: Number(modeConfig().dateReminderLeadDays ?? 0) })
+              .map((item) => ({ label: item.label, date: item.on })),
+            conversationId,
+            affinity: readAffinityHistory(stateRoot, accountId, conversationId, { warn }),
+          })
+          const text = JSON.stringify(payload, null, 2)
+          if (text.length <= 3000) return ['```json', text, '```', '', '拿到别处用 /import <粘贴> 就能读回来；文件版看 /memory export。'].join('\n')
+          const file = writeMemoryExport(stateRoot, accountId, conversationId, text, { extension: 'json' })
+          return `记忆已导出成 JSON 文件：\n${file}\n在新机器上 /import ${file} 即可（或在设置卡「维护」页签用迁移包）。`
+        }
         // /memory export (导出): the operator's right to carry what it knows.
         // Same shape as /memory, rendered as a document; a long one lands in
         // exports/ and rides the attachment path like /export does.

@@ -730,6 +730,11 @@ text adventure (second person, choice based). In WeChat:
   `/remember` refuses explicitly instead of silently evicting the oldest.
 - Every conversation also has an **automatic summary**: every `memorySummaryTurns` (10 by default) turns, the plugin condenses the recent conversation into a summary
   in a separate side session in the background — it never sends WeChat messages, you only feel it in the prompt of the next reply.
+- **Carry it across**: `/memory export json` prints the same three layers as JSON (every fact keeps its confirmation time and source);
+  `/import <paste or file path>` reads it back — Markdown exports work too. A preview comes first and nothing is written until you answer `是`.
+  Three policies: `append` (default, only fills gaps), `merge` (fills empty profile fields), `replace` (the pack's profile wins).
+  Under every policy long-term memory is **only appended** — importing never deletes a memory; that stays a human action (`/forget`, `/undo`).
+  To move a whole machine (login token included), the **Maintenance** tab of the settings card seals everything into one encrypted file.
 - With memory on there is also a **closeness** line: which day you met, how many messages in total, the mood right now (late night / lively / quiet for a while / calm,
   produced by deterministic rules, no model cost). It appears at the very front of the prompt (`【我们】…`), in `/status`, in `/memory` and in the settings card,
   giving the tone a sense of accumulated relationship.

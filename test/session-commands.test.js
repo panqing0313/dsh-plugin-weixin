@@ -1194,3 +1194,50 @@ test('/draft sends the greeting it drafted for the day, without opening a sessio
     assert.equal(sessionsOpened.length, 0, 'drafts never need the model')
   })
 })
+
+test('/import reads a JSON export, understands a policy word, and reads from a file', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    // A local profile this machine already has; the pack disagrees on `call`.
+    fake.deliver('/import ## 关于你的档案\n\n- 称呼：小王\n- 作息：早睡', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'the first preview')
+    fake.deliver('/是', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'the first import')
+    assert.match(fake.outbound[1].text, /导入完成/)
+
+    const pack = JSON.stringify({
+      format: 'dsh-weixin-memory',
+      version: 1,
+      facts: [{ text: '养了一只猫' }],
+      profile: { call: '大王', schedule: '早睡' },
+      conversations: [{ conversationId: 'other-line', summary: '那边聊过的事' }],
+    })
+
+    // The policy word may sit before or after the payload; both are accepted.
+    fake.deliver(`/import replace ${pack}`, 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the replace preview')
+    const preview = fake.outbound[2].text
+    assert.match(preview, /策略：覆盖/)
+    assert.match(preview, /会话记忆 1 段/)
+
+    fake.deliver('/是', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the replace import')
+    assert.match(fake.outbound[3].text, /1 段会话记忆/)
+
+    const file = path.join(root, 'memory', 'global-bot1.json')
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(after.profile.call, '大王', 'replace let the pack win on the profile')
+    assert.equal(after.facts.some((fact) => fact.text === '养了一只猫'), true, 'the new fact landed')
+
+    // A JSON file inside the state directory imports by path.
+    const packFile = path.join(root, 'exports', 'memory-pack.json')
+    fs.mkdirSync(path.dirname(packFile), { recursive: true })
+    fs.writeFileSync(packFile, JSON.stringify({ format: 'dsh-weixin-memory', version: 1, facts: [{ text: '从文件里来的一条' }] }))
+    fake.deliver(`/import ${packFile}`, 'm5')
+    await waitFor(() => fake.outbound.length > 4, 'the file preview')
+    assert.match(fake.outbound[4].text, /从文件 .*memory-pack\.json\s*里读到/)
+    fake.deliver('/是', 'm6')
+    await waitFor(() => fake.outbound.length > 5, 'the file import')
+    assert.match(fake.outbound[5].text, /导入完成/)
+    assert.equal(sessionsOpened.length, 0, 'importing never spends a model turn')
+  })
+})
