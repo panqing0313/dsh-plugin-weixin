@@ -855,7 +855,7 @@ test('a dangerous tool is announced in WeChat while the turn is still running', 
       if (expected) {
         assert.ok(notice, `expected a /cancel hint among: ${JSON.stringify(texts)}`)
         assert.match(notice, /\u26a0\ufe0f 这一步看着有风险/)
-        assert.match(notice, /`bash`：rm -rf \/tmp\/dsh-test-scratch/)
+        assert.match(notice, /跑一条命令 「rm -rf \/tmp\/dsh-test-scratch」/)
         assert.ok(texts.length >= 2, 'the warning and the real reply are separate messages')
       } else {
         assert.equal(notice, undefined, `toolNotices off must stay quiet: ${JSON.stringify(texts)}`)

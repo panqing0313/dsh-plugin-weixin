@@ -75,8 +75,24 @@ export const CATALOG = Object.freeze({
     'notice.rateLimited': { zh: '（你发得有点快，我先缓一下～{seconds} 秒后再来）', en: '(you are sending a bit fast — give me {seconds} seconds)' },
     'notice.dailyLimited': { zh: '（今天跟你聊得够多啦，{limit} 条封顶，明天再聊～）', en: '(we have talked a lot today — the {limit}-message daily limit is reached, see you tomorrow)' },
     'notice.dangerHigh': { zh: '⚠️ 这一步看着有风险', en: '⚠️ this step looks risky' },
-    'notice.dangerNormal': { zh: '🔧 要用工具了', en: '🔧 about to use a tool' },
-    'notice.dangerBody': { zh: '{tool}{detail}', en: '{tool}{detail}' },
+    'notice.dangerNormal': { zh: '🔧 我手上要动一下东西', en: '🔧 I need to touch things on the machine' },
+    // 说人话的那一行：先解释动作，再给对象。旧版是 `\`bash\`：{"command":…}`，
+    // 手机上一整段 JSON，读不出在干什么。
+    // 一句话已经说完（动作 + 对象），这一格只负责括起来，不再加动词。
+    'notice.doing.sentence': { zh: '{action}。', en: 'Right now: {action}.' },
+    'notice.doing.generic': { zh: '用 {target} 做下一步', en: 'doing the next step with {target}' },
+    'notice.doing.something': { zh: '要用一下工具（具体参数没取到）', en: 'using a tool (the arguments were not readable)' },
+    'notice.doing.bash': { zh: '在你电脑上跑一条命令 {target}', en: 'running a command on your machine {target}' },
+    'notice.doing.write': { zh: '写文件 {target}', en: 'writing {target}' },
+    'notice.doing.edit': { zh: '改文件 {target}', en: 'editing {target}' },
+    'notice.doing.delete': { zh: '删文件 {target}', en: 'deleting {target}' },
+    'notice.doing.move': { zh: '移动文件 {target}', en: 'moving {target}' },
+    'notice.doing.chmod': { zh: '改文件权限 {target}', en: 'changing permissions {target}' },
+    'notice.doing.chown': { zh: '改文件属主 {target}', en: 'changing the owner of {target}' },
+    'notice.doing.git': { zh: '在 git 仓库里跑一条命令 {target}', en: 'running a git command {target}' },
+    'notice.doing.pkg': { zh: '装／更新软件包 {target}', en: 'installing or updating packages {target}' },
+    'notice.doing.net': { zh: '去网上取东西 {target}', en: 'fetching something from the network {target}' },
+    'notice.doing.patch': { zh: '打一个补丁 {target}', en: 'applying a patch {target}' },
     'notice.dangerFooter': {
         zh: '要停就发 /cancel —— 正在跑的这一步可能已经执行，但后面的步骤不会再继续。',
         en: 'send /cancel to stop — the step in flight may already have run, but nothing after it will.',

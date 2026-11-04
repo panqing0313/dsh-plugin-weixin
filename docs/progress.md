@@ -2,6 +2,24 @@
 
 更新时间：2026-11-04
 
+## 工具提醒说人话（2026-11-04）
+
+用户拿一条真实提醒当截图贴过来：`🔧 要用工具了` + `` `bash`：{"command":"head -c 2000 …"` —— 「太机械了」。
+问题在三处：抬头是一个名词短语（「要用工具了」），正文把工具名加反引号当主语，参数是**原始 JSON**
+（`argumentText` 找不到已知键时 `JSON.stringify(args)`），于是手机上一整段转义引号。
+
+- `src/i18n.js`：`notice.dangerNormal` 改成 `🔧 我手上要动一下东西`（en: `I am about to touch things on the machine`），
+  新增一组 `notice.doing.*`：`sentence`（只负责成句）、`generic`、`something`（拿不到参数时的兜底），
+  以及按**动作**而不是按工具名的 `bash/write/edit/delete/move/chmod/chown/git/pkg/net/patch` 十句；
+  删掉旧的 `notice.dangerBody`（`{tool}{detail}` 模板，正是 JSON 泄出来的地方）。
+- `src/message/tool-guard.js`：新增 `TOOL_ACTION_KEYS`（24 个别名 → 十来个动作键），`actionLine()` 拼一句完整口语，
+  `noticeText()` 变成「抬头 / 一句话 / 怎么停」三段。没有参数时不硬凑半句话，回落成
+  `要用一下工具（具体参数没取到）`，**不再出现 `undefined`**。
+- 效果：`在你电脑上跑一条命令 「head -c 2000 /Users/panqing/.dsh/weixin/usage-ledger.json; echo "---"」。`
+- 测试：`test/tool-guard.test.js` 新增「the notice speaks in plain actions, not tool names and JSON」（不含反引号工具名、
+  不含 `{"command"`、无参数时不出现 `undefined`/`{target}`），旧断言改到新措辞；`test/i18n.test.js` 同步。
+  两条文件 14 条用例全绿，`npm run i18n` 的文案表校验（每个键两种语言齐全）通过。
+
 ## 账单自己认得模型（2026-11-04，1.5.2）
 
 用户追问：`能统计会话里面的模型吗，而不是让我填哪个模型`。

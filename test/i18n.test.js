@@ -65,12 +65,13 @@ test('the dangerous-tool notice is translated, and never claims to ask permissio
 	const zh = noticeText({ tool: 'bash', detail: 'rm -rf /tmp/x', level: 'high' })
 	const en = noticeText({ tool: 'bash', detail: 'rm -rf /tmp/x', level: 'high' }, 'en')
 	assert.match(zh, /看着有风险/)
-	assert.match(zh, /`bash`：rm -rf \/tmp\/x/)
+	assert.match(zh, /跑一条命令 「rm -rf \/tmp\/x」/)
 	assert.match(zh, /\/cancel/)
 	assert.match(en, /looks risky/)
 	assert.match(en, /\/cancel/)
 	for (const text of [zh, en]) {
 		assert.ok(!/同意|批准|approve|approval/i.test(text), 'the notice must not pretend to ask for approval')
 	}
-	assert.match(noticeText({ tool: 'write', detail: '', level: 'normal' }, 'en'), /about to use a tool/)
+	assert.match(noticeText({ tool: 'write', detail: '', level: 'normal' }, 'en'), /touch things on the machine/)
+	assert.match(noticeText({ tool: 'bash', detail: 'ls', level: 'normal' }, 'en'), /running a command on your machine 「ls」/)
 })
