@@ -80,3 +80,22 @@ test('sealing twice produces different bytes for the same state (random salt/iv)
   assert.notEqual(fs.readFileSync(a.file).toString('base64'), fs.readFileSync(b.file).toString('base64'))
   assert.equal(openState(a.file, { passphrase: 'pw' }).files.size, openState(b.file, { passphrase: 'pw' }).files.size)
 })
+
+test('media travels with the pack by default, and can be left out', () => {
+  const root = stateRoot()
+  fs.mkdirSync(path.join(root, 'media', 'inbound'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'media', 'inbound', 'shot.png'), 'png-bytes')
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-sealed-')), 'state.enc')
+
+  const full = sealState(root, { passphrase: 'pw', outFile: out })
+  assert.equal(full.files, 3, 'config.json + memory/conv.json + media/inbound/shot.png')
+  assert.equal(openState(out, { passphrase: 'pw' }).files.has('media/inbound/shot.png'), true)
+
+  const slimOut = `${out}.slim.enc`
+  const slim = sealState(root, { passphrase: 'pw', outFile: slimOut, includeMedia: false })
+  assert.equal(slim.files, 2, 'the pack keeps memory and config, drops the pictures')
+  const opened = openState(slimOut, { passphrase: 'pw' })
+  assert.equal([...opened.files.keys()].some((rel) => rel.startsWith('media/')), false)
+  assert.equal(opened.files.get('memory/conv.json').toString(), '{"bond":{}}')
+  assert.ok(slim.bytes < full.bytes, 'the slim pack is smaller')
+})

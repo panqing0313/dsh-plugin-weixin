@@ -290,6 +290,11 @@ window.__ModuleLoader__.load({
 					stats: [
 						createElement("path", { key: "a", d: "M5 20V11M12 20V5M19 20v-6" }),
 					],
+					// 维护：一只箱子（迁移包就是「装箱搬走」）。
+					maintenance: [
+						createElement("path", { key: "a", d: "M4 8.5 12 4l8 4.5v7L12 20l-8-4.5Z" }),
+						createElement("path", { key: "b", d: "M4 8.5 12 13l8-4.5M12 13v7" }),
+					],
 					// 账单：一枚带竖线的硬币（¥ 缩到 15px 会糊）。
 					usage: [
 						createElement("circle", { key: "a", cx: 12, cy: 12, r: 8 }),
@@ -995,6 +1000,198 @@ window.__ModuleLoader__.load({
 					? createElement("div", { style: captionStyle }, message)
 					: null,
 			);
+		}
+
+/**
+		 * The Maintenance tab: what a migration pack would contain, sealing one,
+		 * and restoring one. All four actions are host methods (migrateSummary /
+		 * Export / Inspect / Restore) — the card never touches the filesystem.
+		 *
+		 * Two deliberate choices:
+		 *  - the passphrase goes over the wire and is never stored, echoed back,
+		 *    or put in the URL; after a successful export the input is cleared;
+		 *  - restoring is two steps: inspect shows exactly what would be written
+		 *    and how many files it replaces, and only then does a second button
+		 *    appear. That is the difference between "I pressed restore" and
+		 *    "I overwrote yesterday's memory without reading anything".
+		 */
+		function MigrationSection({ ctx, t }) {
+			const [summary, setSummary] = react.useState(null);
+			const [includeMedia, setIncludeMedia] = react.useState(true);
+			const [exportPass, setExportPass] = react.useState("");
+			const [exportResult, setExportResult] = react.useState(null);
+			const [file, setFile] = react.useState("");
+			const [restorePass, setRestorePass] = react.useState("");
+			const [plan, setPlan] = react.useState(null);
+			const [restoreResult, setRestoreResult] = react.useState(null);
+			const [notice, setNotice] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+
+			const humanBytes = (bytes) => {
+				const n = Number(bytes) || 0;
+				if (n < 1024) return `${n} B`;
+				if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+				return `${(n / 1024 / 1024).toFixed(1)} MB`;
+			};
+
+			const loadSummary = async () => {
+				try {
+					setSummary(await callRemote(() => ctx.remote.weixin.migrateSummary()));
+				} catch (e) {
+					setNotice(String(e?.code ?? e?.message ?? e));
+				}
+			};
+
+			react.useEffect(() => {
+				loadSummary();
+			}, []);
+
+			const doExport = async () => {
+				setBusy(true);
+				setNotice("");
+				setExportResult(null);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.migrateExport({ passphrase: exportPass, includeMedia }));
+					if (r?.error) setNotice(r.error);
+					else {
+						setExportResult(r);
+						setExportPass("");
+					}
+				} catch (e) {
+					setNotice(String(e?.code ?? e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const doInspect = async () => {
+				setBusy(true);
+				setNotice("");
+				setPlan(null);
+				setRestoreResult(null);
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.migrateInspect({ file, passphrase: restorePass }));
+					if (r?.error) setNotice(r.error);
+					else setPlan(r);
+				} catch (e) {
+					setNotice(String(e?.code ?? e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const doRestore = async () => {
+				setBusy(true);
+				setNotice("");
+				try {
+					const r = await callRemote(() => ctx.remote.weixin.migrateRestore({ file, passphrase: restorePass }));
+					if (r?.error) setNotice(r.error);
+					else {
+						setRestoreResult(r);
+						setRestorePass("");
+						setPlan(null);
+						await loadSummary();
+					}
+				} catch (e) {
+					setNotice(String(e?.code ?? e?.message ?? e));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const head = createElement("div", { key: "head", style: { display: "flex", alignItems: "center", gap: 8 } },
+				createElement("p", { style: { ...panelTitleStyle, margin: 0, flex: "1 1 auto" } }, t("Moving to another machine", "换机与迁移")),
+				createElement("button", { onClick: loadSummary, disabled: busy, style: buttonStyleFor(busy) }, t("Re-check", "重新统计")));
+
+			const withoutMedia = summary?.withoutMedia ?? { files: 0, bytes: 0 };
+			const media = summary?.media ?? { files: 0, bytes: 0 };
+			const withMedia = summary?.withMedia ?? { files: 0, bytes: 0 };
+			const chosen = includeMedia ? withMedia : withoutMedia;
+
+			const exportRow = createElement("div", { key: "export", style: { ...panelStyle, display: "flex", flexDirection: "column", gap: 10 } },
+				createElement("p", { style: panelTitleStyle }, t("1. Seal this machine's state", "1. 把本机状态封成一个包")),
+				createElement("div", { style: hintStyle }, t(`这包里有 ${chosen.files} 个文件，约 ${humanBytes(chosen.bytes)}；里面有登录 token、聊天原文和记忆，用口令加密。`, `About ${chosen.files} file(s), ${humanBytes(chosen.bytes)}: login token, chat log and memory, encrypted with a passphrase.`)),
+				createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13 } },
+					createElement("input", {
+						type: "checkbox",
+						checked: includeMedia,
+						onChange: (event) => setIncludeMedia(event.target.checked === true),
+					}),
+					createElement("span", null, t(`带上媒体（${media.files} 个文件，${humanBytes(media.bytes)}）`, `Include media (${media.files} file(s), ${humanBytes(media.bytes)})`))),
+				createElement("input", {
+					value: exportPass,
+					type: "password",
+					autoComplete: "new-password",
+					onChange: (event) => setExportPass(event.target.value),
+					placeholder: t("口令（至少 8 位）", "Passphrase (8+ characters)"),
+					style: inputStyle,
+				}),
+				createElement("div", null, createElement("button", {
+					onClick: doExport,
+					disabled: busy || exportPass.length < 8,
+					style: primaryButtonStyle,
+				}, busy ? t("Sealing…", "正在封包…") : t("导出迁移包", "Export migration pack"))),
+				exportResult === null ? null : createElement("div", { style: { ...noticeStyle, flexDirection: "column", alignItems: "flex-start", gap: 4 } },
+					createElement("span", null, t(`已写出 ${exportResult.files} 个文件，${humanBytes(exportResult.bytes)}。`, `Wrote ${exportResult.files} file(s), ${humanBytes(exportResult.bytes)}.`)),
+					createElement("span", { style: { fontFamily: "monospace", wordBreak: "break-all", fontSize: 12 } }, exportResult.file),
+					createElement("span", { style: hintStyle }, t("把这一个文件拷到新机器，然后在下面恢复。", "Copy that one file to the new machine, then restore it below."))));
+
+			const sampleLines = Array.isArray(plan?.sample) ? plan.sample : [];
+			const planRow = plan === null ? null : createElement("div", { key: "plan", style: { ...noticeStyle, flexDirection: "column", alignItems: "flex-start", gap: 6 } },
+				createElement("span", null, t(`这个包 ${plan.files} 个文件、${humanBytes(plan.bytes)}：会写回 ${plan.replaces} 个已有文件、新建 ${plan.adds} 个。`, `${plan.files} file(s), ${humanBytes(plan.bytes)}: ${plan.replaces} would overwrite, ${plan.adds} would be new.`)),
+				plan.hasConfig ? createElement("span", { style: hintStyle }, t("包含 config.json —— 恢复后本机的账号与白名单会被包里的内容取代。", "It contains config.json — restoring replaces this machine's account and allowlist with the pack's.")) : null,
+				createElement("div", { style: { display: "flex", flexDirection: "column", gap: 1, fontSize: 12, fontFamily: "monospace", maxHeight: 140, overflowY: "auto" } },
+					sampleLines.map((entry) => createElement("span", { key: entry.path }, `${entry.exists ? "\u21ba" : "+"} ${entry.path}`))),
+				sampleLines.length < plan.files ? createElement("span", { style: hintStyle }, t(`…还有 ${plan.files - sampleLines.length} 个`, `…and ${plan.files - sampleLines.length} more`)) : null,
+				createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 } },
+					createElement("button", { onClick: doRestore, disabled: busy, style: buttonStyle },
+						busy ? t("Writing…", "正在写回…") : t("确认恢复", "Restore now")),
+					createElement("button", {
+						onClick: () => {
+							setPlan(null);
+							setNotice("");
+						},
+						disabled: busy,
+						style: buttonStyleFor(busy),
+					}, t("取消", "Cancel"))));
+
+			const restoreRow = createElement("div", { key: "restore", style: { ...panelStyle, display: "flex", flexDirection: "column", gap: 10 } },
+				createElement("p", { style: panelTitleStyle }, t("2. Open a pack on this machine", "2. 在本机打开一个迁移包")),
+				createElement("div", { style: hintStyle }, t("先看清楚它会写什么再确认；写之前会自动留一份明文回滚副本。", "It shows what would be written before anything is; a plain rollback copy is kept first.")),
+				createElement("input", {
+					value: file,
+					onChange: (event) => setFile(event.target.value),
+					placeholder: "/path/to/migrate-20261104-090000.enc",
+					style: { ...inputStyle, fontFamily: "monospace", fontSize: 12 },
+				}),
+				createElement("input", {
+					value: restorePass,
+					type: "password",
+					autoComplete: "off",
+					onChange: (event) => setRestorePass(event.target.value),
+					placeholder: t("口令", "Passphrase"),
+					style: inputStyle,
+				}),
+				createElement("div", null, createElement("button", {
+					onClick: doInspect,
+					disabled: busy || file.trim() === "" || restorePass === "",
+					style: buttonStyleFor(busy),
+				}, busy ? t("Reading…", "正在读取…") : t("检查这个包", "Inspect this pack"))),
+				planRow,
+				restoreResult === null ? null : createElement("div", { style: { ...noticeStyle, flexDirection: "column", alignItems: "flex-start", gap: 4 } },
+					createElement("span", null, t(`已写回 ${restoreResult.restored} 个文件；重启 DSH 生效。`, `Restored ${restoreResult.restored} file(s); restart DSH to load them.`)),
+					restoreResult.safety
+						? createElement("span", { style: { fontFamily: "monospace", wordBreak: "break-all", fontSize: 12 } }, t(`回滚副本：${restoreResult.safety}`, `Rollback copy: ${restoreResult.safety}`))
+						: createElement("span", { style: hintStyle }, t("没能留下回滚副本——恢复本身成功了。", "No rollback copy could be taken — the restore itself succeeded."))));
+
+			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+				head,
+				notice === "" ? null : createElement("div", { style: noticeStyle },
+					createElement("span", { style: { flex: "0 0 auto" } }, "\u26a0"),
+					createElement("span", null, notice)),
+				exportRow,
+				restoreRow,
+				createElement("div", { style: hintStyle }, t("命令行也行：bin/backup.mjs seal / open / create / restore。", "The command line works too: bin/backup.mjs seal / open / create / restore.")));
 		}
 
 		/**
@@ -3364,6 +3561,7 @@ window.__ModuleLoader__.load({
 					{ id: "usage", label: t("Bill", "账单"), body: createElement(UsageSection, { ctx, t, onGoTo: goToTab }) },
 					{ id: "reminders", label: t("Reminders", "定时提醒"), body: createElement(RemindersSection, { ctx, t }) },
 					{ id: "persona", label: t("Persona", "个性化"), body: createElement(PersonaSection, { ctx, t }) },
+					{ id: "maintenance", label: t("Maintenance", "维护"), body: createElement(MigrationSection, { ctx, t }) },
 					{ id: "about", label: t("About", "关于"), body: createElement(AboutSection, { ctx, t }) },
 				];
 				// Arrow keys move between tabs: the bar is a real tablist,

@@ -341,6 +341,48 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/packPresets:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/migrateSummary`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "migrateSummary",
+					invocation: { kind: "direct" },
+					parameters: [],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateSummary:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/migrateExport`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "migrateExport",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateExport:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateExport:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/migrateInspect`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "migrateInspect",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateInspect:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateInspect:result`, create: _statusResult },
+				},
+				{
+					id: `${PKG}#weixin/migrateRestore`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "migrateRestore",
+					invocation: { kind: "direct" },
+					parameters: [
+						{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateRestore:p0`, create: _strMap } },
+					],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateRestore:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/packInstallPreset`,
 					service: "weixinLoginController",
 					namespace: "weixin",

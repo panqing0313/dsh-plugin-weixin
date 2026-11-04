@@ -262,6 +262,10 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/memoryFactRemove',
         'weixin/memoryProfileSave',
         'weixin/metrics',
+        'weixin/migrateExport',
+        'weixin/migrateInspect',
+        'weixin/migrateRestore',
+        'weixin/migrateSummary',
         'weixin/onboarding',
         'weixin/outbox',
         'weixin/outboxDrop',
@@ -1016,4 +1020,27 @@ test('the bill tab reads the ledger, and says out loud that the numbers are esti
   assert.match(config, /path: "pricePer1kInputYuan"/)
   assert.match(config, /path: "pricePer1kOutputYuan"/)
   assert.match(config, /path: "usageAwarenessEnabled"/)
+})
+
+test('the maintenance tab seals two-step: inspect before restore, and clear the passphrase after', () => {
+  const registration = loadClientModule()
+  const mod = registration.factory(fakeRequire)
+  let mounted
+  const ctx = fakeCtx({ onMount: (c) => { mounted = c } })
+  return mod.apply(ctx).then(() => {
+    const source = fs.readFileSync(new URL('../src/client.card.js', import.meta.url), 'utf8')
+    // The four host calls exist and are reached through the envelope helper.
+    for (const method of ['migrateSummary', 'migrateExport', 'migrateInspect', 'migrateRestore']) {
+      assert.match(source, new RegExp(`ctx\\.remote\\.weixin\\.${method}\\(`), `${method} is called from the card`)
+    }
+    // Restoring is gated by a plan, not by a single click.
+    assert.match(source, /setPlan\(r\)/, 'inspect stores the plan')
+    assert.match(source, /plan === null \? null : createElement/, 'the restore button only renders with a plan')
+    // The passphrases never persist in component state after use.
+    assert.ok((source.match(/setExportPass\(""\)/g) ?? []).length >= 1, 'the export passphrase is dropped after use')
+    assert.ok((source.match(/setRestorePass\(""\)/g) ?? []).length >= 1, 'the restore passphrase is dropped after use')
+    // And it is a password field, so the text is not shoulder-readable.
+    assert.ok((source.match(/type: "password"/g) ?? []).length >= 2, 'both passphrase inputs are password fields')
+    assert.ok(mounted !== undefined)
+  })
 })

@@ -27,6 +27,11 @@ const KEY_BYTES = 32
 // 备份里不该出现的东西：备份自己、进程锁、以及运行时的派生缓存。
 const SKIP_DIRS = new Set(['backups', 'node_modules'])
 const SKIP_FILES = new Set(['instance.lock'])
+// 媒体是迁移包里唯一可能上几十 MB 的东西（入站图片、语音、出站附件都在
+// `media/` 下），而换机时大多数人只要「记忆与配置，不要旧照片」。所以它可以
+// 被单独排除；其余目录一律跟着走 —— 一个能少装东西的开关，比一个能少装记忆
+// 的开关安全得多。
+const MEDIA_DIR = 'media'
 
 function deriveKey(passphrase, salt) {
   return crypto.scryptSync(String(passphrase), salt, KEY_BYTES)
@@ -64,11 +69,12 @@ export function openBuffer(packed, passphrase) {
   }
 }
 
-function walk(root, relative = '', out = []) {
+function walk(root, relative = '', out = [], fromMedia = true) {
   for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
     const rel = relative === '' ? entry.name : `${relative}/${entry.name}`
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name) && relative === '') continue
+      if (fromMedia === false && entry.name === MEDIA_DIR && relative === '') continue
       walk(root, rel, out)
     } else if (entry.isFile()) {
       if (relative === '' && SKIP_FILES.has(entry.name)) continue
@@ -83,8 +89,8 @@ function walk(root, relative = '', out = []) {
  * @param {{ passphrase: string, outFile: string, warn?: (line: string) => void, now?: number }} options
  * @returns {{ file: string, files: number, bytes: number }}
  */
-export function sealState(stateRoot, { passphrase, outFile, warn, now = Date.now() }) {
-  const files = walk(stateRoot)
+export function sealState(stateRoot, { passphrase, outFile, warn, now = Date.now(), includeMedia = true }) {
+  const files = walk(stateRoot, '', [], includeMedia !== false)
   const payload = { version: SEALED_VERSION, sealedAt: new Date(now).toISOString(), files: {} }
   for (const rel of files) {
     payload.files[rel] = fs.readFileSync(path.join(stateRoot, rel)).toString('base64')

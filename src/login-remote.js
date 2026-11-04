@@ -913,6 +913,162 @@ export class WeixinLoginController extends TypertRemoteService {
         return { ok: drop(id) };
     }
 
+    /**
+     * What a migration pack would contain, before anyone types a passphrase.
+     * The card uses this to show the size honestly and to offer "leave the
+     * photos behind" — `media/` is usually the bulk of a state directory.
+     */
+    async migrateSummary() {
+        const root = stateDir();
+        const plain = { files: 0, bytes: 0 };
+        const media = { files: 0, bytes: 0 };
+        const walk = (relative) => {
+            let entries = [];
+            try {
+                entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true });
+            } catch {
+                return;
+            }
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    if (relative === "" && (entry.name === "backups" || entry.name === "node_modules")) continue;
+                    walk(relative === "" ? entry.name : `${relative}/${entry.name}`);
+                } else if (entry.isFile()) {
+                    if (relative === "" && entry.name === "instance.lock") continue;
+                    let size = 0;
+                    try {
+                        size = fs.statSync(path.join(root, relative, entry.name)).size;
+                    } catch {
+                        continue;
+                    }
+                    const isMedia = relative === "media" || relative.startsWith("media/");
+                    if (isMedia) {
+                        media.files += 1;
+                        media.bytes += size;
+                    } else {
+                        plain.files += 1;
+                        plain.bytes += size;
+                    }
+                }
+            }
+        };
+        walk("");
+        return {
+            stateRoot: root,
+            withoutMedia: plain,
+            media,
+            withMedia: { files: plain.files + media.files, bytes: plain.bytes + media.bytes },
+        };
+    }
+
+    /**
+     * Seal the whole state directory into one passphrase-protected file, written
+     * on this machine. The card cannot move bytes between machines, so it shows
+     * the path and the operator copies that one file across.
+     *
+     * @param {{ passphrase?: string, includeMedia?: boolean }} options
+     */
+    async migrateExport(options) {
+        const { sealState } = await import("./backup-crypto.js");
+        const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
+        if (passphrase.length < 8) return { error: "口令至少 8 个字符 —— 它保护的是聊天原文与登录 token" };
+        const stamp = new Date().toISOString().replace(/[:.]/g, "").replace("T", "-").slice(0, 17);
+        const outFile = path.join(stateDir(), "backups", `migrate-${stamp}.enc`);
+        try {
+            const result = sealState(stateDir(), {
+                passphrase,
+                outFile,
+                includeMedia: options?.includeMedia !== false,
+                warn: () => {},
+            });
+            return { file: result.file, files: result.files, bytes: result.bytes };
+        } catch (error) {
+            return { error: String(error?.message ?? error) };
+        }
+    }
+
+    /**
+     * Open a pack on this machine and report what restoring it would write,
+     * without writing a single byte. The card shows that plan and asks again;
+     * `migrateRestore` is the second click.
+     *
+     * @param {{ file?: string, passphrase?: string }} options
+     */
+    async migrateInspect(options) {
+        const { openState } = await import("./backup-crypto.js");
+        const file = typeof options?.file === "string" ? options.file.trim() : "";
+        const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
+        if (file === "") return { error: "需要一个 .enc 迁移包文件的路径" };
+        if (fs.existsSync(file) === false) return { error: `找不到文件：${file}` };
+        try {
+            const opened = openState(file, { passphrase });
+            const root = path.resolve(stateDir());
+            const preview = [];
+            let bytes = 0;
+            let replaces = 0;
+            for (const [rel, buffer] of opened.files) {
+                bytes += buffer.length;
+                const exists = fs.existsSync(path.join(root, rel));
+                if (exists) replaces += 1;
+                preview.push({ path: rel, bytes: buffer.length, exists });
+            }
+            return {
+                file,
+                sealedAt: typeof opened.sealedAt === "string" ? opened.sealedAt : "",
+                files: preview.length,
+                bytes,
+                replaces,
+                adds: preview.length - replaces,
+                hasConfig: preview.some((entry) => entry.path === "config.json"),
+                sample: preview.slice(0, 12),
+            };
+        } catch (error) {
+            const message = String(error?.message ?? error);
+            return {
+                error: /authenticate|bad decrypt|Unsupported state|wrong passphrase/i.test(message)
+                    ? "口令不对，或者这个包不是本插件封出来的"
+                    : message,
+            };
+        }
+    }
+
+    /**
+     * Write a previously inspected pack over this state directory. The archive is
+     * validated in full before the first byte (see restoreSealed), and a plain
+     * rollback copy is taken first so a restore can itself be undone.
+     *
+     * @param {{ file?: string, passphrase?: string }} options
+     */
+    async migrateRestore(options) {
+        const { openState, restoreSealed } = await import("./backup-crypto.js");
+        const file = typeof options?.file === "string" ? options.file.trim() : "";
+        const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
+        if (file === "") return { error: "需要一个 .enc 迁移包文件的路径" };
+        if (fs.existsSync(file) === false) return { error: `找不到文件：${file}` };
+        let opened;
+        try {
+            opened = openState(file, { passphrase });
+        } catch (error) {
+            return { error: String(error?.message ?? error) };
+        }
+        // Keep a plain rollback copy first. Not having one is not a reason to
+        // refuse the restore the operator asked for — it is reported instead.
+        let safety = "";
+        try {
+            const { createBackup } = await import("./backup.js");
+            const backup = createBackup(stateDir(), { label: "before-migrate-restore", warn: () => {} });
+            safety = typeof backup?.path === "string" ? backup.path : "";
+        } catch {
+            safety = "";
+        }
+        try {
+            const result = restoreSealed(stateDir(), opened.files, { warn: () => {} });
+            return { restored: result.restored, safety, sealedAt: typeof opened.sealedAt === "string" ? opened.sealedAt : "" };
+        } catch (error) {
+            return { error: String(error?.message ?? error) };
+        }
+    }
+
     async storage() {
         const live = readSavedConfig();
         return {
@@ -1237,4 +1393,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "migrateSummary", "migrateExport", "migrateInspect", "migrateRestore", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

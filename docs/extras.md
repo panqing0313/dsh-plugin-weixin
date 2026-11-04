@@ -1140,3 +1140,21 @@ node bin/stickers.mjs fetch bluefish --force  # 已存在的重装
 所以「别给我的过敏原挤掉」这类事有两条路自保：重要度调高，或者多说几遍。`/memory` 里显示的还是第一次记的时间，`formatFactLines` 会写「N 天前」—— 那个 N 现在按最后一次确认算。
 
 改动在 `src/memory.js`：`addGlobalFact` 命中重复时返回 `{ added: false, reason: 'duplicate', confirmed: true }` 并写回 `updatedAt`；`buildMemoryBlock` 用同一个比较器 `byImportanceThenRecency`。
+
+## 换机：一个加密包，两步确认（1.5.0-A）
+
+设置卡的「维护」页签做三件事，全部走本机文件，不经过网络：
+
+1. **看体积**：`migrateSummary` 把状态目录分成两份 —— 记忆/配置（`config.json`、`memory/`、`journal/`、提醒、知识库…）与媒体（`media/`）。你会看到「不带媒体 N 个文件 / 带媒体 M 个文件」，勾选框就在描述里，不是藏在设置深处。
+2. **封包**：`migrateExport` 调 `sealState(stateDir(), { passphrase, includeMedia })`，落在 `~/.dsh/weixin/backups/migrate-<时间>.enc`。口令至少 8 位 —— 包里是 scrypt 派生的 AES-256-GCM 密文，含登录 token 与聊天原文，口令丢了没有任何后门。
+3. **恢复是两步**：`migrateInspect` 只读地解开并列出「会覆盖 N 个、新建 M 个」，前 12 条逐行标 `↺`（已存在）或 `+`（新建），并单独提示「含 config.json —— 本机账号与白名单会被包里取代」。看完点「确认恢复」才走 `migrateRestore`：先 `createBackup` 留一份明文回滚副本（失败不阻塞），再交给 `restoreSealed` —— 它在写第一个字节之前校验完整包，路径穿越的条目直接拒绝。
+
+口令只经过一次远程调用，用完即清空输入框，不写日志、不回显。
+
+**命令行等价物**（服务器上没有设置卡时用）：
+
+```bash
+node bin/backup.mjs seal  --out ~/migrate.enc        # 口令从 stdin 读，还支持 --no-media
+node bin/backup.mjs open  ~/migrate.enc --dry-run    # 只列不写
+node bin/backup.mjs open  ~/migrate.enc              # 真正写回
+```
