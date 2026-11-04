@@ -344,6 +344,7 @@ The `config` of that line in `cordis.patch.yml`:
 | `personaDefaultMode` | `'default'` | Default conversation mode for new sessions. The "default mode" selector on the "Persona" tab of the settings card overrides it live (saved to disk, takes effect with no reload) |
 | `memoryEnabled` | `true` | Fold long-term memory, conversation summaries and the recent-message window into the prompt. Turning it off disables /remember, /forget and /memory along with it; /mode is a separate feature and is unaffected |
 | `memorySummaryTurns` | `10` | After how many completed agent turns the summary of this conversation is updated automatically in the background |
+| `memorySimilarityRoute` | `off` | How duplicate memories are judged: `off` = local rules only (free), `memory` = ask the memory model when unsure |
 | `memoryGlobalMaxFacts` | `30` | Upper bound on long-term memory entries; once full, /remember refuses new ones instead of silently evicting the oldest |
 | `memoryConvMaxChars` | `1200` | Character limit for the conversation summary |
 | `memoryProvider` | `''` | Memory model provider (used for summaries / extraction / consolidation). Empty = keep using the current session's model |

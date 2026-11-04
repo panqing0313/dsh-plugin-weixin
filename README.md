@@ -340,6 +340,7 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `memoryEnabled` | `true` | 把长期记忆、会话摘要与最近消息窗口折进提示词。关掉后 /remember、/forget、/memory 一并停用；/mode 是独立功能，不受影响 |
 | `memorySummaryTurns` | `10` | 每多少个已完成的 agent 回合，后台自动把这段会话的摘要更新一次 |
 | `memoryGlobalMaxFacts` | `30` | 长期记忆条数上限；存满后 /remember 会拒绝新增，而不是悄悄挤掉最旧的一条 |
+| `memorySimilarityRoute` | `off` | 重复记忆的判定方式：`off` 只用本地规则（不花钱），`memory` 拿不准时问记忆模型 |
 | `memoryConvMaxChars` | `1200` | 会话摘要的字符上限 |
 | `memoryProvider` | `''` | 记忆模型 provider（摘要 / 抽取 / 整理用）。留空则沿用当前会话的模型 |
 | `memoryModel` | `''` | 记忆模型 model，和 provider 一起填才生效 |
@@ -750,7 +751,9 @@ npm run backup -- restore <id>                  # 恢复（会先把当前状态
   切换会**开一条新会话线**（`/list` 可以随时切回旧线，旧上下文不丢）——对游戏来说这就是重开一局；
   `/mode 默认` 回到普通助手、退出游戏。
 - `/remember 我对花生过敏` 把一件事写进**长期记忆**（跨会话、跨重启、跨 /new 生效）；
-  `/forget 编号或关键词` 删除；`/memory` 查看全部。长期记忆存满（默认 30 条）后
+  `/forget 编号或关键词` 删除；`/memory` 查看全部。长期记忆按「重要性 → 最近一个月说过的 → 具体时间」排序注入，
+  同一月内顺序稳定；两条听起来是同一件事时 `/memory` 会先问一句，`/memory merge 1 2` 才真的合并（`/undo` 可整步撤回）。
+  长期记忆存满（默认 30 条）后
   `/remember` 会明确拒绝，不会悄悄挤掉最旧的。
 - **记错了就 `/undo`**：撤销上一次长期记忆改动（新增、改口、删除都能撤回），`/undo 2` 连续撤两步。
 - **带回来**：`/memory export json` 给一段 JSON（带每条事实的确认时间与来源），`/import <粘贴或文件路径>` 读回来 —— 先给预览、回「是」才写。
