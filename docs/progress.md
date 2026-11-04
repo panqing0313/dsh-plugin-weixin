@@ -42,6 +42,13 @@
 
 验证：`npm test` → **1193/1193 pass、0 fail**；`node bin/check.mjs` → `checked 273 files`。
 
+### 四、发布 1.5.1（2026-11-04）
+
+- 提交 `02d1d8d fix(ledger): name the model that spent the tokens, and translate the model's own errors`；CI run `41765131283` success；tag `v1.5.1` → `release.yml` run `41765136990` success（带 provenance）。
+- `node bin/release.mjs --finish 1.5.1` 四步全绿：tag 已在、pushed main+tag、GitHub release 创建、装进 desktop profile（`^1.5.0 → ^1.5.1`）、锁文件刷新。
+- 核验：`dist.shasum 68afcb9abf891b8514b587ba53373e20ff4a037e`、`dist.integrity sha512-sQaNieXRJfi4FbBURpl9VIfCpoHoLdfhvfz57g3SiFmuXwq6bwVzDibl8pqPpXpS4K1/aARhreaexi9fIlmWHw==`、`gitHead 02d1d8ddd89cf43dfefa13ce59618dd50e1b5b09`（= 本地 HEAD）、`dist-tags.latest = 1.5.1`；`doctor` → `installed version 1.5.1`、`host 0.2.1-rc.5 (tested)`、`published version up to date (1.5.1)`。
+- **核验 tidbit**：`npm pack` 本地重打包的 sha1（`85f38bd3…`）与注册表 `dist.shasum` 不一致时先别慌 —— 两者都按**解包后的文件内容**算，差别来自文件权限位（本地 tarball 里的 `0600`）。按 `dist.tarball` 下载注册表那份，`shasum` 就逐字节相同了，文件清单 `diff` 也一致（241 个）。
+
 ## 当前状态（2026-10-26）
 
 - **版本**：`0.9.9`，2026-10-27 已发布（npm `latest`、tag `v0.9.9`、GitHub release 三者齐全；注册表 `dist.shasum` `2bd3d597…` / `dist.integrity` `sha512-caG529vI…`、`gitHead` `2c07a90` 与本地 tarball 逐字节一致）。`package.json` 与 `package-lock.json` 现由发版脚本强制一致，锁文件的版本漂移已被 preflight 挡住。
