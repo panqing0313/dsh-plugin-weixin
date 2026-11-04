@@ -1154,7 +1154,9 @@ node bin/stickers.mjs fetch bluefish --force  # 已存在的重装
 **命令行等价物**（服务器上没有设置卡时用）：
 
 ```bash
-node bin/backup.mjs seal  --out ~/migrate.enc        # 口令从 stdin 读，还支持 --no-media
-node bin/backup.mjs open  ~/migrate.enc --dry-run    # 只列不写
-node bin/backup.mjs open  ~/migrate.enc              # 真正写回
+DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs seal /tmp/migrate.enc --no-media
+DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open /tmp/migrate.enc --dry-run   # 只列不写
+DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open /tmp/migrate.enc             # 真正写回
 ```
+
+`--dry-run` 输出的就是卡片里那个计划：`↺` 是会被覆盖的文件、`+` 是新建的。

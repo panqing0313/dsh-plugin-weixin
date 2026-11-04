@@ -6,14 +6,15 @@
  *   node bin/backup.mjs list
  *   node bin/backup.mjs verify <id>
  *   node bin/backup.mjs restore <id> [--yes]
- *   DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs seal <file.enc>
- *   DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open <file.enc> [--yes]
+ *   DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs seal <file.enc> [--no-media]
+ *   DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open <file.enc> [--dry-run] [--yes]
  *
  * Written as a CLI rather than a remote method because the interesting moments
  * (upgrading, moving to another machine, "I think I deleted the wrong thing")
  * happen when the plugin is not running — or when running it is exactly what you
  * do not want to do.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createBackup, listBackups, pruneBackups, restoreBackup, verifyBackup, backupsDir } from '../src/backup.js'
@@ -108,7 +109,7 @@ switch (command) {
   case 'seal': {
     const file = rest[0]
     if (!file) {
-      console.error('usage: DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs seal <file.enc>')
+      console.error('usage: DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs seal <file.enc> [--no-media]')
       process.exitCode = 1
       break
     }
@@ -118,7 +119,14 @@ switch (command) {
       process.exitCode = 1
       break
     }
-    const result = sealState(root, { passphrase, outFile: path.resolve(file), warn })
+    const result = sealState(root, {
+      passphrase,
+      outFile: path.resolve(file),
+      // Media is usually the bulk of the directory and the least important part
+      // of a move; `--no-media` leaves it behind deliberately.
+      includeMedia: !flags.has('--no-media'),
+      warn,
+    })
     console.log(`✓ sealed ${result.files} file(s) into ${result.file} (${human(result.bytes)})`)
     console.log('  this file is encrypted; without the passphrase it is unreadable, so store that separately')
     break
@@ -127,7 +135,7 @@ switch (command) {
   case 'open': {
     const file = rest[0]
     if (!file) {
-      console.error('usage: DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open <file.enc> [--yes]')
+      console.error('usage: DSH_WEIXIN_BACKUP_PASSPHRASE=… node bin/backup.mjs open <file.enc> [--dry-run] [--yes]')
       process.exitCode = 1
       break
     }
@@ -151,6 +159,23 @@ switch (command) {
       process.exitCode = 1
       break
     }
+    if (flags.has('--dry-run')) {
+      // Same plan the settings card shows: what would be overwritten, what is
+      // new. Nothing is written, which is the whole point of a dry run.
+      let bytes = 0
+      let replaces = 0
+      const rows = []
+      for (const [rel, buffer] of opened.files) {
+        bytes += buffer.length
+        const exists = fs.existsSync(path.join(root, rel))
+        if (exists) replaces += 1
+        rows.push(`${exists ? '\u21ba' : '+'} ${rel}`)
+      }
+      console.log(`would write ${opened.files.size} file(s), ${human(bytes)}: ${replaces} overwrite, ${opened.files.size - replaces} new`)
+      for (const row of rows.slice(0, 40)) console.log(`  ${row}`)
+      if (rows.length > 40) console.log(`  …and ${rows.length - 40} more`)
+      break
+    }
     const result = restoreSealed(root, opened.files, { warn })
     console.log(`✓ restored ${result.restored} file(s) from ${file}`)
     console.log('  restart DSH to load the restored state')
@@ -163,8 +188,8 @@ switch (command) {
   node bin/backup.mjs list                      what backups exist
   node bin/backup.mjs verify <id>               is this one intact
   node bin/backup.mjs restore <id> [--yes]      copy it back over the live state
-  node bin/backup.mjs seal <file.enc>           encrypt the whole state into one file
-  node bin/backup.mjs open <file.enc> [--yes]   decrypt and restore it
+  node bin/backup.mjs seal <file.enc> [--no-media]  encrypt the whole state into one file
+  node bin/backup.mjs open <file.enc> [--dry-run] [--yes]  list, then decrypt and restore it
 
 state: ${root}
 backups: ${backupsDir(root)}`)

@@ -93,3 +93,13 @@ test('a short passphrase is refused with a reason, not silently accepted', () =>
     const missing = await controller.migrateInspect({ file: '/tmp/does-not-exist.enc', passphrase: 'whatever' })
     assert.match(missing.error, /找不到文件/)
   }))
+test('the command line offers the same two conveniences: leave media out, and list before writing', () => {
+  const bin = new URL('../bin/backup.mjs', import.meta.url).pathname
+  const source = fs.readFileSync(bin, 'utf8')
+  // `--no-media` must reach sealState, otherwise the flag would be a lie.
+  assert.match(source, /includeMedia: !flags\.has\('--no-media'\)/)
+  // `--dry-run` must return before restoreSealed is reached.
+  const dryIndex = source.indexOf("flags.has('--dry-run')")
+  const restoreIndex = source.indexOf('restoreSealed(root, opened.files')
+  assert.ok(dryIndex > 0 && restoreIndex > dryIndex, 'the dry run returns before anything is written')
+})
