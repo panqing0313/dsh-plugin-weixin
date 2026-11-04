@@ -466,3 +466,16 @@ test('/undo refuses an old change, and reports an empty history honestly', () =>
 	assert.deepEqual(refused, { ok: false, reason: 'too-old' })
 	assert.equal(readGlobalMemory(dir, 'bot@im.bot', { warn }).facts.length, 1, 'nothing was removed')
 })
+
+test('global facts: a same-millisecond repeat still reports the confirmation', () => {
+	// Regression: the duplicate branch used `now > updatedAt` to decide whether
+	// anything happened, so on a fast machine (and on CI) the same fact said
+	// twice inside one millisecond came back as a bare "duplicate". The shape of
+	// the answer then depended on how fast the clock ticked — the exact kind of
+	// flake that only shows up on someone else's runner.
+	const dir = join(root, 'same-ms')
+	const at = 1_700_000_000_000
+	assert.deepEqual(addGlobalFact(dir, 'a', '周四面试', { warn }, { now: at }).added, true)
+	assert.deepEqual(addGlobalFact(dir, 'a', '周四面试', { warn }, { now: at }), { added: false, reason: 'duplicate', confirmed: true })
+	assert.equal(readGlobalMemory(dir, 'a', { warn }).facts.length, 1, 'and still not duplicated')
+})

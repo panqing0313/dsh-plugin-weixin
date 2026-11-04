@@ -256,8 +256,16 @@ export function addGlobalFact(stateRoot, accountId, text, {
         // recency stamp moves forward so the injector can put what keeps coming
         // up first. Without this a fact the user repeats every week would look
         // older than one they mentioned once, and get crowded out of the prompt.
-        const confirmed = now > Number(recorded.updatedAt ?? 0)
-        if (confirmed) {
+        // `now > updatedAt` is not enough: a fact written in the same
+        // millisecond as this call (common on a fast CI runner, and in the tests
+        // right above us) has `updatedAt === now` and would report nothing,
+        // making the shape of the result depend on how fast the clock ticked.
+        // The stamp only moves forward, so "it already carries this instant" is
+        // still a confirmation; it simply has nothing to write.
+        const stamp = Number(recorded.updatedAt ?? 0)
+        const confirmed = Number.isFinite(now) && now >= stamp
+        const moved = confirmed && now > stamp
+        if (moved) {
             recorded.updatedAt = now
             if (weight !== DEFAULT_FACT_WEIGHT) recorded.weight = clampWeight(weight)
             writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
