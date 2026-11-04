@@ -41,13 +41,13 @@ test('a wrong passphrase fails before writing anything', () => {
   const root = stateRoot()
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-sealed-')), 'state.enc')
   sealState(root, { passphrase: 'pw', outFile: out })
-  assert.throws(() => openState(out, { passphrase: 'nope' }), /wrong passphrase/)
+  assert.throws(() => openState(out, { passphrase: 'nope' }), /口令不对/)
 })
 
 test('a modified ciphertext is rejected, not half-restored', () => {
   const packed = sealBuffer(Buffer.from('{"a":1}'), 'pw')
   packed[packed.length - 1] ^= 0xff
-  assert.throws(() => openBuffer(packed, 'pw'), /wrong passphrase|modified/)
+  assert.throws(() => openBuffer(packed, 'pw'), /口令不对|改坏/)
 })
 
 test('restore writes the files back and reports the count', () => {
@@ -69,7 +69,7 @@ test('an archive path that escapes the root is refused', () => {
 })
 
 test('a passphrase is mandatory', () => {
-  assert.throws(() => sealBuffer(Buffer.from('x'), ''), /passphrase is required/)
+  assert.throws(() => sealBuffer(Buffer.from('x'), ''), /需要一个口令/)
 })
 
 test('sealing twice produces different bytes for the same state (random salt/iv)', () => {

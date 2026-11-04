@@ -1190,25 +1190,35 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			const openBrowser = async () => {
-				// Where the browser starts: the operator's own path if it is
-				// absolute, otherwise the native chooser (desktop only) or home.
+			/**
+			 * The button must never look dead.
+			 *
+			 * The first version awaited the native chooser *before* opening
+			 * anything: on the Web GUI that call resolves to PICK_UNAVAILABLE, but
+			 * it goes through the Remote carrier first, so a click looked like
+			 * nothing happened for as long as the round trip took — and if the
+			 * carrier never settled, forever. The browser now opens in the same
+			 * tick as the click and lists a folder straight away; the native
+			 * chooser, where one exists, still gets its turn and overrides the
+			 * path if the operator picks something there.
+			 */
+			const openBrowser = () => {
 				const typed = String(value ?? "").trim();
-				if (typed !== "" && (typed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(typed))) {
-					setOpen(true);
-					await load(typed);
-					return;
-				}
+				const absolute = typed !== "" && (typed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(typed));
+				setOpen(true);
+				setError("");
+				load(absolute ? typed : "").then(() => {
+					// Desktop shell: ask the native chooser too, and take its answer.
+					if (!absolute) askNativeChooser();
+				});
+			};
+
+			const askNativeChooser = async () => {
 				const picked = await pickDirectory(ctx);
 				if (picked.ok) {
 					onChange(picked.path);
-					return;
+					setOpen(false);
 				}
-				if (picked.reason === PICK_UNAVAILABLE) {
-					onNotice?.(t("当前环境没有系统选择器，用下面的内置浏览。", "This environment has no native chooser; use the built-in browser below."));
-				}
-				setOpen(true);
-				await load("");
 			};
 
 			const acceptLabel = accept === "" ? "" : t(`只关心 ${accept}`, `looking for ${accept}`);

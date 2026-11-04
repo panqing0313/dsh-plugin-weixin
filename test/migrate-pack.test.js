@@ -238,3 +238,33 @@ test('modelCatalog hands the card the host catalogue and what the card has saved
     else fs.writeFileSync(settings, backup)
   }
 }))
+
+test('a folder in the pack box is explained, not handed to the filesystem', () => withState(async ({ root, controller }) => {
+  // The operator clicked "Browse", got a folder listing, and pressed inspect —
+  // which used to come back as `EISDIR: illegal operation on a directory, read`.
+  const dir = path.join(root, 'backups')
+  fs.mkdirSync(dir, { recursive: true })
+  const inspected = await controller.migrateInspect({ file: dir, passphrase: 'longenough' })
+  assert.equal(inspected.error, `${dir} 是个文件夹 —— 这里要的是选中的那一个 .enc 迁移包`)
+  const restored = await controller.migrateRestore({ file: dir, passphrase: 'longenough' })
+  assert.match(restored.error, /是个文件夹/)
+
+  const empty = path.join(dir, 'empty.enc')
+  fs.writeFileSync(empty, '')
+  const emptyResult = await controller.migrateInspect({ file: empty, passphrase: 'longenough' })
+  assert.match(emptyResult.error, /是空文件/)
+}))
+
+test('an export folder that is really a file path means "put it in that folder"', () => withState(async ({ root, controller }) => {
+  // Pasting a full name like .../backups/migrate-x.enc used to create a
+  // *directory* of that name with the pack inside it.
+  const packPath = path.join(root, 'backups', 'migrate-x.enc')
+  const written = await controller.migrateExport({ passphrase: 'longenough', outDir: packPath })
+  assert.equal(written.outDir, path.join(root, 'backups'), 'the folder, not a folder named like a pack')
+  assert.match(path.basename(written.file), /^migrate-.*\.enc$/)
+  assert.ok(fs.existsSync(written.file))
+  assert.equal(fs.existsSync(packPath), false, 'no stray directory (or file) was created at the pasted name')
+
+  const notAFolder = await controller.migrateExport({ passphrase: 'longenough', outDir: path.join(root, 'config.json') })
+  assert.match(notAFolder.error, /是个文件，不是文件夹/)
+}))

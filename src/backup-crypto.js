@@ -51,7 +51,7 @@ function deriveKey(passphrase, salt) {
 /** @param {Buffer} plain @param {string} passphrase @returns {Buffer} */
 export function sealBuffer(plain, passphrase) {
   if (typeof passphrase !== 'string' || passphrase.length === 0) {
-    throw new Error('a passphrase is required')
+    throw new Error('需要一个口令')
   }
   const salt = crypto.randomBytes(SALT_BYTES)
   const iv = crypto.randomBytes(IV_BYTES)
@@ -65,7 +65,7 @@ export function sealBuffer(plain, passphrase) {
 export function openBuffer(packed, passphrase) {
   const header = Buffer.byteLength(SEALED_MAGIC, 'ascii')
   if (packed.length < header + SALT_BYTES + IV_BYTES + TAG_BYTES || packed.subarray(0, header).toString('ascii') !== SEALED_MAGIC) {
-    throw new Error('not a sealed backup')
+    throw new Error('这不是一个迁移包 —— 文件开头不认识，可能是拷错了文件或者只拷了一半')
   }
   const salt = packed.subarray(header, header + SALT_BYTES)
   const iv = packed.subarray(header + SALT_BYTES, header + SALT_BYTES + IV_BYTES)
@@ -76,7 +76,7 @@ export function openBuffer(packed, passphrase) {
   try {
     return Buffer.concat([decipher.update(ciphertext), decipher.final()])
   } catch {
-    throw new Error('wrong passphrase (or the file was modified)')
+    throw new Error('口令不对，或者这个包在拷贝时被改坏了')
   }
 }
 
@@ -106,7 +106,7 @@ function walk(root, relative = '', out = [], fromMedia = true) {
  */
 export function sealState(stateRoot, { passphrase, outFile, warn, now = Date.now(), includeMedia = true }) {
   if (typeof passphrase !== 'string' || passphrase.length === 0) {
-    throw new Error('a passphrase is required')
+    throw new Error('需要一个口令')
   }
   const files = walk(stateRoot, '', [], includeMedia !== false)
   fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true })
@@ -196,7 +196,7 @@ function openStream(file, passphrase) {
   const packed = fs.readFileSync(file)
   const header = Buffer.byteLength(SEALED_STREAM_MAGIC, 'ascii')
   if (packed.length < header + SALT_BYTES + IV_BYTES + TAG_BYTES + 1 || packed.subarray(0, header).toString('ascii') !== SEALED_STREAM_MAGIC) {
-    throw new Error('not a sealed backup')
+    throw new Error('这不是一个迁移包 —— 文件开头不认识，可能是拷错了文件或者只拷了一半')
   }
   const salt = packed.subarray(header, header + SALT_BYTES)
   const iv = packed.subarray(header + SALT_BYTES, header + SALT_BYTES + IV_BYTES)
@@ -209,7 +209,7 @@ function openStream(file, passphrase) {
     decipher.setAuthTag(tag)
     plain = Buffer.concat([decipher.update(ciphertext), decipher.final()])
   } catch {
-    throw new Error('wrong passphrase (or the file was modified)')
+    throw new Error('口令不对，或者这个包在拷贝时被改坏了')
   }
 
   // 顺序读，不按行切：文件正文里本来就可能有换行，按行切会把内容当成记录。
@@ -218,7 +218,7 @@ function openStream(file, passphrase) {
   let at = 0
   const readLine = () => {
     const end = plain.indexOf(0x0a, at)
-    if (end === -1) throw new Error('the sealed backup is truncated')
+    if (end === -1) throw new Error('包不完整 —— 写到一半就中断了，请重新导出')
     const line = plain.subarray(at, end)
     at = end + 1
     return line
@@ -255,7 +255,7 @@ function openStream(file, passphrase) {
     if (!Number.isInteger(size) || size < 0 || Number(line?.offset) !== cursor) {
       throw new Error(`the sealed backup has a bad record for ${rel}`)
     }
-    if (at + size > plain.length) throw new Error('the sealed backup is truncated')
+    if (at + size > plain.length) throw new Error('包不完整 —— 写到一半就中断了，请重新导出')
     files.set(rel, plain.subarray(at, at + size))
     at += size
     cursor += size

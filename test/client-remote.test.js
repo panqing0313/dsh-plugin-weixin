@@ -1083,7 +1083,7 @@ test('every path box offers a browser, and the browser asks the host to list a f
   assert.match(card, /function PathPicker\(\{ ctx, t, value, onChange, placeholder, mode = "file", accept = "", onNotice \}\)/, 'the reusable picker exists')
   assert.match(card, /ctx\.remote\.weixin\.fsList\(\{/, 'the browser lists through the host')
   assert.match(card, /filter: mode === "dir" \? "dir" : undefined/, 'a folder box asks for folders only')
-  assert.match(card, /onNotice\?\.\(t\("当前环境没有系统选择器，用下面的内置浏览。"/, 'a missing native chooser is explained')
+  assert.match(card, /const askNativeChooser = async \(\) => \{/, 'the native chooser is a separate, secondary step')
   // Both migration path boxes are wired to it: the pack to open, and where to
   // write the new one. A typed absolute path also opens the browser where the
   // operator was looking rather than at $HOME.
@@ -1099,4 +1099,18 @@ test('the model boxes come from the host catalogue instead of free text', () => 
   assert.match(card, /const MODEL_PAIRS = \{/, 'provider and model are chosen as a pair')
   assert.match(card, /不在宿主的模型列表里|not in the host's list/, 'a saved value the host no longer has is called out, not silently dropped')
   assert.match(card, /catalogState\.partial/, 'a partially readable settings file says the list may be short')
+})
+
+test('the browse button opens the browser on the click, and asks the native chooser after', () => {
+  // The first version awaited the native chooser before showing anything. On the
+  // Web GUI that resolves to "no chooser", but only after a Remote round trip —
+  // so the click looked dead for as long as the carrier took.
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  const start = card.indexOf('const openBrowser = () => {')
+  assert.ok(start > 0, 'openBrowser is synchronous')
+  const body = card.slice(start, card.indexOf('const askNativeChooser', start))
+  const setOpen = body.indexOf('setOpen(true)')
+  const loadAt = body.indexOf('load(absolute ? typed : "")')
+  assert.ok(setOpen > 0 && loadAt > setOpen, 'the panel opens before anything is awaited')
+  assert.ok(body.includes('askNativeChooser()'), 'the desktop chooser is still offered, just not first')
 })

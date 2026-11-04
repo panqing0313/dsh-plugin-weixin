@@ -4252,3 +4252,11 @@ release run `41485882140` success）。
 - 发布方式走 CI：`git tag -a v1.5.3` → push → `release.yml` run `41786926460`，4 分 36 秒全绿（`NPM_TOKEN` + `id-token: write`，带 provenance）；`node bin/release.mjs --finish 1.5.3` 四步全绿。
 - 核验：`dist-tags.latest = 1.5.3`、`dist.shasum 6305f675f86e01306d8678df80ecdbf959edc425`、`dist.integrity sha512-9JWoqcv6m+Au2gan0YH4NDUd+hZbNTWkZXbwD3TTXMT4GI8MkxVBJh/XelgKkIsvy6IgCNA7DKyedB7E9wcXGA==`、`gitHead fdfe32c4deca6e761324153f529d99ce8f9a0584`（= 本地 HEAD）；`doctor` → `installed 1.5.3` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.3)`；profile `^1.5.2 → ^1.5.3`，锁文件刷新。
 - 这一版两处修必须重启 DSH 才能看到：账单页签改的是宿主侧读取逻辑，路径框与模型下拉改的是卡片。重启后请复核：账单页签有没有数字、维护页签两个路径框的「浏览…」、配置项里模型是不是下拉框。
+
+### 1.5.3 的两次修补（用户实测反馈）
+
+重启后用户先报了「首次点击 Browse 没反应，导出还报问题」，随后 82 MB 的包导成功了（`Wrote 1467 file(s), 82.0 MB`），说明流式封包这条路是对的，剩下的都是**界面与路径细节**：
+
+- **Browse 没反应**：`openBrowser` 原来是 `await pickDirectory(ctx)` 成功/失败之后才 `setOpen(true)`。Web 界面里 `pickDirectory` 走 `ctx.remote.directoryPicker`，要过一次 Remote 往返才返回 `PICK_UNAVAILABLE`；期间界面完全没变化。改成同步打开面板、立刻 `load(目标目录)`，桌面宿主的系统选择器挪到 `askNativeChooser()` 里随后再问，选到就覆盖。内嵌浏览器也提了层级（`position: relative` + `zIndex: 20` + 不透明底色），免得被后面的输入框盖住。
+- **导出/打开路径的三种错法**：`migrateInspect` / `migrateRestore` 拿到的路径现在先过 `packPathProblem()` —— 不存在、不是普通文件、是文件夹、是 0 字节，各给一句中文；`migrateExport` 的 `outDir` 以 `.enc` 结尾时按「这是文件名」处理（取其所在文件夹，用 stamp 命名），指向已有文件时明说「是个文件，不是文件夹」。`src/backup-crypto.js` 的四条英文错误也换成了中文（口令不对 / 不是迁移包 / 包不完整 / 需要一个口令），`test/backup-crypto.test.js` 的断言同步改成中文。
+- 测试：新增 `test/migrate-pack.test.js` 2 条（文件夹与空文件给中文原因、`.enc` 结尾的 outDir 落到文件夹且不留垃圾）、`test/client-remote.test.js` 1 条（`openBrowser` 同步打开面板，`askNativeChooser` 是随后的一步）；全量 **1213/1213**。

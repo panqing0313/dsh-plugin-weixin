@@ -52,6 +52,33 @@ import { readModelCatalog } from "./model-catalog.js";
  * 每个「用途」对应的两个配置键。卡片用它们把下拉框里的选择标成「当前值」，
  * 也用来在宿主目录里找不到已保存的组合时如实说明。
  */
+/**
+ * What is wrong with a path that is supposed to be a migration pack.
+ *
+ * The card used to hand whatever was in the box straight to the crypto layer,
+ * so a folder came back as `EISDIR: illegal operation on a directory, read` —
+ * an accurate sentence addressed to a programmer, shown to someone who had
+ * simply clicked the wrong thing. Empty string means the path is fine to try.
+ *
+ * @param {string} file
+ * @returns {string}
+ */
+function packPathProblem(file) {
+    if (fs.existsSync(file) === false) return `找不到文件：${file}`;
+    let stat;
+    try {
+        stat = fs.statSync(file);
+    } catch (error) {
+        return `读不了这个文件：${error?.code ?? error}`;
+    }
+    if (stat.isDirectory()) {
+        return `${file} 是个文件夹 —— 这里要的是选中的那一个 .enc 迁移包`;
+    }
+    if (stat.isFile() === false) return `${file} 不是普通文件`;
+    if (stat.size === 0) return `${file} 是空文件（0 字节），导出没有写完或者拷贝时被打断了`;
+    return "";
+}
+
 const MODEL_ROUTE_KEYS = {
     chat: { provider: "chatProvider", model: "chatModel" },
     side: { provider: "sideProvider", model: "sideModel" },
@@ -1003,12 +1030,23 @@ export class WeixinLoginController extends TypertRemoteService {
         // Where the pack lands is part of the answer: the operator asked "导出到
         // 哪去了" and the card only ever said it failed. `outDir` is the folder
         // chosen in the card's picker; the state root's backups/ is the default.
+        //
+        // A path that ends in `.enc` is a *file*, not a folder — someone who
+        // pasted the name they want (or the pack they are about to move) gets
+        // their folder used and their name kept, instead of a directory called
+        // `migrate-x.enc` with a pack inside it.
+        const requested = typeof options?.outDir === "string" ? options.outDir.trim() : "";
         const outDir =
-            typeof options?.outDir === "string" && options.outDir.trim() !== ""
-                ? path.resolve(options.outDir.trim())
-                : path.join(stateDir(), "backups");
+            requested === ""
+                ? path.join(stateDir(), "backups")
+                : /[.]enc$/i.test(requested)
+                    ? path.dirname(path.resolve(requested))
+                    : path.resolve(requested);
         const outFile = path.join(outDir, `migrate-${stamp}.enc`);
         try {
+            if (fs.existsSync(outDir) && fs.statSync(outDir).isDirectory() === false) {
+                return { file: "", outDir, error: `${outDir} 是个文件，不是文件夹 —— 导出需要写成新文件，请换一个文件夹` };
+            }
             fs.mkdirSync(outDir, { recursive: true });
             const result = sealState(stateDir(), {
                 passphrase,
@@ -1034,7 +1072,8 @@ export class WeixinLoginController extends TypertRemoteService {
         const file = typeof options?.file === "string" ? options.file.trim() : "";
         const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
         if (file === "") return { error: "需要一个 .enc 迁移包文件的路径" };
-        if (fs.existsSync(file) === false) return { error: `找不到文件：${file}` };
+        const wrong = packPathProblem(file);
+        if (wrong !== "") return { error: wrong };
         try {
             const opened = openState(file, { passphrase });
             const root = path.resolve(stateDir());
@@ -1079,7 +1118,8 @@ export class WeixinLoginController extends TypertRemoteService {
         const file = typeof options?.file === "string" ? options.file.trim() : "";
         const passphrase = typeof options?.passphrase === "string" ? options.passphrase : "";
         if (file === "") return { error: "需要一个 .enc 迁移包文件的路径" };
-        if (fs.existsSync(file) === false) return { error: `找不到文件：${file}` };
+        const wrong = packPathProblem(file);
+        if (wrong !== "") return { error: wrong };
         let opened;
         try {
             opened = openState(file, { passphrase });
