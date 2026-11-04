@@ -383,6 +383,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixin/migrateRestore:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixin/promptPreview`,
+					service: "weixinLoginController",
+					namespace: "weixin",
+					method: "promptPreview",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "options", wire: "options", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixin/promptPreview:p0`, create: _strMap } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixin/promptPreview:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixin/packInstallPreset`,
 					service: "weixinLoginController",
 					namespace: "weixin",

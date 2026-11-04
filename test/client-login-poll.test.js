@@ -806,7 +806,10 @@ test('the options form speaks the UI language, and starts folded', async () => {
 
   const folded = textOf(card.render())
   assert.ok(folded.includes('基本'), `the group heading must be Chinese, got: ${folded}`)
-  assert.ok(folded.includes('权限'), 'every group heading is listed')
+  // A group whose fields are all filtered out is not a heading anyone can act
+  // on, so the form drops it: "权限" is here to say the filter is by *field*,
+  // not by group, and an empty group would have shown as a dead row.
+  assert.ok(!folded.includes('权限'), 'a group with nothing to show is dropped, not listed empty')
   assert.ok(!folded.includes('Basics'), `English headings must not leak into a Chinese UI, got: ${folded}`)
   assert.ok(!folded.includes('发送间隔'), 'groups start folded: no field is rendered until one is opened')
 

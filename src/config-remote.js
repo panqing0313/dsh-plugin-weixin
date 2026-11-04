@@ -313,6 +313,7 @@ export const FIELDS = [
         },
         {
           path: "personaDefaultMode",
+          promptMarked: true,
           type: T.string,
           default: "default",
           label: "默认模式",
@@ -322,6 +323,7 @@ export const FIELDS = [
         },
         {
           path: "memoryEnabled",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "记忆",
@@ -331,6 +333,7 @@ export const FIELDS = [
         },
         {
           path: "memorySummaryTurns",
+          promptMarked: true,
           type: T.number,
           default: 10,
           min: 1,
@@ -372,6 +375,7 @@ export const FIELDS = [
         },
         {
           path: "memoryGlobalMaxFacts",
+          promptMarked: true,
           type: T.number,
           default: 30,
           min: 1,
@@ -386,6 +390,7 @@ export const FIELDS = [
         },
         {
           path: "memoryConvMaxChars",
+          promptMarked: true,
           type: T.number,
           default: 1200,
           min: 100,
@@ -503,6 +508,7 @@ export const FIELDS = [
         },
         {
           path: "memoryRecentTurns",
+          promptMarked: true,
           type: T.number,
           default: 5,
           min: 0,
@@ -523,6 +529,7 @@ export const FIELDS = [
       fields: [
         {
           path: "humanPacing",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "陪聊节奏",
@@ -532,6 +539,7 @@ export const FIELDS = [
         },
         {
           path: "replyDelayMaxMs",
+          promptMarked: true,
           type: T.number,
           default: 2400,
           min: 0,
@@ -546,6 +554,7 @@ export const FIELDS = [
         },
         {
           path: "bubbleSplitMax",
+          promptMarked: true,
           type: T.number,
           default: 3,
           min: 1,
@@ -560,6 +569,7 @@ export const FIELDS = [
         },
         {
           path: "bubbleGapMs",
+          promptMarked: true,
           type: T.number,
           default: 700,
           min: 0,
@@ -574,6 +584,7 @@ export const FIELDS = [
         },
         {
           path: "lifeState",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "生活状态",
@@ -592,6 +603,7 @@ export const FIELDS = [
         },
         {
           path: "toolNotices",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "危险工具提醒",
@@ -601,6 +613,7 @@ export const FIELDS = [
         },
         {
           path: "stickerEnabled",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "表情图片",
@@ -639,6 +652,7 @@ export const FIELDS = [
         },
         {
           path: "stickerKeepBuiltins",
+          promptMarked: true,
           type: T.boolean,
           default: false,
           label: "保留内置表情",
@@ -724,6 +738,7 @@ export const FIELDS = [
       fields: [
         {
           path: "memoryRecall",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "本地回忆检索",
@@ -733,6 +748,7 @@ export const FIELDS = [
         },
         {
           path: "memoryRecallDays",
+          promptMarked: true,
           type: T.number,
           default: 180,
           min: 7,
@@ -747,6 +763,7 @@ export const FIELDS = [
         },
         {
           path: "memoryRecallHits",
+          promptMarked: true,
           type: T.number,
           default: 3,
           min: 1,
@@ -761,6 +778,7 @@ export const FIELDS = [
         },
         {
           path: "knowledgeEnabled",
+          promptMarked: true,
           type: T.boolean,
           default: true,
           label: "知识库",
@@ -770,6 +788,7 @@ export const FIELDS = [
         },
         {
           path: "knowledgeHits",
+          promptMarked: true,
           type: T.number,
           default: 3,
           min: 1,
@@ -896,6 +915,7 @@ export const FIELDS = [
         },
         {
           path: "webhookSecret",
+          secret: true,
           type: T.text,
           default: "",
           label: "webhook 签名密钥",
@@ -914,6 +934,7 @@ export const FIELDS = [
         },
         {
           path: "notifyToken",
+          secret: true,
           type: T.string,
           default: "",
           label: "token（留空自动生成）",
@@ -1353,6 +1374,12 @@ export class ConfigController extends TypertRemoteService {
           defaultValue: present(field, field.default),
           source,
           readOnly: READ_ONLY.has(field.path),
+          // Two annotations the card relies on, both derived here so they cannot
+          // disagree with the table the host actually uses: a secret is never
+          // exported, and a ⭐ marks the options that end up in the model prompt
+          // (the 「提示词」 tab is where you see the result).
+          secret: field.secret === true,
+          promptMarked: field.promptMarked === true,
           options: field.options ?? undefined,
           min: field.min,
           max: field.max,

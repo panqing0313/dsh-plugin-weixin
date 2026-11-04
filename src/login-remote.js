@@ -30,6 +30,7 @@ import {
     readAccountDefaultMode,
     readGlobalDefaultMode,
     readPersonaStore,
+    buildPersonaBlock,
     resolveMode,
     setActiveMode,
     writeAccountDefaultMode,
@@ -43,6 +44,12 @@ import { detectHostVersion, hostStatus } from "./host-compat.js";
 import { listKnowledgeSources } from "./message/knowledge.js";
 import { buildOnboardingChecklist } from "./onboarding.js";
 import { lifeSummary, readOrInferLifeState } from "./message/life-state.js";
+import { lifeBlock } from "./message/life-state.js";
+import { buildHumanStyleBlock, isCompanionMode } from "./message/human-pace.js";
+import { buildStyleFeedbackBlock, readStyleRules } from "./message/style-feedback.js";
+import { usageAwarenessLine } from "./message/usage-ledger.js";
+import { buildMemoryBlock } from "./memory.js";
+import { readConvMemory } from "./memory.js";
 import { qrDataUrl } from "./qr-png.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -1069,6 +1076,75 @@ export class WeixinLoginController extends TypertRemoteService {
         }
     }
 
+    /**
+     * The system prompt the next message would carry, assembled from the SAME
+     * builders the inbound path uses — not a second implementation. A preview
+     * that drifts from the real prompt would be worse than none: it is the one
+     * screen meant to settle "what do you actually send?".
+     *
+     * It is a best-effort approximation of the message-scoped blocks: recall and
+     * knowledge search need a question, so they are previewed with a canned
+     * probe rather than the user's next words. Everything persona, style, memory,
+     * life, usage and grouping related is exact.
+     *
+     * @param {{ modeId?: string }} [options]
+     */
+    async promptPreview(options) {
+        const live = readSavedConfig();
+        const root = stateDir();
+        const warn = () => {};
+        const store = readPersonaStore(root, { warn });
+        const modes = (store?.modes ?? []).map((mode) => ({ id: mode.id, label: typeof mode.label === "string" && mode.label !== "" ? mode.label : mode.id }));
+        const requested = typeof options?.modeId === "string" && options.modeId !== "" ? options.modeId : "";
+        const accountId = String(live.accountId ?? "");
+        const conversationId = `preview:${accountId === "" ? "account" : accountId}`;
+        const effectiveModeId = requested !== "" ? requested : (live.personaDefaultMode ?? DEFAULT_MODE_ID);
+        const mode = resolveMode(store, effectiveModeId);
+        const companion = isCompanionMode(mode);
+
+        const personaBlock = buildPersonaBlock(mode);
+        const styleBlock = companion
+            ? buildHumanStyleBlock({ stickers: live.stickerEnabled !== false, modeId: mode?.id, stateRoot: root, keepBuiltins: live.stickerKeepBuiltins === true })
+            : "";
+        const feedbackBlock = buildStyleFeedbackBlock(readStyleRules(root, accountId, { modeId: mode?.id, warn }));
+        const convMemory = accountId === "" ? {} : readConvMemory(root, accountId, conversationId, { warn });
+        const life = companion && live.lifeState !== false
+            ? readOrInferLifeState(root, accountId, { bond: convMemory?.bond, persist: false, warn })
+            : null;
+        const lifeBlockText = life === null ? "" : lifeBlock(life);
+        const memoryBlock = live.memoryEnabled === true && accountId !== ""
+            ? buildMemoryBlock({
+                global: readGlobalMemory(root, accountId, { warn }),
+                maxTokens: Number(live.memoryGlobalMaxTokens ?? 0),
+                conv: convMemory,
+                recent: [],
+                includeBond: companion,
+            })
+            : "";
+        const usageBlock = live.usageAwarenessEnabled !== false && accountId !== ""
+            ? usageAwarenessLine(root, accountId, conversationId, {
+                priceInPer1k: Number(live.pricePer1kInputYuan ?? 0),
+                priceOutPer1k: Number(live.pricePer1kOutputYuan ?? 0),
+                warn,
+            })
+            : "";
+        const blocks = [personaBlock, styleBlock, feedbackBlock, lifeBlockText, memoryBlock, usageBlock].filter((block) => typeof block === "string" && block !== "");
+        const probe = "（预览：这里会是下一条消息的原文）";
+        const prompt = [...blocks, probe].join("\n\n");
+
+        return {
+            modeId: typeof mode?.id === "string" ? mode.id : String(effectiveModeId),
+            modeLabel: typeof mode?.label === "string" && mode.label !== "" ? mode.label : (mode?.id ?? effectiveModeId),
+            modes,
+            chars: prompt.length,
+            // Same rough factor the bill tab uses: characters ÷ 2 for mixed CJK.
+            estimatedTokens: Math.ceil(prompt.length / 2),
+            layers: blocks.map((block) => ({ chars: block.length, head: block.split("\n")[0].slice(0, 40) })),
+            prompt,
+            previewedAt: Date.now(),
+        };
+    }
+
     async storage() {
         const live = readSavedConfig();
         return {
@@ -1393,4 +1469,4 @@ export function purgeStaleLogins() {
     }
 }
 
-remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "migrateSummary", "migrateExport", "migrateInspect", "migrateRestore", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);
+remoteMethods(WeixinLoginController, ["startLogin", "poll", "submitVerifyCode", "cancel", "status", "logout", "sessions", "useSession", "removeSession", "pause", "resume", "label", "allowlist", "journal", "journalExport", "stats", "onboarding", "storage", "metrics", "outbox", "outboxRetry", "outboxDrop", "reminders", "remindCancel", "donateQr", "donateQrAlipay", "usageLedger", "personaOverview", "personaExport", "personaImport", "contacts", "contactSave", "packExport", "packImport", "packIndex", "packInstallRemote", "packPresets", "packInstallPreset", "migrateSummary", "migrateExport", "migrateInspect", "migrateRestore", "promptPreview", "personaModeSave", "personaModeRemove", "personaDefaultSet", "personaAccountDefaultSet", "personaOverrideClear", "memoryFactAdd", "memoryFactRemove", "memoryConvClear", "memoryProfileSave", "memoryEventAdd", "memoryEventDone", "memoryEventRemove"]);

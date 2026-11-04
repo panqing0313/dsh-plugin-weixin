@@ -286,6 +286,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixin/personaOverrideClear',
         'weixin/personaOverview',
         'weixin/poll',
+        'weixin/promptPreview',
         'weixin/remindCancel',
         'weixin/reminders',
         'weixin/removeSession',
@@ -1043,4 +1044,29 @@ test('the maintenance tab seals two-step: inspect before restore, and clear the 
     assert.ok((source.match(/type: "password"/g) ?? []).length >= 2, 'both passphrase inputs are password fields')
     assert.ok(mounted !== undefined)
   })
+})
+
+test('the card copy of the config-effect table matches src/config-effect.js', async () => {
+  // The card is a browser chunk and cannot import a Node module, so the "when
+  // does this take effect" table is copied into it. Three sources now agree:
+  // the schema (checked by config-effect.test.js), the host table, and this
+  // copy. This guard is what keeps the third one from drifting silently —
+  // a wrong badge is worse than no badge, because the user acts on it.
+  const canon = fs.readFileSync(new URL('../src/config-effect.js', import.meta.url), 'utf8')
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  const pairRe = /['"]([A-Za-z0-9_.]+)['"]\s*:\s*['"](live|restart|login)['"]/g
+  /** @type {Record<string, string>} */
+  const table = {}
+  let match
+  while ((match = pairRe.exec(canon)) !== null) table[match[1]] = match[2]
+  assert.ok(Object.keys(table).length > 100, 'the host table should be big enough to be worth copying')
+  for (const [field, kind] of Object.entries(table)) {
+    assert.match(card, new RegExp(`"${field}": "${kind}"`), `the card should say ${field} is ${kind}`)
+  }
+  // …and nothing extra: a stale entry in the copy would badge a field the host
+  // no longer knows about.
+  const copyRe = /"([A-Za-z0-9_.]+)": "(live|restart|login)"/g
+  while ((match = copyRe.exec(card)) !== null) {
+    assert.equal(table[match[1]], match[2], `the card has a stale effect for ${match[1]}`)
+  }
 })

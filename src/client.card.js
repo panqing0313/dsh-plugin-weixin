@@ -59,6 +59,139 @@ window.__ModuleLoader__.load({
 				pickDirectory,
 			} = deps;
 
+			/**
+			 * When a saved option actually takes effect.
+			 *
+			 * The card is a browser chunk and cannot import a Node module, and the
+			 * entry module deliberately imports nothing (the test loads it in a
+			 * bare sandbox). So the table is copied here — and `config-effect.test.js`
+			 * reads this file and fails when the copy drifts from `src/config-effect.js`,
+			 * which is itself checked against the schema. Three sources, two guards.
+			 */
+			const CONFIG_EFFECT_KINDS = ["live", "restart", "login"];
+			const CONFIG_EFFECTS = {
+				"sendIntervalMs": "restart", "voiceOutbound": "restart", "ocrTimeoutMs": "restart", "notifyPort": "restart", "eventPollMs": "restart",
+				"asr": "restart",
+				"enabled": "live", "accountId": "live", "cwd": "live", "allowedSenders": "live", "allowedChats": "live",
+				"maxMessageLength": "live", "sendCooldownMs": "live", "messageJournal": "live", "personaDefaultMode": "live", "memoryEnabled": "live",
+				"memorySummaryTurns": "live", "memoryStaleDays": "live", "memoryGlobalMaxFacts": "live", "memorySimilarityRoute": "live", "memoryConvMaxChars": "live", "memoryGlobalMaxTokens": "live",
+				"chatProvider": "live", "chatModel": "live", "sideProvider": "live", "sideModel": "live", "documentExtract": "live",
+				"ocrEnabled": "live", "ocrCommand": "live", "ocrMaxChars": "live", "documentTextChars": "live", "proactiveProvider": "live",
+				"proactiveModel": "live", "reportProvider": "live", "reportModel": "live", "memoryProvider": "live", "memoryModel": "live",
+				"memoryRecentTurns": "live", "memoryRecall": "live", "memoryRecallDays": "live", "memoryRecallHits": "live", "knowledgeEnabled": "live", "knowledgeHits": "live", "humanPacing": "live",
+				"replyDelayMaxMs": "live", "bubbleSplitMax": "live", "bubbleGapMs": "live", "lifeState": "live", "stickerEnabled": "live",
+				"stickerKeepBuiltins": "live", "ttsVoice": "live", "voiceReplies": "live", "voiceReplyMaxChars": "live",
+				"proactiveEnabled": "live", "proactiveMinGapMinutes": "live", "proactiveMaxPerDay": "live", "proactiveWindowStart": "live", "proactiveWindowEnd": "live", "proactiveLearnedWindow": "live",
+				"groupChatEnabled": "live", "groupReplyWhen": "live", "groupBotNames": "live", "groupKeywords": "live", "packsIndexUrl": "live",
+				"groupSummaryEnabled": "live", "groupSummaryEvery": "live", "contactStaleDays": "live", "contactRefreshEnabled": "live", "contactRefreshPerDay": "live",
+				"pricePer1kInputYuan": "live", "pricePer1kOutputYuan": "live", "usageAwarenessEnabled": "live",
+				"groupShareMemory": "live", "videoFrames": "live", "richContent": "live", "codeFileThreshold": "live", "locale": "live",
+				"toolNotices": "live", "quietHoursEnabled": "live", "quietHoursStart": "live", "quietHoursEnd": "live", "senderRatePerMinute": "live",
+				"senderDailyLimit": "live", "maxQueuedPerConversation": "live", "retentionJournalDays": "live", "retentionAuditDays": "live", "retentionMediaDays": "live",
+				"retentionExportsDays": "live", "retentionLogsDays": "live", "dryRun": "live", "metricsExport": "live", "backupEnabled": "live",
+				"backupKeep": "live", "notifyEnabled": "live", "notifyToken": "live", "webhookUrl": "live", "webhookSecret": "live",
+				"webhookTimeoutMs": "live", "awayAutoReply": "live", "dateReminderEnabled": "live", "dateReminderWhen": "live", "mediaMaxBytes": "live",
+				"dateReminderLeadDays": "live", "digestEnabled": "live", "backgroundDailyLimit": "live", "digestWhen": "live", "memoryReviewEnabled": "live",
+				"memoryReviewWhen": "live", "toolAudit": "live", "markdownMode": "live", "busyMessageMode": "live", "sourceContext": "live",
+				"readLinks": "live", "progressAfterMs": "live", "progressToolAfterMs": "live", "progressEveryMs": "live", "maxTurnWaitMs": "live",
+				"typingIndicator": "live", "mediaEnabled": "live", "autoSendFiles": "live", "maxMediaBytes": "live", "maxInboundMediaBytes": "live",
+				"cdnBaseUrl": "live",
+			};
+
+			/** A saved option's effect, in words the user can act on. */
+			function effectLabel(kind) {
+				if (kind === "restart") return { label: "重启后生效", labelEn: "takes effect after a restart" };
+				if (kind === "login") return { label: "重新登录后生效", labelEn: "takes effect after signing in again" };
+				return { label: "保存即生效", labelEn: "takes effect immediately" };
+			}
+
+			function effectOf(field) {
+				return CONFIG_EFFECTS[field] ?? "live";
+			}
+
+						/**
+			 * A read-only page of the prompt, built on the host for whichever mode
+			 * is in use. This is the one screen that answers "what does it
+			 * actually send?" — and it is the answer that the ⭐ badge on a
+			 * 影响提示词 option points at.
+			 */
+			function PromptSection({ ctx, t }) {
+				const [modes, setModes] = react.useState([]);
+				const [modeId, setModeId] = react.useState("");
+				const [prompt, setPrompt] = react.useState("");
+				const [stats, setStats] = react.useState(null);
+				const [error, setError] = react.useState("");
+				const [busy, setBusy] = react.useState(false);
+
+				const load = react.useCallback(async (id) => {
+					setBusy(true);
+					setError("");
+					try {
+						const r = await callRemote(() => ctx.remote.weixin.promptPreview({ modeId: id ?? "" }));
+						setPrompt(String(r?.prompt ?? ""));
+						setStats({
+							chars: Number(r?.chars ?? 0),
+							estimate: Number(r?.estimatedTokens ?? 0),
+							layers: Array.isArray(r?.layers) ? r.layers : [],
+							modeLabel: String(r?.modeLabel ?? ""),
+						});
+					} catch (err) {
+						setError(String(err?.message ?? err));
+					} finally {
+						setBusy(false);
+					}
+				}, [ctx]);
+
+				react.useEffect(() => {
+					(async () => {
+						try {
+							const r = await callRemote(() => ctx.remote.weixin.promptPreview({}));
+							setModes(Array.isArray(r?.modes) ? r.modes : []);
+							setModeId(String(r?.modeId ?? ""));
+							setPrompt(String(r?.prompt ?? ""));
+							setStats({
+								chars: Number(r?.chars ?? 0),
+								estimate: Number(r?.estimatedTokens ?? 0),
+								layers: Array.isArray(r?.layers) ? r.layers : [],
+								modeLabel: String(r?.modeLabel ?? ""),
+							});
+						} catch (err) {
+							setError(String(err?.message ?? err));
+						}
+					})();
+				}, [ctx]);
+
+				return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+					createElement("p", { style: hintStyle },
+						t("This is the system prompt the next message would carry, with the current options. It is built on the host and changes nothing.",
+							"这是下一条消息会带上的系统提示词，按当前配置拼出来的。它只读，不会改动任何东西。")),
+					error === "" ? null : createElement("p", { style: { ...hintStyle, color: C.danger } }, error),
+					createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+						modes.length === 0
+							? null
+							: createElement("select", {
+									value: modeId,
+									onChange: (event) => { setModeId(event.target.value); load(event.target.value); },
+									style: { ...inputStyle, flex: "0 0 auto" },
+								}, ...modes.map((mode) => createElement("option", { key: mode.id, value: mode.id }, mode.label ?? mode.id))),
+						createElement("button", { onClick: () => load(modeId), disabled: busy, style: buttonStyleFor(busy) },
+							busy ? t("Building…", "正在拼…") : t("Rebuild", "重新生成"))),
+					stats === null ? null : createElement("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", ...captionStyle } },
+						createElement("span", null, t(`chars ${stats.chars}`, `字数 ${stats.chars}`)),
+						createElement("span", null, t(`≈${stats.estimate} tokens`, `约 ${stats.estimate} tokens`)),
+						createElement("span", null, t(`mode: ${stats.modeLabel}`, `模式：${stats.modeLabel}`)),
+						createElement("span", { style: hintStyle }, t("the estimate is characters ÷ 2", "估算是字数 ÷ 2"))),
+					createElement("pre", {
+						style: {
+							margin: 0, padding: 12, borderRadius: RADIUS.control,
+							background: C.surfaceSunken, color: C.labelPrimary,
+							fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+							fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap",
+							wordBreak: "break-word", maxHeight: 480, overflowY: "auto",
+						},
+					}, prompt === "" ? t("(empty)", "（空）") : prompt));
+			}
+
 			//#region design layer
 			/**
 			 * The card's own stylesheet.
@@ -273,6 +406,9 @@ window.__ModuleLoader__.load({
 				const shapes = {
 					account: [createElement("circle", { key: "h", cx: 12, cy: 8, r: 4 }), createElement("path", { key: "b", d: "M4.5 20a7.5 7.5 0 0 1 15 0" })],
 					sessions: [createElement("path", { key: "b", d: "M21 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 3v-5.2A7.5 7.5 0 0 1 11.5 4h2A7.5 7.5 0 0 1 21 11.5Z" })],
+					prompt: [
+						createElement("path", { key: "a", d: "M5 6h.01M9 6h10M5 12h.01M9 12h10M5 18h.01M9 18h6" }),
+					],
 					options: [
 						createElement("path", { key: "a", d: "M4 7h9M17 7h3" }),
 						createElement("circle", { key: "b", cx: 15, cy: 7, r: 2 }),
@@ -2655,6 +2791,14 @@ window.__ModuleLoader__.load({
 			const [error, setError] = react.useState("");
 			const [configPath, setConfigPath] = react.useState("");
 			const [openGroup, setOpenGroup] = react.useState("");
+			// D1: 109 options across 12 groups does not fit in anyone's head.
+			// Search matches label, hint, path and current value, because a user
+			// looking for "weight" may be typing the key they saw in a doc.
+			const [search, setSearch] = react.useState("");
+			const [onlyDirty, setOnlyDirty] = react.useState(false);
+			// D4: the batch filed on the wire as a JSON string (no array codec).
+			const [portable, setPortable] = react.useState("");
+			const [portableNotice, setPortableNotice] = react.useState("");
 			// The host answers with localized validation messages, so it needs to
 			// know which language the card is showing.
 			const { lang } = useLocaleText(ctx);
@@ -2839,7 +2983,7 @@ window.__ModuleLoader__.load({
 					},
 					createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
 						createElement("span", { style: { fontSize: 13, fontWeight: 600, color: C.labelPrimary } },
-							t(field.labelEn, field.label)),
+							(field.promptMarked ? "\u2b50 " : "") + t(field.labelEn, field.label)),
 						// Where the value comes from decides what a reset will
 						// do, so it is shown rather than inferred.
 						field.source === "saved"
@@ -2851,6 +2995,18 @@ window.__ModuleLoader__.load({
 								: null,
 						field.readOnly
 							? createElement("span", { style: captionStyle }, t("(read-only here)", "（此处只读）"))
+							: null,
+						// D2: "saved" is not "in effect". The badge is the whole point
+						// of this row — it is what stops "I changed it and nothing
+						// happened" from becoming a bug report.
+						!field.readOnly && field.source === "saved"
+							? createElement("span", {
+									style: {
+										...captionStyle, padding: "1px 6px", borderRadius: RADIUS.pill,
+										border: `1px solid ${effectOf(field.path) === "live" ? C.border : C.warn}`,
+										color: effectOf(field.path) === "live" ? C.labelTertiary : C.warn,
+									},
+								}, t(effectLabel(effectOf(field.path)).labelEn, effectLabel(effectOf(field.path)).label))
 							: null,
 						field.source === "saved" && !field.readOnly
 							? createElement("button", {
@@ -2866,14 +3022,124 @@ window.__ModuleLoader__.load({
 						: null);
 			};
 
+			// D1: the needle is matched case-insensitively against everything a
+			// human might remember about an option — its label, its hint, the key
+			// they read in a doc, and the value on screen. Matching only labels
+			// made "404" (a port inside a hint) unsearchable.
+			const needle = search.trim().toLowerCase();
+			const matches = (field) => {
+				if (needle === "") return true;
+				const hay = [field.label, field.labelEn, field.hint, field.hintEn, field.path, String(draft[field.path] ?? field.value ?? "")]
+					.join(" ").toLowerCase();
+				return hay.includes(needle);
+			};
+			const visibleGroups = groups.map((group) => {
+				const fields = (group.fields ?? []).filter((field) => matches(field)
+					&& (onlyDirty === false || dirtyPaths.includes(field.path)));
+				return { ...group, fields };
+			}).filter((group) => group.fields.length > 0);
+			const visibleCount = visibleGroups.reduce((sum, group) => sum + group.fields.length, 0);
+			// Searching or filtering without opening a section would show a list
+			// of collapsed headers and look broken, so a search opens what it
+			// found; picking a section by hand still collapses the others.
+			const groupOpen = (name) => (needle !== "" || onlyDirty === true ? true : openGroup === name);
+
+			// D4: a portable batch of the *saved* values, secrets left out. It
+			// travels as JSON text so it can go through the same string channel
+			// the save batch uses, and so what the user copies is exactly what was
+			// validated.
+			const startupOnly = Object.entries(CONFIG_EFFECTS).filter(([, kind]) => kind === "restart").map(([field]) => field);
+			const portableExport = () => {
+				const entries = {};
+				for (const group of groups) {
+					for (const field of group.fields ?? []) {
+						if (field.source !== "saved") continue;
+						// Secrets never leave the machine: a config file in a chat
+						// message or a screenshot is how tokens leak.
+						if (field.secret === true) continue;
+						entries[field.path] = field.value;
+					}
+				}
+				setPortable(JSON.stringify(entries, null, 2));
+				setPortableNotice(t(
+					`Copied ${Object.keys(entries).length} saved option(s). Secrets are never included.${startupOnly.length > 0 ? ` These need a restart: ${startupOnly.join(", ")}.` : ""}`,
+					`已导出 ${Object.keys(entries).length} 项已保存配置。密钥项一律不导出。${startupOnly.length > 0 ? ` 其中这些要重启后才生效：${startupOnly.join("、")}。` : ""}`));
+			};
+			const portableImport = () => {
+				let parsed;
+				try {
+					parsed = JSON.parse(portable);
+				} catch {
+					setPortableNotice(t("That is not JSON — paste the export as-is.", "这不是合法 JSON——原样粘贴导出的那一块。"));
+					return;
+				}
+				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+					setPortableNotice(t("The export is a JSON object of option name → value.", "导出内容是一个「配置名 → 值」的 JSON 对象。"));
+					return;
+				}
+				// Only fields this build knows and the user may write. An unknown
+				// key typed by hand would otherwise sit in the draft looking saved.
+				const known = new Set();
+				for (const group of groups) for (const field of group.fields ?? []) if (field.readOnly !== true && field.secret !== true) known.add(field.path);
+				const next = { ...draft };
+				const applied = [];
+				const rejected = [];
+				for (const [path, value] of Object.entries(parsed)) {
+					if (known.has(path) === false) { rejected.push(path); continue; }
+					next[path] = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+					applied.push(path);
+				}
+				setDraft(next);
+				setPortableNotice(t(
+					`Applied ${applied.length} option(s) to the form — press Save to write them.${rejected.length > 0 ? ` Ignored ${rejected.length} unknown or secret option(s): ${rejected.join(", ")}.` : ""}`,
+					`已把 ${applied.length} 项填进表单——点「保存」才会写盘。${rejected.length > 0 ? ` 忽略了 ${rejected.length} 项未知或密钥配置：${rejected.join("、")}。` : ""}`));
+			};
+
 			return createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
 				createElement("p", { style: hintStyle },
 					t("These are the plugin's options. Saving writes them to the file below, so they survive a restart.",
 						"这里是插件的全部可配置项。保存会写入下方文件，重启后依然生效。")),
+				createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+					createElement("input", {
+						value: search,
+						onChange: (event) => setSearch(event.target.value),
+						placeholder: t("Search options (name, hint, value)", "搜索配置（名称、说明、当前值）"),
+						style: { ...inputStyle, flex: "1 1 220px", minWidth: 160 },
+					}),
+					createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 } },
+						createElement("input", {
+							type: "checkbox", checked: onlyDirty,
+							onChange: (event) => setOnlyDirty(event.target.checked === true),
+							style: { width: 15, height: 15, accentColor: C.primaryFill, cursor: "pointer" },
+						}),
+						createElement("span", null, t(`Only what changed (${dirtyPaths.length})`, `只看已改动（${dirtyPaths.length}）`))),
+					createElement("button", { onClick: portableExport, disabled: busy, style: buttonStyleFor(busy) },
+						t("Export changed values", "导出已保存配置")),
+					createElement("span", { style: captionStyle },
+						t(`${visibleCount} of ${groups.reduce((sum, group) => sum + (group.fields ?? []).length, 0)} options shown`,
+							`显示 ${visibleCount} / ${groups.reduce((sum, group) => sum + (group.fields ?? []).length, 0)} 项`))),
+				portable === ""
+					? null
+					: createElement("div", { style: { ...panelStyle, display: "flex", flexDirection: "column", gap: 8 } },
+						createElement("p", { style: panelTitleStyle }, t("Move options between machines", "把配置搬到另一台机器")),
+						createElement("textarea", {
+							value: portable,
+							rows: 8,
+							onChange: (event) => setPortable(event.target.value),
+							style: { ...inputStyle, width: "100%", fontFamily: "monospace", fontSize: 12, resize: "vertical", lineHeight: "18px" },
+						}),
+						createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+							createElement("button", { onClick: portableImport, disabled: busy, style: buttonStyleFor(busy) },
+								t("Apply pasted values", "应用粘贴的配置")),
+							createElement("button", {
+								onClick: () => { setPortable(""); setPortableNotice(""); },
+								disabled: busy, style: buttonStyleFor(busy),
+							}, t("Close", "收起"))),
+						portableNotice === "" ? null : createElement("p", { style: hintStyle }, portableNotice)),
 				error ? createElement("p", { style: { ...hintStyle, color: C.danger } }, error) : null,
 				message ? createElement("p", { style: { ...hintStyle, color: C.success } }, message) : null,
-				...groups.map((group) => {
-					const open = openGroup === group.group;
+				...visibleGroups.map((group) => {
+					const open = groupOpen(group.group);
 					return createElement("div", { key: group.group, style: panelStyle },
 						createElement("button", {
 								onClick: () => setOpenGroup(open ? "" : group.group),
@@ -3555,6 +3821,7 @@ window.__ModuleLoader__.load({
 					{ id: "account", label: t("WeChat account", "微信账号"), body: createElement(LoginSection, { ctx, t }) },
 					{ id: "sessions", label: t("Sessions", "会话"), body: createElement(SessionsSection, { ctx, t }) },
 					{ id: "options", label: t("Options", "配置项"), body: createElement(ConfigSection, { ctx, t }) },
+					{ id: "prompt", label: t("The prompt", "提示词"), body: createElement(PromptSection, { ctx, t }) },
 					{ id: "voice", label: t("Voice models", "语音模型"), body: createElement(AsrSection, { ctx, t }) },
 										{ id: "journal", label: t("Journal", "消息流水"), body: createElement(JournalSection, { ctx, t, focus: journalFocus, onClearFocus: () => setJournalFocus(null) }) },
 					{ id: "stats", label: t("Stats", "统计"), body: createElement(StatsSection, { ctx, t, onOpenConversation: openInJournal }) },
