@@ -34,7 +34,7 @@ export const CONFIG_EFFECTS = Object.freeze({
   // —— 保存即生效：每条消息 / 每个 tick 都重读存档配置 ——
   'enabled': 'live', 'accountId': 'live', 'cwd': 'live', 'allowedSenders': 'live', 'allowedChats': 'live',
   'maxMessageLength': 'live', 'sendCooldownMs': 'live', 'messageJournal': 'live', 'personaDefaultMode': 'live', 'memoryEnabled': 'live',
-  'memorySummaryTurns': 'live', 'memoryStaleDays': 'live', 'memoryGlobalMaxFacts': 'live', 'memoryConvMaxChars': 'live', 'memoryGlobalMaxTokens': 'live',
+  'memorySummaryTurns': 'live', 'memoryStaleDays': 'live', 'memoryGlobalMaxFacts': 'live', 'memorySimilarityRoute': 'live', 'memoryConvMaxChars': 'live', 'memoryGlobalMaxTokens': 'live',
   'chatProvider': 'live', 'chatModel': 'live', 'sideProvider': 'live', 'sideModel': 'live', 'documentExtract': 'live',
   'ocrEnabled': 'live', 'ocrCommand': 'live', 'ocrMaxChars': 'live', 'documentTextChars': 'live', 'proactiveProvider': 'live',
   'proactiveModel': 'live', 'reportProvider': 'live', 'reportModel': 'live', 'memoryProvider': 'live', 'memoryModel': 'live',

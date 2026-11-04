@@ -20,6 +20,7 @@
 import z from '@deepseek-ai/schemastery'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, configFile, ensureSessionsDir, inboxDir, stateDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
@@ -58,6 +59,7 @@ import { DEFAULT_MAX_QUEUE, DEFAULT_PER_MINUTE, createSenderLimiter } from './me
 import { createSenderDailyLimiter } from './message/sender-daily.js'
 import { recordStranger } from './message/strangers.js'
 import { parseMemoryJson, renderMemoryJson, renderMemoryMarkdown, writeMemoryExport } from './message/memory-export.js'
+import { buildSimilarityPrompt, findDuplicateFacts, formatDuplicateHint, mergeFacts, parseSimilarityAnswer } from './message/fact-dedupe.js'
 import { resolveAllowedPath } from './media/outbound.js'
 import { keywordGate, keywordStats, parseKeywordRules } from './message/keyword-reply.js'
 import { isAllowedSender, denialReason } from './security/allowlist.js'
@@ -145,6 +147,7 @@ import {
   listConvMemories,
   setConvRecentSession,
   openThreadLines,
+  writeGlobalMemory,
 } from './memory.js'
 import { queryRecall, shouldRecall, buildRecallBlock, formatRecallHits } from './message/recall.js'
 import { searchKnowledge, shouldSearchKnowledge, describeKnowledgeHits } from './message/knowledge.js'
@@ -387,6 +390,10 @@ export const Config = z.object({
   progressEveryMs: z.number().default(60_000).description('Re-send a changed progress note at most this often, so tool changes stay visible without repeating an unchanged state.'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   eventPollMs: z.number().min(0).max(60_000).default(1_000).description('会话事件轮询间隔（毫秒）：越小回答出现得越快，越大越省 CPU。'),
+  // `z` here is a minimal schema helper (string/number/boolean), so enumerations
+  // are validated where they are read, not in the declaration — same as
+  // `groupReplyWhen` above.
+  memorySimilarityRoute: z.string().default('off').description('让记忆模型判断「两条记忆是不是一件事」（花一次后台调用）；off = 只用规则判，永远不花钱。'),
   typingIndicator: z.boolean().default(true).description('Show a typing indicator while the agent works, when a typing ticket is available.'),
   mediaEnabled: z.boolean().default(true).description('Send local files the agent references in its reply as Weixin images/videos/file attachments.'),
   autoSendFiles: z.boolean().default(true).description('Also deliver files the agent wrote into its working directory during a turn, even when the reply text never references them.'),
@@ -2344,7 +2351,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         }
         return ['好几个都带这个词，用编号指明删哪条：', ...hits.map((h) => `${h.index}. ${h.text}`)].join('\n')
       },
-      memory: (arg) => {
+      memory: async (arg) => {
         if (memoryOn() === false) return '记忆功能当前是关闭的。'
         const sub = String(arg ?? '').trim()
         const store = readGlobalMemory(stateRoot, accountId, { warn })
@@ -2371,6 +2378,26 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         // /memory stale (过期 / 核对): which facts have not been reconfirmed in
         // a long while. Read-only — corrections still go through /remember and
         // /forget, the two places memory is allowed to change.
+        // /memory merge <编号...>: fold statements that say the same thing into the
+        // most recently confirmed one. It is a human action on purpose — the hint
+        // below only ever asks, never rewrites on its own.
+        const mergeMatch = /^(?:merge|合并)\s+([\d\s,，]+)$/i.exec(sub)
+        if (mergeMatch !== null) {
+            const indexes = mergeMatch[1].split(/[\s,，]+/).filter((part) => part !== '').map(Number)
+            const merged = mergeFacts(store, indexes, { now: Date.now() })
+            if (merged.ok === false) {
+                return merged.reason === 'need-two'
+                    ? `要合并至少两条，用编号指出来：/memory merge 1 3（现在是 ${store.facts.length} 条）`
+                    : '用法：/memory merge <编号> <编号> …'
+            }
+            const failed = writeGlobalMemory(stateRoot, accountId, store, { warn })
+            if (failed !== true) return '合并失败，写入记忆文件出错了（详见日志）。'
+            return [
+                `已合并成：${merged.kept}`,
+                `并进「改过的说法」：${merged.dropped.join('；')}`,
+                '（合错了就 /undo，这次合并可以整步撤回）',
+            ].join('\n')
+        }
         if (/^(stale|过期|核对)$/i.test(sub)) {
           const report = staleFacts(store.facts, {
             now: Date.now(),
@@ -2415,6 +2442,35 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
         }
         parts.push(conv.summary !== '' ? `本会话记忆：${conv.summary}` : '本会话记忆：还没有摘要（会自动按回合记一次）。')
         parts.push(`最近消息窗口：${recent.length} 条`)
+        // Not part of `parts` above: the hint is a question, and it must be the
+        // last thing said so it is the thing that gets answered.
+        // Only "substantive" repeats are asked about: sharing one common word is
+        // not the same statement, and a wrong merge costs a real fact. With
+        // `memorySimilarityRoute` on, a group the rules are unsure about goes to
+        // the memory model for a yes/no — that costs one background call, which
+        // is why it is off by default and subject to the daily background budget.
+        let duplicates = findDuplicateFacts(store.facts, { narrow: true })
+        if (duplicates.length > 0 && effectiveConfig.current.memorySimilarityRoute === 'memory') {
+            const judged = []
+            for (const group of duplicates) {
+                const sentinel = randomBytes(4).toString('hex')
+                const result = await bridge.summarize({
+                    conversationId,
+                    accountId,
+                    prompt: buildSimilarityPrompt(sentinel, group.texts),
+                    sessionPrefix: 'wx-ded-',
+                    route: sideRoute?.('memory'),
+                })
+                const verdict = parseSimilarityAnswer(result?.text ?? '', group.texts.length)
+                // No answer, or an unparseable one, leaves the group as a *question*
+                // rather than an assertion — the user still decides.
+                if (verdict.same === true) judged.push(group)
+                else if (verdict.judgeable === false) judged.push(group)
+            }
+            duplicates = judged
+        }
+        const hint = formatDuplicateHint(duplicates)
+        if (hint !== '') parts.push(hint)
         return parts.join('\n\n')
       },
       ...createAwayCommands({ stateRoot, accountId, warn, parseWhen }),

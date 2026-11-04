@@ -730,6 +730,12 @@ text adventure (second person, choice based). In WeChat:
   `/remember` refuses explicitly instead of silently evicting the oldest.
 - Every conversation also has an **automatic summary**: every `memorySummaryTurns` (10 by default) turns, the plugin condenses the recent conversation into a summary
   in a separate side session in the background — it never sends WeChat messages, you only feel it in the prompt of the next reply.
+- **Duplicates are a question, not a decision**: when `/memory` sees two statements that look like the same thing
+  (「我住在杭州」 vs 「住在杭州这边」), it asks at the end; `/memory merge 1 2` folds them into one — the most recently
+  confirmed statement survives, the others move to "reworded", and `/undo` reverses the merge in one step.
+  A merge is always something a human asks for: phrasing rules can spot a rephrasing but not a changed subject, and an
+  automatic merge would quietly drop the difference. Set `memorySimilarityRoute` to `memory` to have the memory model
+  decide the unsure cases (costs one background call; off by default).
 - **Carry it across**: `/memory export json` prints the same three layers as JSON (every fact keeps its confirmation time and source);
   `/import <paste or file path>` reads it back — Markdown exports work too. A preview comes first and nothing is written until you answer `是`.
   Three policies: `append` (default, only fills gaps), `merge` (fills empty profile fields), `replace` (the pack's profile wins).

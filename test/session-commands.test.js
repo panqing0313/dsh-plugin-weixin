@@ -1241,3 +1241,33 @@ test('/import reads a JSON export, understands a policy word, and reads from a f
     assert.equal(sessionsOpened.length, 0, 'importing never spends a model turn')
   })
 })
+
+test('/memory asks before calling two statements one, and /memory merge folds them with an undo', async () => {
+  await withPlugin(async ({ root, fake, sessionsOpened }) => {
+    fake.deliver('/remember 我住在杭州', 'm1')
+    await waitFor(() => fake.outbound.length > 0, 'first fact')
+    fake.deliver('/remember 住在杭州这边', 'm2')
+    await waitFor(() => fake.outbound.length > 1, 'second fact')
+
+    fake.deliver('/memory', 'm3')
+    await waitFor(() => fake.outbound.length > 2, 'the memory listing')
+    const listing = fake.outbound[2].text
+    assert.match(listing, /看起来说的是同一件事/)
+    assert.match(listing, /\/memory merge 1 2/)
+
+    fake.deliver('/memory merge 1 2', 'm4')
+    await waitFor(() => fake.outbound.length > 3, 'the merge result')
+    assert.match(fake.outbound[3].text, /已合并成：住在杭州这边/, 'the most recently confirmed statement wins')
+
+    const file = path.join(root, 'memory', 'global-bot1.json')
+    const merged = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(merged.facts.length, 1)
+    assert.equal(merged.superseded.some((line) => line.text === '我住在杭州'), true)
+
+    fake.deliver('/undo', 'm5')
+    await waitFor(() => fake.outbound.length > 4, 'the undo result')
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(after.facts.length, 2, 'undo puts the folded statement back')
+    assert.equal(sessionsOpened.length, 0, 'memory bookkeeping never spends a model turn')
+  })
+})

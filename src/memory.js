@@ -121,7 +121,7 @@ function sanitizeHistory(raw) {
     const entries = [];
     for (const entry of raw) {
         if (entry === null || typeof entry !== 'object') continue;
-        const kind = entry.kind === 'add' || entry.kind === 'replace' || entry.kind === 'remove' ? entry.kind : '';
+        const kind = entry.kind === 'add' || entry.kind === 'replace' || entry.kind === 'remove' || entry.kind === 'merge' ? entry.kind : '';
         const text = typeof entry.text === 'string' ? entry.text : '';
         if (kind === '' || text === '') continue;
         entries.push({
@@ -129,7 +129,12 @@ function sanitizeHistory(raw) {
             text,
             at: typeof entry.at === 'number' ? entry.at : 0,
             by: typeof entry.by === 'string' ? entry.by : '',
-            restore: Array.isArray(entry.restore) ? entry.restore.filter((line) => typeof line === 'string') : [],
+            // A `merge` records whole fact objects (text + the timestamps it had),
+            // so undoing a merge can put each one back exactly as it was. Older
+            // entries carry plain strings: accepted, and read as text-only.
+            restore: Array.isArray(entry.restore)
+                ? entry.restore.filter((item) => typeof item === 'string' || (item !== null && typeof item === 'object' && typeof item.text === 'string'))
+                : [],
         });
     }
     return entries.slice(-DEFAULT_UNDO_MAX);
@@ -377,6 +382,28 @@ export function undoLastMemoryChange(stateRoot, accountId, { within, now = Date.
             const by = normalizeFact(line.by)
             return by !== key || entry.restore.includes(line.text) === false
         })
+    } else if (entry.kind === 'merge') {
+        // A merge keeps one statement and files the others as superseded. Undoing
+        // it puts every dropped fact back exactly as it was (the merge recorded
+        // each one's original timestamps), so "merge was a mistake" is fully
+        // reversible — otherwise /undo would silently lose facts.
+        for (const fact of Array.isArray(entry.restore) ? entry.restore : []) {
+            const text = typeof fact === 'string' ? fact : fact?.text
+            if (typeof text !== 'string' || text.trim() === '') continue
+            if (memory.facts.some((current) => normalizeFact(current.text) === normalizeFact(text))) continue
+            memory.facts.push({
+                text,
+                at: Number(fact?.at ?? now) || now,
+                weight: Number.isFinite(fact?.weight) ? fact.weight : DEFAULT_FACT_WEIGHT,
+                origin: typeof fact?.origin === 'string' && fact.origin !== '' ? fact.origin : '撤销合并',
+                updatedAt: Number(fact?.updatedAt ?? now) || now,
+            })
+            restored += 1
+        }
+        // The 「改过的说法」 lines this merge added no longer describe anything.
+        const dropped = new Set((Array.isArray(entry.restore) ? entry.restore : []).map((fact) => normalizeFact(fact?.text ?? fact)))
+        memory.superseded = (Array.isArray(memory.superseded) ? memory.superseded : [])
+            .filter((line) => normalizeFact(line.by) !== key || dropped.has(normalizeFact(line.text)) === false)
     } else {
         // A /forget undo puts the fact back where the user can see it.
         if (memory.facts.some((fact) => normalizeFact(fact.text) === key) === false) {
@@ -502,6 +529,23 @@ export function setDigest(stateRoot, accountId, text, { warn = noopWarn, now = D
 }
 
 /** Replace the whole fact list — the consolidation pass owns this operation. */
+/**
+ * Replace the fact list and persist the whole global memory object.
+ *
+ * `replaceFacts` above only takes the list; a merge also has to write the
+ * `superseded` and `history` bookkeeping that makes `/undo` able to put the
+ * dropped statements back. Both go through the same file.
+ *
+ * @param {string} stateRoot
+ * @param {string} accountId
+ * @param {object} memory  The object `readGlobalMemory` returned (mutated by caller).
+ * @param {{ warn?: (line: string) => void }} [options]
+ * @returns {boolean} whether the file was written
+ */
+export function writeGlobalMemory(stateRoot, accountId, memory, { warn = noopWarn } = {}) {
+    return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory ?? {}, warn, 'global memory');
+}
+
 export function replaceFacts(stateRoot, accountId, facts, { warn = noopWarn } = {}) {
     const file = globalMemoryPath(stateRoot, accountId);
     const current = readJsonSafe(file, {}, warn, 'global memory');

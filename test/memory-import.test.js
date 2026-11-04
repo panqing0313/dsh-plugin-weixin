@@ -273,3 +273,67 @@ test('a JSON export round-trips through the JSON parser, and refuses foreign JSO
   assert.equal(edited.ok, true)
   assert.deepEqual(edited.parsed.facts, ['新的一条'], 'a hand-edited file still imports')
 })
+
+test('duplicate facts are suggested, merged into the newest one, and a merge undoes cleanly', async () => {
+  const { findDuplicateFacts, formatDuplicateHint, mergeFacts, similarity } = await import('../src/message/fact-dedupe.js')
+  const { removeGlobalFact, undoLastMemoryChange, writeGlobalMemory } = await import('../src/memory.js')
+
+  assert.ok(similarity('我住在杭州', '住在杭州这边') >= 0.5, 'the same statement in two phrasings scores high')
+  assert.ok(similarity('喜欢咖啡', '喜欢猫') < 0.5, 'different verbs and objects do not')
+  assert.ok(similarity('我住在杭州', '我住在上海') < 0.5, 'a changed value is a different fact')
+  assert.deepEqual(findDuplicateFacts([{ text: '我住在杭州' }, { text: '我住在上海' }], { narrow: true }), [],
+    'sharing only one common word does not make two statements one')
+
+  const facts = [
+    { text: '喜欢咖啡', at: 1000 },
+    { text: '我住在杭州', at: 2000 },
+    { text: '住在杭州这边', at: 3000 },
+    { text: '不喜欢牛奶', at: 4000 },
+  ]
+  const groups = findDuplicateFacts(facts, { narrow: true })
+  assert.equal(groups.length, 1, 'only the two Hangzhou statements group')
+  assert.deepEqual(groups[0].indexes.sort(), [2, 3])
+  const hint = formatDuplicateHint(groups)
+  assert.match(hint, /要合并成一条吗/)
+  assert.match(hint, /\/memory merge 2 3|合并：\/memory merge/)
+
+  // Merging keeps the most recently confirmed of the group.
+  const memory = { facts: [...facts], superseded: [], history: [] }
+  const merged = mergeFacts(memory, [2, 3], { now: 5000 })
+  assert.equal(merged.ok, true)
+  assert.equal(merged.kept, '住在杭州这边', 'the latest confirmation survives')
+  assert.deepEqual(merged.dropped, ['我住在杭州'])
+  assert.deepEqual(memory.facts.map((fact) => fact.text), ['喜欢咖啡', '住在杭州这边', '不喜欢牛奶'], 'the duplicate is folded, nothing else moves')
+  assert.equal(memory.superseded[0].text, '我住在杭州', 'the old wording is kept in 「改过的说法」')
+  assert.equal(mergeFacts({ facts }, [1], {}).ok, false, 'one index is not a merge')
+
+  // Persist, then undo the merge: every dropped fact comes back with its own stamps.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wx-merge-'))
+  assert.equal(writeGlobalMemory(root, 'bot', memory, { warn: () => {} }), true)
+  const undone = undoLastMemoryChange(root, 'bot', { warn: () => {} })
+  assert.equal(undone.ok, true)
+  assert.equal(undone.restored, 1)
+  const after = readGlobalMemory(root, 'bot', { warn: () => {} })
+  const restored = after.facts.find((fact) => fact.text === '我住在杭州')
+  assert.ok(restored !== undefined, 'undo brings the merged-away statement back')
+  assert.equal(restored.at, 2000, 'with its original confirmation time, not "now"')
+  assert.equal(after.superseded.length, 0, 'and the 「改过的说法」 line it added is gone')
+  fs.rmSync(root, { recursive: true, force: true })
+  assert.ok(typeof removeGlobalFact === 'function')
+})
+
+test('the similarity prompt asks one narrow question and treats doubt as "not the same"', async () => {
+  const { buildSimilarityPrompt, parseSimilarityAnswer } = await import('../src/message/fact-dedupe.js')
+  const prompt = buildSimilarityPrompt('SENTINEL-1', ['我住在杭州', '住在杭州这边'])
+  assert.match(prompt, /同一台机器人对同一个人的记忆/)
+  assert.match(prompt, /合：1 2/)
+  assert.match(prompt, /1\. 我住在杭州/)
+  assert.match(prompt, /拿不准的时候一律回答「不合」/)
+  assert.match(prompt, /SENTINEL-1/)
+
+  assert.deepEqual(parseSimilarityAnswer('合：1 2', 2), { judgeable: true, same: true, indexes: [1, 2] })
+  assert.deepEqual(parseSimilarityAnswer('合: 1,2', 2), { judgeable: true, same: true, indexes: [1, 2] })
+  assert.equal(parseSimilarityAnswer('不合', 2).same, false)
+  assert.equal(parseSimilarityAnswer('这两段是同一件事', 2).judgeable, false, 'an unparseable answer is not a decision')
+  assert.deepEqual(parseSimilarityAnswer('合：1 7', 2), { judgeable: true, same: false, indexes: [] }, 'an out-of-range index cannot merge anything')
+})

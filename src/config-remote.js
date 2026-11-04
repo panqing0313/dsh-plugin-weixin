@@ -358,6 +358,19 @@ export const FIELDS = [
           hintEn: "Long-term facts left unconfirmed this long show up in /memory stale and get one line in the daily digest. A correction counts as confirming.",
         },
         {
+          path: "memorySimilarityRoute",
+          type: T.enum,
+          default: "off",
+          options: [
+            { value: "off", label: "只用规则判断（不花钱）", labelEn: "Rules only (free)" },
+            { value: "memory", label: "拿不准时问记忆模型", labelEn: "Ask the memory model when unsure" },
+          ],
+          label: "重复记忆的判定",
+          labelEn: "Spotting duplicate memories",
+          hint: "规则认得出「换了个说法」的同一件事，认不出换了主语的。开着时由记忆模型逐组判一次，花后台调用（默认关）。",
+          hintEn: "Rules catch rephrasings but not a changed subject. On = one background call per group to decide (off by default).",
+        },
+        {
           path: "memoryGlobalMaxFacts",
           type: T.number,
           default: 30,
