@@ -175,7 +175,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.4.9`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.5.0`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
