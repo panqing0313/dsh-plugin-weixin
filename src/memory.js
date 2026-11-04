@@ -245,12 +245,21 @@ export function addGlobalFact(stateRoot, accountId, text, {
             return hit === false;
         });
     }
-    if (memory.facts.some((fact) => normalizeFact(fact.text) === key)) {
-        // Already recorded (and, if it was superseded above, it still counts as
-        // recorded - the correction is what changed).
+    const recorded = memory.facts.find((fact) => normalizeFact(fact.text) === key);
+    if (recorded !== undefined) {
+        // Already recorded. Saying it again is a confirmation, not a no-op: the
+        // recency stamp moves forward so the injector can put what keeps coming
+        // up first. Without this a fact the user repeats every week would look
+        // older than one they mentioned once, and get crowded out of the prompt.
+        const confirmed = now > Number(recorded.updatedAt ?? 0)
+        if (confirmed) {
+            recorded.updatedAt = now
+            if (weight !== DEFAULT_FACT_WEIGHT) recorded.weight = clampWeight(weight)
+            writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
+        }
         return replaced.length > 0
-            ? { added: false, reason: 'duplicate', superseded: replaced }
-            : { added: false, reason: 'duplicate' };
+            ? { added: false, reason: 'duplicate', superseded: replaced, ...(confirmed ? { confirmed: true } : {}) }
+            : { added: false, reason: 'duplicate', ...(confirmed ? { confirmed: true } : {}) };
     }
     if (memory.facts.length >= maxFacts) return replaced.length > 0 ? { added: false, reason: 'cap', superseded: replaced } : { added: false, reason: 'cap' };
     if (memory.facts.reduce((sum, fact) => sum + fact.text.length, 0) + trimmed.length > maxChars) {
@@ -276,6 +285,17 @@ export function addGlobalFact(stateRoot, accountId, text, {
     return writeJsonSafe(globalMemoryPath(stateRoot, accountId), memory, warn, 'global memory')
         ? { added: true, ...(replaced.length > 0 ? { superseded: replaced } : {}) }
         : { added: false, reason: 'write-failed' };
+}
+
+/** Ranking used both by the injector and by /memory, so the two never disagree. */
+function stampOf(fact) {
+    return Math.max(0, Number(fact?.updatedAt ?? 0) || Number(fact?.at ?? 0) || 0)
+}
+
+function byImportanceThenRecency(a, b) {
+    return (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
+        || stampOf(b) - stampOf(a)
+        || (b.at ?? 0) - (a.at ?? 0)
 }
 
 /** Comparison key for a fact: case- and whitespace-insensitive. */
@@ -799,8 +819,11 @@ export function buildMemoryBlock({
         budget -= line.length;
         if (tokenBudget > 0) tokenBudget -= estimateTokens(line);
     }
-    const ranked = [...facts].sort((a, b) => (b.weight ?? DEFAULT_FACT_WEIGHT) - (a.weight ?? DEFAULT_FACT_WEIGHT)
-        || (b.at ?? 0) - (a.at ?? 0));
+    // Importance first, then how recently the user confirmed it, then how
+    // recently it was first recorded. The prompt budget is finite and the last
+    // lines are the first to be dropped, so the order decides what the model
+    // knows about someone it has talked to for months.
+    const ranked = [...facts].sort(byImportanceThenRecency);
     for (const fact of ranked) {
         const line = `- ${fact.text}`;
         if (line.length > budget || fits(line) === false) break;

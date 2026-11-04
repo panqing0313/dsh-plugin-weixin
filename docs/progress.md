@@ -4132,3 +4132,10 @@ release run `41485882140` success）。
 - `--finish 1.4.9`：`latest -> 1.4.9`、装进 desktop profile、依赖 `^1.4.8 → ^1.4.9`、锁文件刷新。
 - 核验：`dist.shasum 9529cf12bcee17655e99ea16aabcd517c81704d8`、`dist.integrity sha512-cy9e3qmr1rCR9enzivc/f0dDsm3waHJdbQHq9wvEOu0wUF0mV9J8M6brMFWfITCMWrCFTPXhjuBpnHw3nc9Ssg==`、`gitHead fad8ec6`（= 本地 HEAD、= tag 指向）；`doctor` → `installed version 1.4.9` / `published up to date (1.4.9)`。
 - 版本一致性这次从 bump 起就同步了五处（`package.json`、`package-lock.json` 两处、`src/client.js` 的 `PLUGIN_VERSION`、两份 README 的发布行），`test/version-sync.test.js` 在提交前先跑过。
+
+## 1.5.0 记忆与配置批（2026-11-04 起）
+
+用户逐条核对了之前给过的 A/B/C/D 建议，问「这些之前你回复的做了？」。核实结果：C1（注入字符预算）**本来就有**（`src/memory.js:764` 的 `buildMemoryBlock` 一直是预算制），其余 8 项当时只是建议、没有动工。用户回「都要做，都验证完发版」。
+
+- **C3 记忆排序**（本次）：`addGlobalFact` 的重复分支以前直接 `return { added: false, reason: 'duplicate' }` —— 复述等于白说，时间戳不动；注入排序 `weight → at` 也只看第一次记下的时间。改成 `weight → updatedAt（最后确认） → at（首次记录）`，重复时写回 `updatedAt` 并在返回值里标 `confirmed: true`。比较器抽成 `byImportanceThenRecency` + `stampOf`，注入与 `/memory` 共用同一套口径。测试新增 2 条（四级排序；复述把条目移回前排且不新增条目）。
+- 顺手修正一处早先的判断：`docs/extras.md` 之前暗示「十条长句能挤爆提示词」，实际预算是硬上限，挤不爆，只是**顺序不对**。

@@ -1126,3 +1126,17 @@ node bin/stickers.mjs fetch bluefish --force  # 已存在的重装
 现在：同一个进程里**连着 3 次失败**，插件会在最近聊过的那个会话里发一句话——发生了多少次、原因（模型的原话，截断到 200 字）、以及「记忆模型可以在「记忆模型」里单独指定（`memoryProvider` / `memoryModel`）」。之后计数清零，再连败 3 次才会再说；成功一次也清零。计数在内存里，重启即归零——重启本身就算一次改变。
 
 判据是 `FAILURE_WARN_AFTER = 3`（`src/memory-summarizer.js`），测试 `test/memory-summarizer.test.js` 用拒绝的假 bridge 钉住「第三次才说、成功即清零」。
+
+## 记忆的排序：老的话会被挤出去（1.5.0）
+
+记忆注入是有字符预算的（`memoryGlobalMaxChars`，默认 1500），预算用完就不再往下加 —— 所以**顺序就是优先级**。
+
+以前顺序是「重要度 → 第一次记下的时间」，最坏的情况下你在 2024 年随口说过一次的事会排在昨天反复确认的事前面。现在改成：
+
+1. **重要度**（模型抽取时的 1–5，`/remember` 记的默认 3）
+2. **最近一次被确认的时间** —— 同一句话你再说一遍，不再算「重复」直接丢弃，而是把时间戳往前推（只推时间，不新增条目，`at` 仍是第一次学到的时间）
+3. **第一次记下的时间**
+
+所以「别给我的过敏原挤掉」这类事有两条路自保：重要度调高，或者多说几遍。`/memory` 里显示的还是第一次记的时间，`formatFactLines` 会写「N 天前」—— 那个 N 现在按最后一次确认算。
+
+改动在 `src/memory.js`：`addGlobalFact` 命中重复时返回 `{ added: false, reason: 'duplicate', confirmed: true }` 并写回 `updatedAt`；`buildMemoryBlock` 用同一个比较器 `byImportanceThenRecency`。

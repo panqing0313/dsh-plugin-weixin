@@ -49,7 +49,9 @@ test('global facts: add, read back, duplicate refused', () => {
 	const dir = join(root, 'global')
 	assert.deepEqual(readGlobalMemory(dir, 'bot@im.bot', { warn }), { facts: [], profile: { call: '', schedule: '', likes: [], dislikes: [], dates: [] }, events: [], digest: '', digestAt: 0, superseded: [], history: [] })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '用户对花生过敏', { warn }), { added: true })
-	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '  用户对花生过敏  ', { warn }), { added: false, reason: 'duplicate' })
+	// Saying it again confirms it: the record is not duplicated, but its recency
+	// stamp moves so the injector keeps it near the top (C3, 1.5.0).
+	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '  用户对花生过敏  ', { warn }), { added: false, reason: 'duplicate', confirmed: true })
 	assert.deepEqual(addGlobalFact(dir, 'bot@im.bot', '', { warn }), { added: false, reason: 'empty' })
 	const { facts } = readGlobalMemory(dir, 'bot@im.bot', { warn })
 	assert.equal(facts.length, 1)
@@ -174,6 +176,44 @@ test('buildMemoryBlock: sections, omission, and the empty case costs nothing', (
 	const convOnly = buildMemoryBlock({ conv: { summary: '只有会话', facts: [], updatedTurn: 1 } })
 	assert.doesNotMatch(convOnly, /长期记忆/)
 	assert.doesNotMatch(convOnly, /最近消息/)
+})
+
+test('facts are ordered by importance, then by the last time they were confirmed', () => {
+	const now = new Date(2026, 10, 4, 9, 0).getTime();
+	const day = 86_400_000;
+	const block = buildMemoryBlock({
+		now,
+		global: {
+			facts: [
+				// Recorded years ago, mentioned once, low importance.
+				{ text: '大学在南京', at: now - 800 * day, weight: 1, updatedAt: now - 800 * day },
+				// Same importance, confirmed yesterday — the freshest of its weight.
+				{ text: '每周三加班', at: now - 300 * day, weight: 3, updatedAt: now - day },
+				// Old but important: weight wins over recency.
+				{ text: '对花生过敏', at: now - 400 * day, weight: 5, updatedAt: now - 400 * day },
+				// Same importance, but nobody has brought it up in five days.
+				{ text: '养了一只叫豆豆的猫', at: now - 5 * day, weight: 3, updatedAt: now - 5 * day },
+			],
+		},
+	})
+	const order = [...block.matchAll(/^- (.+)$/gm)].map((hit) => hit[1])
+	assert.deepEqual(order, ['对花生过敏', '每周三加班', '养了一只叫豆豆的猫', '大学在南京'])
+})
+
+test('repeating a fact it already knows moves it back to the front of the queue', () => {
+	const dir = join(root, 'confirm')
+	addGlobalFact(dir, 'bot@im.bot', '用户周末常去爬山', { warn, now: 1000 })
+	addGlobalFact(dir, 'bot@im.bot', '用户不吃香菜', { warn, now: 2000 })
+	// Two months later the user says the first one again.
+	const result = addGlobalFact(dir, 'bot@im.bot', '用户周末常去爬山', { warn, now: 2000 + 60 * 86_400_000 })
+	assert.equal(result.added, false)
+	assert.equal(result.confirmed, true)
+	const { facts } = readGlobalMemory(dir, 'bot@im.bot', { warn })
+	assert.equal(facts.length, 2, 'a repeat is a confirmation, not a second row')
+	assert.equal(facts[0].updatedAt, 2000 + 60 * 86_400_000)
+	assert.equal(facts[0].at, 1000, 'the first time it was learned is preserved')
+	const block = buildMemoryBlock({ global: { facts }, now: 2000 + 60 * 86_400_000 })
+	assert.ok(block.indexOf('爬山') < block.indexOf('香菜'), 'the one said again comes first')
 })
 
 test('a broken memory file degrades to empty, not a throw', () => {
