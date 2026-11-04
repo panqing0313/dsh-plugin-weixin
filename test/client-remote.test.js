@@ -305,6 +305,7 @@ test('every Remote descriptor has a unique wire field matching its parameter nam
         'weixinAsr/downloadStatus',
         'weixinAsr/getDownloadSettings',
         'weixinAsr/listModels',
+        'weixinAsr/removeModel',
         'weixinAsr/setDownloadSettings',
         'weixinAsr/setModelDir',
         'weixinConfig/list',
@@ -667,31 +668,30 @@ test('every state the card renders matches what the host actually reports', () =
   )
 })
 
-test('the model directory field offers the host chooser and says so when absent', () => {
+test('the model directory field uses the shared folder picker, not a private one', () => {
   // A wrong model directory only surfaces much later as "no model available",
   // and typing an absolute path by hand is the likeliest way to get one. The
-  // card must therefore expose the host's own chooser, and must explain itself
-  // when the profile provides none.
-  // The field is part of the card, which is the lazy chunk; the chooser helper
-  // it calls stayed in the entry. Read both.
-  const source = [fs.readFileSync(CLIENT_PATH, 'utf8'), fs.readFileSync(CARD_PATH, 'utf8')].join('\n')
-  assert.match(source, /onClick: browseDir/, 'the directory field needs a browse button')
-  assert.match(source, /await pickDirectory\(ctx\)/, 'browseDir must use the host chooser')
-  assert.match(
-    source,
-    /No directory chooser is available here; type the path instead\./,
-    'a missing chooser must be explained, not silently ignored',
-  )
+  // voice tab used to reach for the host's native chooser directly: in the web
+  // GUI there is none, and the round trip did not always settle, so the button
+  // stuck on 「打开中…」 and said nothing. It now shares `PathPicker`, which
+  // opens a folder browser in the same tick and can explain a missing chooser.
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  assert.doesNotMatch(card, /onClick: browseDir/, 'no second, hand-rolled browse handler')
+  assert.match(card, /createElement\(PathPicker, \{\s*ctx,\s*t,\s*value: dirInput/, 'the voice tab uses the shared picker')
+  assert.match(card, /mode: "dir"/, 'and asks it for a directory')
+  assert.match(card, /No directory chooser is available here; type the path instead\./,
+    'the shared picker is the place that explains a missing chooser')
   // The chooser belongs to another bundle, so both fallbacks must exist.
-  assert.match(source, /ctx\.remote\?\.directoryPicker/, 'the mounted Remote is the primary path')
-  assert.match(source, /__DSH_DIRECTORY_PICKER__/, 'the Electron bridge is the fallback')
+  const entry = fs.readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(entry, /ctx\.remote\?\.directoryPicker/, 'the mounted Remote is the primary path')
+  assert.match(entry, /__DSH_DIRECTORY_PICKER__/, 'the Electron bridge is the fallback')
   // Selecting a directory fills the field; only "Set directory" writes it, so a
   // cancelled dialog can never persist an empty value.
-  assert.match(source, /setDirInput\(picked\.path\)/, 'the chosen path must reach the input')
+  assert.match(card, /setDirInput\(next\)/, 'the chosen path must reach the input')
   // A cancelled dialog and a missing chooser are different outcomes: only the
   // second one is worth a message, and the guard is what keeps them apart.
   assert.match(
-    source,
+    card,
     /picked\.reason === PICK_UNAVAILABLE/,
     'only an absent chooser may be reported as absent',
   )
@@ -1120,4 +1120,18 @@ test('the prompt tab says where its mode came from, and explains an empty prompt
   assert.match(card, /current mode, taken from the persona tab/, 'a mode inherited from the persona tab says so')
   assert.match(card, /picked above — may differ from the live mode/, 'a manually picked mode is marked as an experiment, not the truth')
   assert.match(card, /stats\.emptyNote/, 'an empty prompt carries an explanation instead of a blank box')
+})
+
+test('the voice tab picks a model from a list, and deletes in two steps', () => {
+  const card = fs.readFileSync(CARD_PATH, 'utf8')
+  // A free-text repo id asked the operator to remember a name and guess its
+  // download size; the list carries both, and only the machine's own format.
+  assert.match(card, /const ASR_RECOMMENDED = \[/, 'a recommendation table exists')
+  assert.match(card, /createElement\("select"/, 'the download box is a dropdown')
+  assert.match(card, /asrRecommendedRepos\(\)/, 'the list is narrowed to this machine\'s format')
+  assert.match(card, /Other repo id…/, 'an unlisted repo is still possible, behind one more click')
+  // Deletion is destructive and a mis-tap costs a 460 MB download.
+  assert.match(card, /armed !== m\.path/, 'the first click only arms the row')
+  assert.match(card, /Confirm delete/, 'the second click says what it will do')
+  assert.match(card, /weixinAsr\.removeModel/, 'the card asks the host to delete, never the filesystem')
 })

@@ -684,3 +684,42 @@ test('a download lands where the listing looks for it', async () => {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('deleting a model takes exactly one directory off disk, and only a listed one', async () => {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { AsrController } = await import('../src/asr-remote.js')
+
+  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'dsh-weixin-remove-'))
+  try {
+    const keep = nodePath.join(root, 'Systran__faster-whisper-small')
+    const gone = nodePath.join(root, 'mlx-community__whisper-small-mlx')
+    for (const dir of [keep, gone]) {
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(nodePath.join(dir, 'config.json'), '{}')
+    }
+    // A folder that is *not* a model: no config.json, so it is not deletable
+    // through this route even if its path is handed over verbatim.
+    const notAModel = nodePath.join(root, 'holiday-photos')
+    fs.mkdirSync(notAModel, { recursive: true })
+    fs.writeFileSync(nodePath.join(notAModel, 'photo.jpg'), 'x')
+
+    const controller = new AsrController(new Context(), { modelDir: root })
+    const listed = await controller.listModels()
+    assert.equal(listed.models.length, 2, 'only directories with config.json are models')
+
+    const result = await controller.removeModel(gone)
+    assert.equal(fs.existsSync(gone), false, 'the model is gone from disk')
+    assert.equal(fs.existsSync(keep), true, 'the other model is untouched')
+    assert.deepEqual(result.models.map((m) => m.name), ['Systran__faster-whisper-small'])
+    assert.match(result.message, /已删除/, 'the operator gets a sentence, not a bare true')
+
+    // A path outside the listing is refused rather than followed: `..` is the
+    // shape a crafted or stale value would take.
+    await assert.rejects(() => controller.removeModel(nodePath.join(root, '..', 'something')), /已安装的模型/)
+    await assert.rejects(() => controller.removeModel(notAModel), /已安装的模型/)
+    await assert.rejects(() => controller.removeModel(''), /不能为空/)
+    assert.equal(fs.existsSync(notAModel), true, 'a refused delete must not touch the folder')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

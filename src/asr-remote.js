@@ -501,6 +501,41 @@ export class AsrController extends TypertRemoteService {
     }
 
     /**
+     * Delete one downloaded model.
+     *
+     * Deletion is the one operation here that destroys something the operator
+     * cannot undo with another click, so the path is never taken on trust:
+     * it must appear in `listModels()` for the current root. That check is
+     * what keeps a crafted or stale path — `modelDir/..`, an unrelated folder
+     * someone typed into the card — from turning into `rm -rf` on the wrong
+     * place. The `config.json` test is the second half of the same idea: only
+     * a directory this plugin put there counts as a model.
+     */
+    async removeModel(target) {
+        const wanted = String(target ?? "").trim();
+        if (wanted === "" || wanted.includes("\0")) {
+            throw new RemoteError("bad_model", "模型路径不能为空", {});
+        }
+        const listed = listModels(this.modelDir);
+        const known = listed.find((model) => path.resolve(model.path) === path.resolve(wanted));
+        if (known === undefined) {
+            throw new RemoteError("bad_model", "这不是当前目录里已安装的模型", {});
+        }
+        // Name what is being deleted, with the size: a mis-tap costs a download.
+        const megabytes = Math.max(1, Math.round(known.sizeBytes / 1048576));
+        try {
+            fs.rmSync(known.path, { recursive: true, force: true });
+        } catch (err) {
+            throw new RemoteError("bad_model", `删除失败：${err?.message ?? err}`, {});
+        }
+        return {
+            removed: known.path,
+            message: `已删除 ${known.repoId ?? known.name}（${megabytes} MB）`,
+            models: listModels(this.modelDir),
+        };
+    }
+
+    /**
      * Download a model repo (e.g. "mlx-community/whisper-small-mlx") into the
      * model dir. Fire-and-track: returns immediately, progress surfaces via
      * downloadStatus(). Fetches over plain HTTP: no CLI and no Python needed.

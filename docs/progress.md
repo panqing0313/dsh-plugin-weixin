@@ -4284,3 +4284,30 @@ release run `41485882140` success）。
 - 走 CI：`git tag -a v1.5.5` → `release.yml` run `41794527749`，5 分 32 秒全绿（带 provenance）；`--finish 1.5.5` 四步全绿。
 - 核验：`dist-tags.latest = 1.5.5`、`dist.shasum f036bd0492eb5b8e460643ddb6efd9f0137e53be`、`gitHead 5d5b045`；`doctor` → `installed 1.5.5` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.5)`；profile `^1.5.4 → ^1.5.5`。
 - 重启后复核提示词页签：默认应显示「女友」651 字并标「取自个性化」；把下拉切到别的模式应标「可能与实际会话不同」。
+
+## 语音模型页签：浏览死锁、删除、下拉（2026-11-04，1.5.6）
+
+用户反馈三件事（附设置页截图）：
+
+1. **「浏览…」点击后一直显示「打开中…」**。根因：`AsrSection` 自己写了一个 `browseDir`，直接
+   `await pickDirectory(ctx)`；Web 界面没有原生选择器，往返又不保证 settle，`finally` 不执行，
+   `pickingDir` 永远是 true，`browseMsg` 也永远出不来。`PathPicker` 在 1.5.4（`45d597a`）已经
+   修过同样的问题，只是当时只改了「维护」页签。修法：语音模型页签改用 `PathPicker`
+   （`mode: "dir"`），删掉 `browseDir`/`pickingDir`/`browseMsg` 三个死掉的符号；
+   缺选择器的解释收敛到 `PathPicker` 的 `askNativeChooser` 一处。
+2. **已安装模型不能删**。新增 `AsrController.removeModel(path)`：先与 `listModels()` 的结果逐个
+   比对（拒绝 `..` 与任意路径），再校验目录里有 `config.json`，然后 `rm -rf`；返回
+   `{ removed, message, models }`。卡片里两段式按钮（删除 → 确认删除），删完重新 `refresh()`。
+3. **下载模型要下拉**。`ASR_RECOMMENDED` 列出 8 个 repo（mlx 4 + CTranslate2 4），
+   `asrRecommendedRepos()` 按平台过滤（`isAppleSilicon()` 判 UA），每项带体积与适用场景，
+   默认选中本平台默认档；`CUSTOM_REPO = "__custom__"` 才露出文本框。
+
+验证：`test/asr-download.test.js` 新增 1 条（删除只删列表内的一个目录、拒绝 `..`、拒绝非模型
+目录、拒绝空路径、被拒时目标目录仍在）；`test/client-remote.test.js` 方法表加
+`weixinAsr/removeModel`，并把「模型目录用宿主选择器」那条守卫改写成「用共享的 PathPicker」，
+新增 1 条守卫（推荐表、`select`、平台过滤、两段式删除）。全量 **1217/1217**、
+`node bin/check.mjs` → `checked 275 files`。
+
+夹具陷阱记一笔：那条守卫原来断言 `source`（entry + card 拼起来），改造后我忘了重新定义
+`source`，报 `ReferenceError: source is not defined` 而不是断言失败——测试报错类型要看清，
+`ReferenceError` 永远是测试自己的 bug。

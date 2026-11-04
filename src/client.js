@@ -661,6 +661,15 @@ window.__ModuleLoader__.load({
 					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/setModelDir:result`, create: _statusResult },
 				},
 				{
+					id: `${PKG}#weixinAsr/removeModel`,
+					service: "asrController",
+					namespace: "weixinAsr",
+					method: "removeModel",
+					invocation: { kind: "direct" },
+					parameters: [{ name: "path", wire: "path", source: "json", codec: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/removeModel:p0`, create: _str } }],
+					result: { mode: "strict", typeSymbol: `${PKG}#weixinAsr/removeModel:result`, create: _statusResult },
+				},
+				{
 					id: `${PKG}#weixinAsr/downloadModel`,
 					service: "asrController",
 					namespace: "weixinAsr",

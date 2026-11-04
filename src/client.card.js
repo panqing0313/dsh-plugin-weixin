@@ -1234,6 +1234,19 @@ window.__ModuleLoader__.load({
 				if (picked.ok) {
 					onChange(picked.path);
 					setOpen(false);
+					return;
+				}
+				// Only a *missing* chooser is worth a sentence: cancelling is
+				// self-explanatory, and a note would read as a complaint. This
+				// is also the single place the explanation lives, so the voice
+				// tab inherits it instead of re-deriving it.
+				if (picked.reason === PICK_UNAVAILABLE) {
+					onNotice?.(
+						t(
+							"No directory chooser is available here; type the path instead.",
+							"当前环境没有目录选择器，请手动输入路径。",
+						),
+					);
 				}
 			};
 
@@ -3500,11 +3513,18 @@ window.__ModuleLoader__.load({
 			// Guessing wrong costs the user a 460MB download, so the default
 			// follows the machine the GUI is running on.
 			const [repo, setRepo] = react.useState(defaultAsrRepo());
+			// The dropdown hands over a pick *or* the custom sentinel; the text
+			// box only exists once someone actually wants an unlisted repo.
+			const [pickingCustom, setPickingCustom] = react.useState(false);
 			const [dlStatus, setDlStatus] = react.useState({});
 			const [busy, setBusy] = react.useState(false);
+			// Deleting is two clicks on purpose: the first arms the row, the
+			// second carries it out, and anything else (reload, another row)
+			// disarms it. `removing` is the row being deleted right now.
+			const [armed, setArmed] = react.useState("");
+			const [removing, setRemoving] = react.useState("");
+			const [removeMsg, setRemoveMsg] = react.useState("");
 			const [savingDir, setSavingDir] = react.useState(false);
-			const [pickingDir, setPickingDir] = react.useState(false);
-			const [browseMsg, setBrowseMsg] = react.useState("");
 			const [dirMsg, setDirMsg] = react.useState("");
 			const [dlSettings, setDlSettings] = react.useState({});
 			const [source, setSource] = react.useState("mirror");
@@ -3543,26 +3563,21 @@ window.__ModuleLoader__.load({
 				refresh();
 			}, [refresh]);
 
-			const browseDir = async () => {
-				setPickingDir(true);
-				setBrowseMsg("");
+			const removeModel = async (target) => {
+				setRemoving(target);
+				setRemoveMsg("");
 				try {
-					const picked = await pickDirectory(ctx);
-					if (picked.ok) {
-						setDirInput(picked.path);
-						return;
-					}
-					// Cancelling needs no message: the operator knows what they
-					// just did, and a note would read as a complaint. Only a
-					// missing chooser is worth explaining.
-					if (picked.reason === PICK_UNAVAILABLE) {
-						setBrowseMsg(t(
-							"No directory chooser is available here; type the path instead.",
-							"当前环境没有目录选择器，请手动输入路径。",
-						));
-					}
+					const r = await callRemote(() => ctx.remote.weixinAsr.removeModel(target));
+					setModels(r?.models ?? []);
+					setRemoveMsg(r?.message ?? t("Deleted", "已删除"));
+					setArmed("");
+					// A removal frees space the section reports; re-read so the
+					// count and the totals are the ones on disk, not a stale list.
+					await refresh();
+				} catch (err) {
+					setRemoveMsg(String(err?.message ?? err));
 				} finally {
-					setPickingDir(false);
+					setRemoving("");
 				}
 			};
 
@@ -3717,20 +3732,29 @@ window.__ModuleLoader__.load({
 							},
 						}, modelDir || t("(not set)", "（未设置）"))),
 					createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-						createElement("input", {
-							value: dirInput,
-							onChange: (e) => setDirInput(e.target.value),
-							placeholder: modelDir || "/path/to/models",
-							style: inputStyle,
-						}),
-						// Choosing a directory by hand is the likeliest source of
-						// typos here, and a wrong model directory fails much later
-						// as "no model available", so offer the host's own chooser.
-						createElement("button", { onClick: browseDir, disabled: pickingDir, style: buttonStyleFor(pickingDir) },
-							pickingDir ? t("Opening…", "打开中…") : t("Browse…", "浏览…")),
+						// The shared folder picker, not a second hand-rolled one.
+						//
+						// This section used to call the host's native chooser
+						// directly: in the web GUI that chooser does not exist, and
+						// the round trip did not always settle, so the button sat on
+						// 「打开中…」 forever and said nothing. `PathPicker` opens a
+						// folder browser in the same tick as the click and only then
+						// offers the native chooser where a desktop shell has one.
+						createElement("div", { style: { flex: "1 1 260px", minWidth: 0 } },
+							createElement(PathPicker, {
+								ctx,
+								t,
+								value: dirInput,
+								onChange: (next) => {
+									setDirInput(next);
+									setDirMsg("");
+								},
+								placeholder: modelDir || "/path/to/models",
+								mode: "dir",
+								onNotice: (message) => setDirMsg(message),
+							})),
 						createElement("button", { onClick: saveDir, disabled: savingDir, style: primaryButtonStyle },
 							savingDir ? t("Saving…", "保存中…") : t("Set directory", "设置目录"))),
-					browseMsg ? createElement("p", { style: captionStyle }, browseMsg) : null,
 					dirMsg ? createElement("p", { style: captionStyle }, dirMsg) : null),
 				//#endregion directory
 
@@ -3772,9 +3796,33 @@ window.__ModuleLoader__.load({
 														style: { color: C.labelTertiary, fontSize: 11, overflowWrap: "anywhere" },
 													}, m.name)
 												: null),
-										createElement("span", { style: { color: C.labelTertiary, flex: "0 0 auto" } },
-											`${(m.sizeBytes / 1048576).toFixed(0)} MB`))))
-						: createElement("p", { style: captionStyle }, t("No models installed yet", "尚未安装模型"))),
+										createElement("span", { style: { display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" } },
+											createElement("span", { style: { color: C.labelTertiary } },
+												`${(m.sizeBytes / 1048576).toFixed(0)} MB`),
+											// Two steps, because a mis-tap here costs a
+											// 460 MB download over a possibly slow mirror.
+											createElement("button", {
+													onClick: () => {
+														if (armed !== m.path) {
+															setArmed(m.path);
+															setRemoveMsg("");
+															return;
+														}
+														removeModel(m.path);
+													},
+													disabled: removing !== "" || busy,
+													style: armed === m.path
+														? { ...buttonStyle, color: C.warn, borderColor: C.warn }
+														: buttonStyleFor(removing !== "" || busy),
+													title: t("Delete this model from disk", "从磁盘上删除这个模型"),
+												},
+												removing === m.path
+													? t("Deleting…", "删除中…")
+													: armed === m.path
+														? t("Confirm delete", "确认删除")
+														: t("Delete", "删除"))))))
+						: createElement("p", { style: captionStyle }, t("No models installed yet", "尚未安装模型")),
+					removeMsg ? createElement("p", { style: captionStyle }, removeMsg) : null),
 				//#endregion installed models
 
 				//#region download source
@@ -3927,15 +3975,49 @@ window.__ModuleLoader__.load({
 				//#region download
 				createElement("div", { style: panelStyle },
 					createElement("span", { style: panelTitleStyle }, t("Download a model", "下载模型")),
-					createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-						createElement("input", {
-							value: repo,
-							onChange: (e) => setRepo(e.target.value),
-							placeholder: "mlx-community/whisper-small-mlx",
-							style: inputStyle,
-						}),
-						createElement("button", { onClick: download, disabled: busy, style: buttonStyleFor(busy) },
+					// A dropdown of the sizes that actually work on this machine,
+					// each with its download size — the free-text box asked the
+					// operator to remember a repo id and guess its cost.
+					createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+						createElement("select", {
+							value: pickingCustom ? CUSTOM_REPO : repo,
+							onChange: (e) => {
+								const next = String(e.target.value ?? "");
+								if (next === CUSTOM_REPO) {
+									setPickingCustom(true);
+									setRepo("");
+									return;
+								}
+								setPickingCustom(false);
+								setRepo(next);
+							},
+							disabled: busy,
+							style: { ...inputStyle, flex: "1 1 260px" },
+						},
+							...asrRecommendedRepos().map((entry) =>
+								createElement("option", { key: entry.id, value: entry.id },
+									t(`${entry.id}  (${entry.sizeEn})  ${entry.hintEn}`, `${entry.id}  （${entry.size}）  ${entry.hintZh}`))),
+							createElement("option", { key: "__custom__", value: CUSTOM_REPO },
+								t("Other repo id…", "其它模型（自己填）…"))),
+						createElement("button", { onClick: download, disabled: busy || repo.trim() === "", style: buttonStyleFor(busy || repo.trim() === "") },
 							busy ? t("Downloading…", "下载中…") : t("Download", "下载"))),
+					pickingCustom
+						? createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+								createElement("input", {
+									value: repo,
+									onChange: (e) => setRepo(e.target.value),
+									placeholder: "org/model-id",
+									style: { ...inputStyle, flex: "1 1 220px" },
+								}),
+								createElement("button", {
+										onClick: () => {
+											setPickingCustom(false);
+											setRepo(defaultAsrRepo());
+										},
+										style: buttonStyle,
+									},
+									t("Back to the recommended list", "回到推荐列表")))
+						: null,
 					// The host now reports real readings parsed from the CLI's own
 					// tqdm output, so show them. A bar is only drawn when a
 					// percentage is actually known — an indeterminate download
@@ -4006,6 +4088,43 @@ window.__ModuleLoader__.load({
 			// An Apple silicon browser is the only case where mlx weights are
 			// loadable; everywhere else the CTranslate2 build is the right default.
 			return /Mac/.test(ua) ? "mlx-community/whisper-small-mlx" : "Systran/faster-whisper-small";
+		}
+
+		/**
+		 * The repos worth downloading, in the two formats the engine supports.
+		 *
+		 * A free-text box assumed the operator knows which whisper checkpoint
+		 * runs on which engine and how big it is — the exact knowledge the box
+		 * was asking them to supply. These are the four practical sizes for a
+		 * voice bridge: tiny for short commands, small as the default, medium
+		 * when accuracy matters more than latency, and turbo as the large-model
+		 * shortcut. Sizes are the downloaded bytes, rounded, and they are why
+		 * nobody should have to guess.
+		 */
+		/** The dropdown's sentinel: choosing this reveals a text box instead of a repo. */
+		const CUSTOM_REPO = "__custom__";
+
+		const ASR_RECOMMENDED = [
+			{ id: "mlx-community/whisper-tiny-mlx", size: "约 75 MB", sizeEn: "~75 MB", hintZh: "最快，适合短指令；口音重时会听错", hintEn: "Fastest; fine for short commands, misses heavy accents" },
+			{ id: "mlx-community/whisper-small-mlx", size: "约 460 MB", sizeEn: "~460 MB", hintZh: "默认：速度与准确率平衡", hintEn: "Default: the balance point" },
+			{ id: "mlx-community/whisper-medium-mlx", size: "约 1.5 GB", sizeEn: "~1.5 GB", hintZh: "更准，转写明显更慢", hintEn: "More accurate, noticeably slower" },
+			{ id: "mlx-community/whisper-large-v3-turbo", size: "约 1.6 GB", sizeEn: "~1.6 GB", hintZh: "大模型里最快的那个", hintEn: "The quick one among the large models" },
+			{ id: "Systran/faster-whisper-tiny", size: "约 75 MB", sizeEn: "~75 MB", hintZh: "CTranslate2，任何机器都能跑", hintEn: "CTranslate2 weights, runs anywhere" },
+			{ id: "Systran/faster-whisper-base", size: "约 145 MB", sizeEn: "~145 MB", hintZh: "比 tiny 稳一点", hintEn: "A little sturdier than tiny" },
+			{ id: "Systran/faster-whisper-small", size: "约 480 MB", sizeEn: "~480 MB", hintZh: "默认：速度与准确率平衡", hintEn: "Default: the balance point" },
+			{ id: "Systran/faster-whisper-medium", size: "约 1.5 GB", sizeEn: "~1.5 GB", hintZh: "更准，转写明显更慢", hintEn: "More accurate, noticeably slower" },
+		];
+
+		/** True on the machine where mlx weights can load at all. */
+		function isAppleSilicon() {
+			const ua = typeof navigator === "object" && navigator !== null ? String(navigator.userAgent ?? "") : "";
+			return /Mac/.test(ua);
+		}
+
+		/** The recommended repos for this machine, best default first. */
+		function asrRecommendedRepos() {
+			const mine = ASR_RECOMMENDED.filter((entry) => (isAppleSilicon() ? entry.id.startsWith("mlx-community/") : entry.id.startsWith("Systran/")));
+			return mine;
 		}
 
 

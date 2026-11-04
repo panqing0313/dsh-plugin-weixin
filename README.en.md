@@ -1164,11 +1164,32 @@ that pins the output to Simplified — this was measured (`今天天氣不錯` �
 **Why non-speech returns empty**: pure tones/silence make whisper invent content (a subtitle credit like `字幕by索兰娅` appeared in testing). The bridge detects "the whole segment contains no speech" and returns an empty string — empty is the honest answer, and the plugin turns it into "did not catch that"
 rather than treating invented words as what the user said.
 
+### Downloading, deleting, and the directory
+
+The **Download a model** box in the "Voice models" block is a dropdown that lists only the
+formats this machine can actually load (four mlx sizes on Apple silicon, four CTranslate2 sizes
+elsewhere), each with its download size and a line on when to pick it — no repo id to memorise and
+no guessing between 460 MB and 1.5 GB:
+
+| Size | Download | When |
+| --- | --- | --- |
+| tiny | ~75 MB | short commands only, speed first |
+| small | ~460–480 MB | the default: the balance point |
+| medium | ~1.5 GB | more accurate, noticeably slower |
+| large-v3-turbo | ~1.6 GB | the fastest of the large models (mlx only) |
+
+Only "Other repo id…" reveals a text box, for a repo outside the list.
+
+Every row under **Installed models** has a **Delete**: the first click turns into
+"Confirm delete", the second one deletes — a mis-tap otherwise costs another 460 MB download.
+Deletion only accepts a model the current directory actually reports (a `config.json` folder);
+anything else is refused, so it cannot remove the wrong folder.
+
 ### The model directory is configurable
 
-In the "Voice models" block of the settings page the directory is an **editable input box**:
-
-- After editing, click "Set directory"; the host does `mkdir -p` and remembers the path, and it still applies after a restart
+The path no longer has to be typed: the "Browse…" button beside the field opens a folder browser
+right away — step in and out, then "Use this folder". A desktop shell additionally offers its own
+native chooser. After choosing, click "Set directory"; the host does `mkdir -p` and remembers the path, and it still applies after a restart
   (written to `<stateDir>/asr-config.json`);
 - That directory drives **both** download and transcription: downloaded models land in `<dir>/<repo>`,
   and at transcription time `HF_HOME` and `DSH_WEIXIN_ASR_MODEL` both point at this directory, so a finished download is directly usable,
