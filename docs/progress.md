@@ -4125,3 +4125,10 @@ release run `41485882140` success）。
 - 测试：`test/memory-summarizer.test.js` 新增 1 条（拒绝的假 bridge：前两次只进日志，第三次回调一次，成功之后不再累计）。
 
 **没做的事（要说清）**：没有自动换模型重试。失败原因是配置（模型名不存在），自动重试只会让同一个错误更吵；把它说出来、让操作者改一行配置才是正确的修法。**也没有**把 `/diag` 的记忆健康度一起做——那是独立的一项，这里只做了「失败会说话」。
+
+## 发布 1.4.9（2026-11-04）
+
+- tag `v1.4.9` → `fad8ec6`，CI `release.yml` run `41748526233` success（带 provenance），main CI `41748519054` success；注册表约 90 秒后可读。
+- `--finish 1.4.9`：`latest -> 1.4.9`、装进 desktop profile、依赖 `^1.4.8 → ^1.4.9`、锁文件刷新。
+- 核验：`dist.shasum 9529cf12bcee17655e99ea16aabcd517c81704d8`、`dist.integrity sha512-cy9e3qmr1rCR9enzivc/f0dDsm3waHJdbQHq9wvEOu0wUF0mV9J8M6brMFWfITCMWrCFTPXhjuBpnHw3nc9Ssg==`、`gitHead fad8ec6`（= 本地 HEAD、= tag 指向）；`doctor` → `installed version 1.4.9` / `published up to date (1.4.9)`。
+- 版本一致性这次从 bump 起就同步了五处（`package.json`、`package-lock.json` 两处、`src/client.js` 的 `PLUGIN_VERSION`、两份 README 的发布行），`test/version-sync.test.js` 在提交前先跑过。
