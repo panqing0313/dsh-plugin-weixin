@@ -4311,3 +4311,15 @@ release run `41485882140` success）。
 夹具陷阱记一笔：那条守卫原来断言 `source`（entry + card 拼起来），改造后我忘了重新定义
 `source`，报 `ReferenceError: source is not defined` 而不是断言失败——测试报错类型要看清，
 `ReferenceError` 永远是测试自己的 bug。
+
+## 发布 1.5.6（2026-11-04）
+
+- 两个提交：`6596c3d` 语音页签三件事（浏览改用共享 `PathPicker`、两段式删除 + 宿主侧
+  `removeModel`、下载改下拉）、`80d946c` 版本与文档。
+- 走 CI：tag `v1.5.6` → `release.yml` run `41800557584` success（`publish` 带 provenance）。
+- 核验：`dist-tags.latest = 1.5.6`、`dist.shasum 196ede34e3860a2c4d69828d3c8b7601a84b4c27`、
+  `dist.integrity sha512-VsPQ/GO01hC2aeFFrmTyk8Isjh4+mSOIn2VQqoaFLWHUJGFNGCaDzPbeRkHgcdhtho8OL5tVUW7FaDTJkmGu8g==`、
+  `gitHead 80d946c`、GitHub release `v1.5.6`；`doctor` → `installed 1.5.6` /
+  `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.6)`；profile `^1.5.5 → ^1.5.6`。
+- 重启后核对：语音模型页签「浏览…」应当场展开文件夹浏览器（不再卡在「打开中…」）、
+  每行有「删除 → 确认删除」、「下载模型」是下拉且默认选中本平台那一档。
