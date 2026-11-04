@@ -4351,3 +4351,21 @@ release run `41485882140` success）。
   `published up to date (1.5.7)`；profile `^1.5.6 → ^1.5.7`。
 - 重启后核对三处：语音识别的「模型」是下拉且首项写着「自动：…」；删除语音模型不再 404；
   需要路径的配置项旁边有「浏览…」。
+
+### 一次在真实数据目录上跑探针的事故（2026-11-04）
+
+用户报「语音模型目录 `/Volumes/models` 的默认位置怎么改了」，查下来变的是他
+**本机 `config.json` 里的值**，不是代码里的默认值（那个从 `92dea65` 起一直是
+「空 = `~/.dsh/weixin/asr-models`」）。三份时间点摆在一起：16:02 与 16:49 的自动
+备份里没有 `modelDir`，17:26 的备份里是 `/Volumes/models`，17:28 的会话里变成
+了默认值。同一个窗口里我用 `ConfigController.list()` 写了探针，**没有设
+`DSH_WEIXIN_STATE_DIR`**，读写的都是真实数据目录。
+
+`list()` 本身不写盘（拿空 `asr` 块与真实 `asr` 块各复现一次，文件逐字节不变），
+所以不能证明是哪一下写的；能确定的是窗口与我的探针重叠。用户确认回到默认：
+`asr` 里的 `model`/`modelDir` 已删除，现在表单显示 `asr.modelDir = ""`、
+`asr.model = "small"`（都是 default，`asr-models` 里本来就有
+`mlx-community__whisper-small-mlx` 与 `faster-whisper-small`，恰好与默认尺寸一致）。
+
+规矩：**任何读配置、读状态、读账本的探针都要先 `DSH_WEIXIN_STATE_DIR=$(mktemp -d)`**，
+只在需要看真实值时读、不写。这条 1.5.4 已经因为 `backups/` 写过一次，这次又犯。
