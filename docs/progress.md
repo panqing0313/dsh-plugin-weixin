@@ -4340,3 +4340,14 @@ release run `41485882140` success）。
     并且验证过它在旧代码上确实报出 `weixinAsr/removeModel`。
 - 顺手：`asr.hfEndpoint` 这类默认值非空的项，值不再显示成内容（保存默认值也不会被记成
   「已保存」），避免新装就看着像被人改过。
+
+## 发布 1.5.7（2026-11-04）
+
+- 提交 `17bb517`（配置项「选而不是打」+ 两个真 bug），CI `release.yml` run
+  `41805215333` success（publish 带 provenance）。
+- 核验：`dist-tags.latest = 1.5.7`、`dist.shasum 67409323cdedcdb4b76e0298185fce63d32e14ee`、
+  `dist.integrity sha512-rozx9ZW0gJYtz3gU3JvytqA/T5pakaPtA99prdccVxS5yGlInnfwkbbA5RCFLqWxD7vuL152R09RfjkwZmCAHQ==`、
+  `gitHead 17bb517`、GitHub release `v1.5.7`；`doctor` → `installed 1.5.7` / `host 0.2.1-rc.5 (tested)` /
+  `published up to date (1.5.7)`；profile `^1.5.6 → ^1.5.7`。
+- 重启后核对三处：语音识别的「模型」是下拉且首项写着「自动：…」；删除语音模型不再 404；
+  需要路径的配置项旁边有「浏览…」。
