@@ -4260,3 +4260,9 @@ release run `41485882140` success）。
 - **Browse 没反应**：`openBrowser` 原来是 `await pickDirectory(ctx)` 成功/失败之后才 `setOpen(true)`。Web 界面里 `pickDirectory` 走 `ctx.remote.directoryPicker`，要过一次 Remote 往返才返回 `PICK_UNAVAILABLE`；期间界面完全没变化。改成同步打开面板、立刻 `load(目标目录)`，桌面宿主的系统选择器挪到 `askNativeChooser()` 里随后再问，选到就覆盖。内嵌浏览器也提了层级（`position: relative` + `zIndex: 20` + 不透明底色），免得被后面的输入框盖住。
 - **导出/打开路径的三种错法**：`migrateInspect` / `migrateRestore` 拿到的路径现在先过 `packPathProblem()` —— 不存在、不是普通文件、是文件夹、是 0 字节，各给一句中文；`migrateExport` 的 `outDir` 以 `.enc` 结尾时按「这是文件名」处理（取其所在文件夹，用 stamp 命名），指向已有文件时明说「是个文件，不是文件夹」。`src/backup-crypto.js` 的四条英文错误也换成了中文（口令不对 / 不是迁移包 / 包不完整 / 需要一个口令），`test/backup-crypto.test.js` 的断言同步改成中文。
 - 测试：新增 `test/migrate-pack.test.js` 2 条（文件夹与空文件给中文原因、`.enc` 结尾的 outDir 落到文件夹且不留垃圾）、`test/client-remote.test.js` 1 条（`openBrowser` 同步打开面板，`askNativeChooser` 是随后的一步）；全量 **1213/1213**。
+
+## 发布 1.5.4（2026-11-04）
+
+- 走 CI：`git tag -a v1.5.4` → `release.yml` run `41790452240`，约 3 分 25 秒全绿（带 provenance）；`--finish 1.5.4` 四步全绿。
+- 核验：`dist-tags.latest = 1.5.4`、`dist.shasum 69b6f65c29c16f50430ef0b8a3777fdc7c8bfeaa`、`dist.integrity sha512-RLlLxRfjXx0rfF8rtAI/4iTEJfJUe/ayRHc6BUhkUQwAA09whBjV2WTtqju1E+hWG1za7RcA7KvMhPs7Z+Ey0w==`、`gitHead 0cdea2f25ad3d32e972dd27537ba87c0ef9322fb`（= 本地 HEAD）；`doctor` → `installed 1.5.4` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.4)`；profile `^1.5.3 → ^1.5.4`。
+- 用户实际导出的 82 MB 包（`migrate-2026-11-04-065919.enc`，1467 文件）头部是 `DSHWX2`、错口令时回「口令不对，或者这个包在拷贝时被改坏了」，说明流式封包与读取这条链路在真机上是通的。探测过程中我自己用 `migrateExport` 多封了两个包（`migrate-2026-11-04-070412.enc` 已删，`065821`/`065919` 是用户的），教训：在本机跑导出探针前先把 `DSH_WEIXIN_STATE_DIR` 指到临时目录。
