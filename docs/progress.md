@@ -23,6 +23,18 @@
 全量 1194/1194。文档：两份 README 的账单小节把「模型写的是我们请求的路由」改成「优先写宿主报的路由，其次才退回配置」，
 并去掉「填上两个配置才开始分模型记账」的说法。
 
+## 发布 1.5.2（2026-11-04）
+
+- 两个提交：`36bf196 fix(bill): read the route the host reports instead of asking the operator to type it`、
+  `0136607 docs: 1.5.2 — the bill names the model the host reports`。tag `v1.5.2` → `0136607`，走 `release.yml`（NPM_TOKEN + provenance）。
+- 核验：`dist.shasum 7f8bb696c58bc47ece5b7559a8c31d70669a6277`、`gitHead 0136607`（= 本地 HEAD）、
+  `dist.integrity sha512-lmje1LRwvB6htLutJDLxOqzVYl8FWjNRqH+CXRrAIxvvfuRA6x8SOE2zHvJ8UYrRH5wgLFh+6yXonD71DuElgg==`、
+  `dist-tags.latest = 1.5.2`、GitHub release `v1.5.2`（非 draft/prerelease）、profile `^1.5.1 → ^1.5.2` 且锁文件刷新。
+- 注册表这次约 **195 秒**才对外提供 1.5.2（`release.mjs --finish` 的 5 分钟窗口内到位）。
+- `doctor` → `installed 1.5.2`、`host 0.2.1-rc.5 (tested)`、`published up to date (1.5.2)`；
+  顺带看到宿主日志里有一条 `getUpdates: POST fetch failed … type=timeout`（iLink 侧超时，插件按重连处理，非本次改动引入）。
+- 全量 1194/1194 后才打的 tag。兼容表：`1.5.2` 已装进 desktop profile，等重启复核后补真机验证行。
+
 ## 账单能看出是哪个模型在花钱，模型报错说人话（2026-11-04，1.5.1）
 
 用户报了两个问题（同一段消息里）：账单页签「token 没记录」，以及模型调用失败时微信里收到的原文
