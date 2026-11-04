@@ -4108,3 +4108,20 @@ release run `41485882140` success）。
 - **本机收尾**：`node bin/release.mjs --finish 1.4.8` —— `dist-tag latest -> 1.4.8`、装进 desktop profile、profile 依赖 `^1.4.5 → ^1.4.8`、锁文件刷新。
 - **核验**：`dist.shasum 60d3bf339b0cad3b498e2adab79d07dbebce390e`、`dist.integrity sha512-2gwxYKI6vGMab4AEDL/LuNSE2gG8u8WAfdwwLopwWTR6qg9aAXB1NkUt82VdxySmXr0QMksHISIzlC+CF0HIvQ==`、`gitHead 4933cddb71588d685dcf03a9340f39c6a4e55864`（= 本地 HEAD）、tag `v1.4.8` 指向同一提交；`doctor` → `installed version 1.4.8`。
 - 本地没有 tarball 可逐字节比对（包由 CI 构建），所以这一版的一致性靠 `gitHead` + tag 指向同一提交来证明；这是走 CI 发布的代价，已记下。
+
+## 记忆后台静默失败：让它自己说出来（2026-11-04，1.4.9）
+
+**用户问的是**「之前关于记忆的是不是没做」。查了对方的真实运行目录（`~/.dsh/weixin/`），结论是**做了，但后台那一半停在三处**：
+
+1. `memory/global-*.json` 里 7 条 fact、5 个 event、profile（称呼/作息/喜好）都在，`schemaVersion` 是 2 —— 说明「记忆模型 v2」确实落地了；
+2. `conv-*.json` 的 `summary` 存着 `（模型调用失败：pi-ai provider "magpie" has no configured model "auto/deepseek-v4.1-flash"）`，`updatedTurn` 停在 65 —— **后台摘要一次都没成功过**；
+3. `global.digest` 是空、`digestAt` 是 0 —— 人物小传那一层因为摘要没成功，也从来没跑过。
+
+**为什么用户会怀疑没做**：失败只写了日志（`memory summary failed for …`），`/diag` 不报记忆健康度，日报里也没有记忆那一行。**一个后台任务静默失败，比它不跑更像「没做」**：文件都在、界面正常、就是不长。
+
+**改动**：
+- `src/memory-summarizer.js` 增加进程内失败计数（`FAILURE_WARN_AFTER = 3`）、`resetMemoryFailureStreak()`、成功即清零；`createMemorySummarizer` 新参数 `onPersistentFailure`。
+- `src/index.js` 把回调接上：第 3 次连续失败时 `warn` 一行日志，并按「日报」同一条目标规则（最近聊过的会话 + 在线的 transport）**在微信里发一条**，内容是说清次数、模型原话（截 200 字）以及「可以在 `memoryProvider` / `memoryModel` 里单独指定记忆模型」。
+- 测试：`test/memory-summarizer.test.js` 新增 1 条（拒绝的假 bridge：前两次只进日志，第三次回调一次，成功之后不再累计）。
+
+**没做的事（要说清）**：没有自动换模型重试。失败原因是配置（模型名不存在），自动重试只会让同一个错误更吵；把它说出来、让操作者改一行配置才是正确的修法。**也没有**把 `/diag` 的记忆健康度一起做——那是独立的一项，这里只做了「失败会说话」。

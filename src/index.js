@@ -724,6 +724,30 @@ export function apply(ctx, config) {
         config: () => config,
         route: memoryRoute,
         logger: { log: (line) => log(line), errLog: (line) => warn(line) },
+        // Three failures in a row used to leave only log lines nobody reads:
+        // the memory files stay on disk looking fine while silently never
+        // growing. Say it once, in the chat, where the operator will see it.
+        onPersistentFailure: ({ failures, reason }) => {
+          warn(`dsh-weixin: memory summarizer failed ${failures} times in a row: ${reason}`)
+          // Same target rule as the reports: the conversation spoken in most
+          // recently, on whichever transport is up.
+          const live = withSavedConfig(config)
+          const accountId = [...transports.keys()].find((id) => pickConversation(listConvMemories(stateRoot, id)) !== undefined)
+          if (accountId === undefined) return
+          const transport = transports.get(accountId)
+          const target = pickConversation(listConvMemories(stateRoot, accountId))
+          if (transport === undefined || target === undefined) return
+          const route = sideRoute()
+          const modelHint = route === undefined ? '当前模型' : `${route.provider ?? '?'}/${route.model ?? '?'}`
+          sendChunked(transport, live, {
+            conversationId: target.conversationId,
+            text: [
+              '（记忆后台连着几次没能跑完，这次先停在这里——不是没在做，是卡住了。）',
+              `原因：${String(reason).slice(0, 200)}`,
+              `用的是 ${modelHint}；记忆模型可以在「记忆模型」里单独指定（memoryProvider / memoryModel），换一个能用的就不会再卡。`,
+            ].join('\n'),
+          }).catch((error) => warn(`could not report the memory failure: ${String(error?.message ?? error)}`))
+        },
       })
 
       // Voice transcription is opt-in and out of tree: with no bridge configured

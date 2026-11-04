@@ -1118,3 +1118,11 @@ node bin/stickers.mjs fetch bluefish --force  # 已存在的重装
 3. **花的是后台预算**：整个流程走 `bridge.summarize`，因此受 `backgroundDailyLimit` 约束；每次最多 `contactRefreshPerDay`（默认 2）张，每 20 小时最多跑一次。
 
 `instance.lock` 那种「每轮重试」的坑也避开了：跑完（包括「没得跑」和读流水失败）都记一次时间。
+
+## 记忆后台卡住时会说出来（1.4.9）
+
+自动摘要是后台任务，失败只往日志写一行。问题在于：**日志没人看，而记忆文件会一直躺在磁盘上、看着完全正常、却再也不长**。真实例子就发生在开发机上一次——记忆模型被路由到一个不存在的模型名，每 10 个回合失败一次，只有启动日志里一行 `memory summary failed`，表面一切如常。
+
+现在：同一个进程里**连着 3 次失败**，插件会在最近聊过的那个会话里发一句话——发生了多少次、原因（模型的原话，截断到 200 字）、以及「记忆模型可以在「记忆模型」里单独指定（`memoryProvider` / `memoryModel`）」。之后计数清零，再连败 3 次才会再说；成功一次也清零。计数在内存里，重启即归零——重启本身就算一次改变。
+
+判据是 `FAILURE_WARN_AFTER = 3`（`src/memory-summarizer.js`），测试 `test/memory-summarizer.test.js` 用拒绝的假 bridge 钉住「第三次才说、成功即清零」。

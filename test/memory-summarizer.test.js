@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createMemorySummarizer } from '../src/memory-summarizer.js'
+import { createMemorySummarizer, resetMemoryFailureStreak, FAILURE_WARN_AFTER } from '../src/memory-summarizer.js'
 import { addGlobalFact, readConvMemory, readGlobalMemory, setConvSummary, setDigest } from '../src/memory.js'
 import { appendJournal } from '../src/message/journal.js'
 
@@ -284,4 +284,52 @@ test('a correction in the reply replaces the fact it names, instead of joining i
   assert.ok(texts.includes('用户搬到杭州了'), 'the new value is stored')
   assert.ok(!texts.includes('用户住在北京'), 'and the old one is gone, not sitting beside it')
   assert.ok(store.superseded.some((entry) => entry.text === '用户住在北京'), 'the replaced text is kept as history')
+})
+
+test('three failures in a row are reported once, and a later success clears the count', async () => {
+  resetMemoryFailureStreak()
+  const notices = []
+  const failing = fakeBridge()
+  // Reject instead of resolving: a provider whose model name is unknown fails
+  // exactly this way, and it is what left the memory files frozen while looking
+  // perfectly healthy.
+  failing.summarize = ({ conversationId }) => {
+    failing.calls.push({ conversationId, prompt: '', resolved: undefined })
+    return Promise.reject(new Error('pi-ai provider "magpie" has no configured model "auto/x"'))
+  }
+  const sum = createMemorySummarizer({
+    bridge: failing,
+    stateRoot: root,
+    config: () => ({ memoryEnabled: true, memorySummaryTurns: 1 }),
+    logger: { log: () => {}, errLog: () => {} },
+    onPersistentFailure: (info) => notices.push(info),
+  })
+  for (let index = 0; index < FAILURE_WARN_AFTER - 1; index += 1) {
+    seedJournal(`conv-fail-${index}`)
+    sum.afterTurn(ACCOUNT, `conv-fail-${index}`)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(notices.length, 0, `fewer than ${FAILURE_WARN_AFTER} failures stay in the log`)
+  seedJournal('conv-fail-last')
+  sum.afterTurn(ACCOUNT, 'conv-fail-last')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(notices.length, 1, 'the third failure in a row is reported once')
+  assert.match(notices[0].reason, /magpie/)
+  assert.equal(notices[0].failures, FAILURE_WARN_AFTER)
+
+  // A single success resets the streak: the next failure is silent again.
+  const healthy = fakeBridge()
+  const sum2 = createMemorySummarizer({
+    bridge: healthy,
+    stateRoot: root,
+    config: () => ({ memoryEnabled: true, memorySummaryTurns: 1 }),
+    logger: { log: () => {}, errLog: () => {} },
+    onPersistentFailure: () => notices.push({ after: 'recovered' }),
+  })
+  seedJournal('conv-ok')
+  sum2.afterTurn(ACCOUNT, 'conv-ok')
+  await Promise.resolve()
+  healthy.settleAll('这次好了')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(notices.length, 1, 'a success does not notify, it only clears the count')
 })

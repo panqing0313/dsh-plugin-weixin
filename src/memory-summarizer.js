@@ -42,6 +42,32 @@ const noopWarn = () => {}
 export const CONSOLIDATE_MIN_FACTS = 10
 /** …and at most this often, so a chatty day cannot rewrite the digest hourly. */
 export const CONSOLIDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/**
+ * How many conversations in a row may fail before the operator is told.
+ *
+ * A background job that fails silently is worse than one that does not run:
+ * the files stay on disk, look fine, and stop growing. The counter lives in
+ * memory (a restart starts over — restarting is itself a change), and the
+ * warning carries the model's own words so the reason is actionable.
+ */
+export const FAILURE_WARN_AFTER = 3
+const failureStreak = new Map()
+
+/** Reset the in-memory failure streak (tests and a successful run). */
+export function resetMemoryFailureStreak() {
+    failureStreak.clear()
+}
+
+function noteBackgroundSuccess() {
+    failureStreak.clear()
+}
+
+function noteBackgroundFailure(reason) {
+    const failures = (failureStreak.get('memory') ?? 0) + 1
+    failureStreak.set('memory', failures)
+    return failures
+}
 /** Facts the model inferred itself are more durable than an offhand line. */
 export const EXTRACTED_FACT_WEIGHT = 4
 export const MAX_EXTRACTED_FACTS = 3
@@ -143,7 +169,7 @@ function mergeProfile(current, patch) {
  *   conversation's model. Undefined means "follow the conversation".
  * @param {{ log?: (line: string) => void, errLog?: (line: string) => void }} [params.logger]
  */
-export function createMemorySummarizer({ bridge, stateRoot, config, route, logger = {} }) {
+export function createMemorySummarizer({ bridge, stateRoot, config, route, logger = {}, onPersistentFailure }) {
     const log = logger.log ?? noopWarn
     const errLog = logger.errLog ?? noopWarn
     // One summary in flight per conversation: turns settle serially, but a
@@ -271,13 +297,30 @@ export function createMemorySummarizer({ bridge, stateRoot, config, route, logge
             if (hasProfile) {
                 saveProfile(stateRoot, accountId, mergeProfile(store.profile, patch), { warn: errLog })
             }
+            noteBackgroundSuccess()
             log(`memory: conversation ${conversationId} summarized at turn ${turn}`
                 + ` (+${extracted.facts.length} facts, +${extracted.events.length} events)`)
             void consolidate(accountId, conversationId).catch((error) => {
                 errLog(`memory consolidation failed: ${String(error)}`)
             })
         } catch (error) {
-            errLog(`memory summary failed for ${conversationId}: ${String(error)}`)
+            const reason = String(error?.message ?? error)
+            errLog(`memory summary failed for ${conversationId}: ${reason}`)
+            const failures = noteBackgroundFailure(reason)
+            if (failures >= FAILURE_WARN_AFTER) {
+                // Reset so the next three failures speak again instead of the
+                // operator hearing about it on every turn forever.
+                resetMemoryFailureStreak()
+                try {
+                    onPersistentFailure?.({
+                        failures: FAILURE_WARN_AFTER,
+                        reason,
+                        conversations: inFlight.size,
+                    })
+                } catch (notifyError) {
+                    errLog(`memory failure notice failed: ${String(notifyError)}`)
+                }
+            }
         }
     }
 

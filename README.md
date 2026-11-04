@@ -175,7 +175,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.4.8`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.4.9`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
@@ -762,6 +762,8 @@ npm run backup -- restore <id>                  # 恢复（会先把当前状态
   改口替换掉的旧说法、撤销历史都存在同一份文件里，重启不丢（`history` 字段，最多留 20 步）。
 - 每段会话还有一个**自动摘要**：每 `memorySummaryTurns`（默认 10）个回合，插件在后台用一个
   独立侧会话把最近对话浓缩成摘要——它绝不发微信消息，你只在下一条回复的提示词里感受到它。
+  它连着失败 **3 次**（比如记忆模型配了一个不存在的模型名）时，插件会**在微信里说一句**卡在哪、
+  用的是什么模型，而不是只往日志里写一行——记忆文件会一直躺在磁盘上看着没问题，却再也不长。
 
 #### 第一次用：跟着「上手」清单走（不需要记命令）
 
