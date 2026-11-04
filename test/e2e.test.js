@@ -89,7 +89,7 @@ const REPLY_WAIT_MS = Number(process.env.DSH_WEIXIN_E2E_WAIT_MS ?? 60_000)
  * entry is `{ callId, name, arguments }`; a `tool/call` and its `tool/result`
  * are emitted in order, the shape a real turn produces.
  */
-function createFakeAgents({ reply, tools }) {
+function createFakeAgents({ reply, tools, route }) {
   const agents = new Map()
   // The prompts this fake agent was handed, in order. Tests that assert on what
   // the plugin BUILT read this instead of the outbound bubble: a reply has to
@@ -106,6 +106,10 @@ function createFakeAgents({ reply, tools }) {
       const agent = {
         session: { id: resumeSessionId, snapshotEvents: () => events },
         inbox: { clear() {} },
+        // The host's own record of the route it built for this session
+        // (AgentOptions). The ledger reads it so a bill can name the model
+        // without anyone typing a provider into the card.
+        ...(route === undefined ? {} : { options: route }),
         followup(message) {
           prompts.push(message.content[0].text)
           ev('user/message', { message })
@@ -331,6 +335,69 @@ test('a chat turn lands in the bill, tagged with the route we asked for', async 
     // The route we asked for, spelled the way it takes effect.
     assert.deepEqual(Object.keys(row.models), ['deepseek/deepseek-chat'])
     assert.deepEqual(Object.keys(row.routes), ['chat'])
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+    delete process.env.DSH_WEIXIN_STATE_DIR
+  }
+})
+
+test('the bill names the model the host chose, even when nothing was configured in the card', async (t) => {
+  if (!(await hostPackagesAvailable())) return t.skip(HOST_ONLY_SKIP)
+
+  // The reported bug: the ledger said "默认" because chatProvider/chatModel were
+  // empty, and the tab looked like it was not counting at all. The session plainly
+  // had a model — the host knows which one, and Agent.options is how it says so.
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-enrol-'))
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { server, baseUrl, sent } = await startFakeILink([
+      [
+        { message_id: 3002, from_user_id: ALLOWED, group_id: '', message_type: 1, message_state: 2, context_token: 'ct2', create_time_ms: 1, item_list: [{ type: 1, text_item: { text: '在吗' } }] },
+      ],
+    ])
+    seedAccount(stateRoot, baseUrl)
+
+    const plugin = await import(path.join(PROJECT_ROOT, 'src', 'index.js'))
+    const config = plugin.Config({
+      eventPollMs: 25,
+      sendIntervalMs: 1,
+      allowedSenders: [ALLOWED],
+      accountId: ACCOUNT_ID,
+      memoryEnabled: false,
+      // No chatProvider / chatModel: this is the configuration that used to
+      // produce a nameless bill row.
+    })
+
+    const disposers = []
+    const ctx = {
+      logger: { info: () => {}, warn: () => {} },
+      effect(fn) { disposers.push(fn()); return { dispose() {} } },
+      get: (name) => (name === 'agents'
+        ? createFakeAgents({ reply: 'pong: ', route: { provider: 'magpie', model: 'auto/deepseek-v4.1-flash' } })
+        : undefined),
+    }
+    plugin.apply(ctx, config)
+
+    const deadline = Date.now() + REPLY_WAIT_MS
+    while (sent.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    for (const d of disposers) await (await d)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    server.close()
+
+    const ledger = JSON.parse(fs.readFileSync(path.join(stateRoot, 'usage-ledger.json'), 'utf8'))
+    const row = Object.values(ledger.accounts[ACCOUNT_ID].conversations)[0]
+    assert.deepEqual(Object.keys(row.models), ['magpie/auto/deepseek-v4.1-flash'], 'the host\'s own route, not a guessed one')
+    assert.equal(row.turns, 1)
+
+    // The card renders the per-model breakdown from the same row.
+    const { conversationRows } = await import(path.join(PROJECT_ROOT, 'src', 'message', 'usage-ledger.js'))
+    // conversationRows reads the ledger file itself (it takes the state root,
+    // not the parsed JSON), so this checks the card's own code path end to end.
+    const [cardRow] = conversationRows(stateRoot, ACCOUNT_ID)
+    assert.equal(cardRow.modelBreakdown[0].model, 'magpie/auto/deepseek-v4.1-flash')
+    assert.equal(cardRow.modelBreakdown[0].turns, 1)
   } finally {
     fs.rmSync(stateRoot, { recursive: true, force: true })
     delete process.env.DSH_WEIXIN_STATE_DIR

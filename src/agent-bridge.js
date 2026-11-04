@@ -427,6 +427,32 @@ export class AgentBridge {
     return undefined
   }
 
+  /**
+   * The provider/model this agent's requests actually use, per the host.
+   *
+   * `Agent.options` is the host's own record of the route it built for the
+   * session. It covers a conversation the user created in the GUI, one we
+   * created without any agentOptions, and a resumed session alike — so the ledger
+   * can name a model without the operator typing it into a text box. A host that
+   * exposes nothing here yields undefined, and the ledger keeps saying so rather
+   * than inventing a name.
+   *
+   * @param {any} agent
+   * @returns {{ provider: string, model: string } | undefined}
+   */
+  #sessionRoute(agent) {
+    try {
+      const provider = agent?.options?.provider
+      const model = agent?.options?.model
+      if (typeof provider === 'string' && provider !== '' && typeof model === 'string' && model !== '') {
+        return { provider, model }
+      }
+    } catch {
+      // A disposed agent can throw on property access; a missing name is fine.
+    }
+    return undefined
+  }
+
   /** The preset id this conversation should compose, when presets exist. */
   async #presetId(presets) {
     if (!presets?.resolve) return undefined
@@ -550,6 +576,12 @@ export class AgentBridge {
       cancelled: false,
       auditSeq: -1,
       auditCalls: new Map(),
+      // The provider/model the host says this session runs on, resolved once per
+      // attach. It is the only truthful source: the plugin's own route settings
+      // say what we *asked for*, and the host's live answer can differ (a routing
+      // gateway, a per-session pick, a model that changed in the GUI). Without it
+      // every bill row read "默认" even though the session plainly had a model.
+      route: await this.#sessionRoute(handle.agent),
     }
     this.sessions.set(sessionId, record)
     // Resume can resurrect a session this plugin never filed (created by an
@@ -709,6 +741,9 @@ export class AgentBridge {
         conversationId,
         prompt: text,
         reply: typeof settled?.text === 'string' ? settled.text : '',
+        // The host's own answer wins over the route we asked for; see
+        // #sessionRoute. `record.route` is resolved per attach.
+        route: record.route,
       })
       return settled
     } finally {
@@ -796,7 +831,7 @@ export class AgentBridge {
         conversationId,
         prompt,
         reply: typeof settled?.text === 'string' ? settled.text : '',
-        route,
+        route: record.route ?? route,
       })
       return settled
     } finally {

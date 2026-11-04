@@ -2,6 +2,27 @@
 
 更新时间：2026-11-04
 
+## 账单自己认得模型（2026-11-04，1.5.2）
+
+用户追问：`能统计会话里面的模型吗，而不是让我填哪个模型`。
+
+1.5.1 只是把「默认」这个桶说清楚，仍然要求人手填 `chatProvider` / `chatModel` 才能分模型记账。
+问题在于插件一直被当成「不知道宿主用了哪个模型」—— 查 `node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts:64`，
+`Agent` 接口本来就暴露 `readonly options: AgentOptions`，`AgentOptions = { provider?, model?, maxTokens? }`，
+注释是「The provider route and model this agent's requests use」。宿主自己记着这条，只是我们没读。
+
+- `src/agent-bridge.js`：`#attachNew` 的 record 增加 `route: await this.#sessionRoute(handle.agent)`；
+  新增私有方法 `#sessionRoute(agent)` 从 `agent.options` 取 `provider` / `model`，两者都是非空字符串才返回，否则 `undefined`（宿主不报就别编）。
+- 上报时 `route: record.route`（聊天）/ `route: record.route ?? route`（后台）：宿主的答案优先于我们请求的路由；
+  `src/index.js` 的 `recordModelUsage` 里原本就有「显式 route → 配置 → 默认」的取值顺序，这里不用改。
+- `test/e2e.test.js` 新增「the bill names the model the host chose, even when nothing was configured in the card」：
+  配置里不设 `chatProvider`/`chatModel`，假 agent 带 `options: { provider: 'magpie', model: 'auto/deepseek-v4.1-flash' }`，
+  断言账本 `models` 只有 `magpie/auto/deepseek-v4.1-flash`、`turns === 1`，并通过 `conversationRows(stateRoot, ACCOUNT_ID)`
+  断言卡片那一行的 `modelBreakdown[0].model` 同名 —— 走的是卡片真正的代码路径（这个函数收状态目录，不是收解析后的账本对象，第一版传错参数报了 `ERR_INVALID_ARG_TYPE`）。
+
+全量 1194/1194。文档：两份 README 的账单小节把「模型写的是我们请求的路由」改成「优先写宿主报的路由，其次才退回配置」，
+并去掉「填上两个配置才开始分模型记账」的说法。
+
 ## 账单能看出是哪个模型在花钱，模型报错说人话（2026-11-04，1.5.1）
 
 用户报了两个问题（同一段消息里）：账单页签「token 没记录」，以及模型调用失败时微信里收到的原文
