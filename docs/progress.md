@@ -4246,3 +4246,9 @@ release run `41485882140` success）。
 踩过的坑：`src/model-catalog.js` 第一版把「模型列表项」的判断放在 provider 闸门**之后**，导致 `name` 被当成 provider 字段读掉、每个模型的标签变成它的 id；用 python 补丁时又两次把循环的结束大括号与 `return` 一起删掉（`SyntaxError: Unexpected token 'export'`）。教训是这块解析器只用 `edit` 工具改、每次改完立刻 `node -e` 跑真实文件（本机 3 个供应商 / 40 个模型 / `partial: false`）。
 
 全量 1210/1210；`check.mjs` → checked 275 files。
+
+## 发布 1.5.3（2026-11-04）
+
+- 发布方式走 CI：`git tag -a v1.5.3` → push → `release.yml` run `41786926460`，4 分 36 秒全绿（`NPM_TOKEN` + `id-token: write`，带 provenance）；`node bin/release.mjs --finish 1.5.3` 四步全绿。
+- 核验：`dist-tags.latest = 1.5.3`、`dist.shasum 6305f675f86e01306d8678df80ecdbf959edc425`、`dist.integrity sha512-9JWoqcv6m+Au2gan0YH4NDUd+hZbNTWkZXbwD3TTXMT4GI8MkxVBJh/XelgKkIsvy6IgCNA7DKyedB7E9wcXGA==`、`gitHead fdfe32c4deca6e761324153f529d99ce8f9a0584`（= 本地 HEAD）；`doctor` → `installed 1.5.3` / `host 0.2.1-rc.5 (tested)` / `published up to date (1.5.3)`；profile `^1.5.2 → ^1.5.3`，锁文件刷新。
+- 这一版两处修必须重启 DSH 才能看到：账单页签改的是宿主侧读取逻辑，路径框与模型下拉改的是卡片。重启后请复核：账单页签有没有数字、维护页签两个路径框的「浏览…」、配置项里模型是不是下拉框。
