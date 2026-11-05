@@ -1,5 +1,19 @@
 ## 版本
 
+- **1.5.12** —— **宿主 `0.2.2-rc.1` 进了测试列表；「读到了版本却说读不到」修好了**：
+  - **`0.2.2-rc.1` 已真机复核并加进 `TESTED_HOSTS`**（`src/host-compat.js`），`npm run doctor` 的 `host app` 一行
+    现在显示 `host 0.2.2-rc.1 (tested)`，设置卡与 onboarding 里的宿主提示同步变绿。复核依据：doctor 14 项 0 problem、
+    设置卡九个页签与左侧栏「微信BOT」入口都在（座位名与加载器没变）、当天 journal 有带 `messageId` 的
+    `delivery: "accepted"` 出站记录（收发、allowlist、agent 桥与 1.5.11 的投递字段都在这台宿主上真实工作）。
+  - **`describeHost()` 把已知版本说成「unknown」**：未知分支原先用 `typeof version !== 'string'` 判断，而诊断路径传进来的
+    是 `hostStatus()` 的结果对象，于是明明从 plist 读到了版本号，`doctor` 照样打印 `host version unknown`。现在两个分支
+    用的是同一个归一化后的版本值，且**没有数字的字符串（onboarding 自己的 `'unknown'` 措辞）也归为未知**，不会再出现
+    「host unknown is not in the tested list」这种把词当版本号的输出。
+  - **`compatibilityMarkdown(pluginVersion, notes)` 支持按宿主写不同的验证说明**：新增宿主可以只写自己那一行，
+    没写到的沿用通用文案，新条目不会悄悄继承别人的覆盖率。
+  - 测试：`test/host-compat.test.js` 新增 3 条（读到的版本必须被原样打印且永不打印 `undefined`、列表末位是最新宿主、
+    按宿主的 notes 覆盖只作用于指定的一行），全量 **1235/1235**。
+
 - **1.5.11** —— **回复发出去没有，现在查得到；过期不再冤枉新登录的账号**（issue #13 / #12）：
   - **出站日志以前只证明「生成了文本」**：`sendChunked()` 在 `channel.sendText()` 之前就写了 `out` 行，所以
     「日志里有 out，微信里没有」永远解释不通。现在 journal 分两步写：先写 `phase: "sending"` 的暂定行，发送有结果后

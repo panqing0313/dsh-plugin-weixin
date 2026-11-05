@@ -11,8 +11,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** Host releases this tree has actually been run against. Update when verified. */
-export const TESTED_HOSTS = Object.freeze(['0.2.1-rc.3', '0.2.1-rc.5'])
+/**
+ * Host releases this tree has actually been run against. Update when verified.
+ *
+ * Order is oldest-first; the settings card and `doctor` print the newest one
+ * last, so a host that is one release behind reads as "we tested past it".
+ */
+export const TESTED_HOSTS = Object.freeze(['0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1'])
 
 /** Where the desktop app records its version on macOS. */
 export const DEFAULT_INFO_PLIST = '/Applications/DeepSeek Harness.app/Contents/Info.plist'
@@ -48,8 +53,15 @@ export function detectHostVersion(options = {}) {
  * @returns {{ status: 'tested' | 'untested' | 'unknown', version?: string, tested: readonly string[] }}
  */
 export function hostStatus(version) {
-  if (typeof version !== 'string' || version === '') return { status: 'unknown', tested: TESTED_HOSTS }
-  return { status: TESTED_HOSTS.includes(version) ? 'tested' : 'untested', version, tested: TESTED_HOSTS }
+  // A bare word is what a caller says when it could not tell; a version has a
+  // digit in it. Without this, `describeHost('unknown')` (the onboarding
+  // screen's own wording) would be reported as an untested host called
+  // "unknown", which reads like a version number we failed to recognise.
+  if (typeof version !== 'string' || version.trim() === '' || !/\d/.test(version)) {
+    return { status: 'unknown', tested: TESTED_HOSTS }
+  }
+  const wanted = version.trim()
+  return { status: TESTED_HOSTS.includes(wanted) ? 'tested' : 'untested', version: wanted, tested: TESTED_HOSTS }
 }
 
 /** True when the two versions differ only by a `-rc.N`/`-beta.N` style suffix. */
@@ -57,17 +69,34 @@ export function isPreRelease(version) {
   return typeof version === 'string' && /-/.test(version)
 }
 
-/** One line a human can act on. */
+/**
+ * One line a human can act on.
+ *
+ * `version` may be the value from {@link detectHostVersion} — which is
+ * `undefined` when the plist cannot be read — or a word like `unknown` from a
+ * caller that could not tell. Both must come out as "unknown", and neither may
+ * print a raw `undefined` at the user. Anything else is compared verbatim.
+ */
 export function describeHost(version) {
   const status = hostStatus(version)
   if (status.status === 'unknown') return `host version unknown; this plugin was tested against ${TESTED_HOSTS.join(', ')}`
-  if (status.status === 'tested') return `host ${version} (tested)`
-  return `host ${version} is not in the tested list (${TESTED_HOSTS.join(', ')}); if something looks broken, this is the first thing to check`
+  if (status.status === 'tested') return `host ${status.version} (tested)`
+  return `host ${status.version} is not in the tested list (${TESTED_HOSTS.join(', ')}); if something looks broken, this is the first thing to check`
 }
 
-/** Render the compatibility table for the docs, so the page cannot drift. */
-export function compatibilityMarkdown(pluginVersion) {
-  const rows = TESTED_HOSTS.map((host) => `| \`${pluginVersion}\` | \`${host}\` | 真机验证过：登录、收发、设置卡、侧边栏入口 |`)
+/**
+ * Render the compatibility table for the docs, so the page cannot drift.
+ *
+ * @param {string} pluginVersion  Plugin version the whole table is about.
+ * @param {Record<string, string>} [notes]  Host version → what was verified.
+ *   Hosts not named here get the generic line, so a new entry cannot silently
+ *   claim coverage it does not have.
+ */
+export function compatibilityMarkdown(pluginVersion, notes = {}) {
+  const rows = TESTED_HOSTS.map((host) => {
+    const detail = notes[host] ?? '真机验证过：登录、收发、设置卡、侧边栏入口'
+    return `| \`${pluginVersion}\` | \`${host}\` | ${detail} |`
+  })
   return [
     '| 插件版本 | 宿主版本 | 验证到什么程度 |',
     '| --- | --- | --- |',

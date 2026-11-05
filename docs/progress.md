@@ -1,3 +1,22 @@
+## 宿主 0.2.2-rc.1 进测试列表，顺手修掉「读到了却说读不到」（2026-11-05，1.5.12）
+
+用户要求把本机宿主 `0.2.2-rc.1` 加进已验证列表（`npm run doctor` 原来显示「不在测试列表里」）。按
+`docs/compatibility.md` 的 5 步复核后发现一个**真 bug**：
+
+- **`describeHost()` 把已知版本说成 unknown**。旧实现 `hostStatus()` 在入参非字符串或缺省时返回
+  `{status:'unknown'}`，而 `describeHost()` 又拿 `status.status === 'unknown'` 分流；`src/index.js:1849`
+  这类调用点传的是版本字符串没问题，但诊断路径里把 `hostStatus(...)` 的结果往外传时，版本号就丢了。
+  现在 `hostStatus()` 先归一化（`trim()`，且**不含数字的字符串视为「无法判断」**——onboarding 自己就用
+  `'unknown'` 这个词），`describeHost()` 的两个分支都读归一化后的值，代码不再分叉。
+- **`compatibilityMarkdown()` 增加可选的 `notes`**（宿主版本 → 验证说明），没写到的沿用通用行，避免新加的宿主
+  继承「真机验证过：登录、收发、设置卡、侧边栏入口」这种别人挣来的话术。
+- **复核证据**：`npm run doctor` 14 项 0 problem（`installed version 1.5.11`、`published version up to date (1.5.11)`）；
+  `PlistBuddy` 读到 `CFBundleShortVersionString = 0.2.2-rc.1`；`src/client.js:1255` 的 `["remote","slots","locale"]`
+  注入与四个座位注册未变；当天 journal 有 4 条 `phase:"settled"` + `delivery:"accepted"` 且带 `messageId` 的出站记录。
+- 测试：`test/host-compat.test.js` 新增 3 条，其中「a version that is read is a version that is printed」是本 bug 的回归护栏
+  （并对 `undefined`/`''`/`'   '`/`'unknown'`/`'99.0.0'` 断言永不打印 `undefined`）。`npm run check` 277 files ok；
+  全量 **1235/1235**。
+
 ## 修 issue #13 / #12：投递状态查得到，过期按账号记（2026-11-05，1.5.11）
 
 Leon-KTlan 提的 #13 有三个子指控，Rlxzmdd 提的 #12 是能力边界没说清。
