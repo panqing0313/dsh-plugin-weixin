@@ -76,6 +76,12 @@ persona / accounts / sessions）。保留策略 `src/message/retention.js` 按�
 
 - **微信原生表情包发不出去**：`MessageItemType` 里没有贴纸类型，只能发图片气泡（36 张内置图）。
 - **bot 语音条服务端不投递**：`ret=0` 接受但对方收不到（两次真机实测），所以 `voiceOutbound` 默认关。
+- **群里能不能用，插件说了不算**：`groupChatEnabled` / `groupReplyWhen` 只决定「收到群消息之后怎么处理」。机器人能不能进群、
+  进群后能不能发、能不能被 @，是微信/iLink 对这个机器人的准入，iLink Bot API 既没有自助入群的接口，也没有成员名单（见
+  README「群聊」一节）。所以群聊能力上限在协议侧，不在本仓库；「桌面微信 + Computer Use 桥接」评估后不做。
+- **投递状态只能到「服务端接收」为止**：`sendMessage` 只回 `ret`，正常返回里没有 `message_id`（vendor
+  `api/api.js` 也不取它），因此 journal 的 delivery 只有 `accepted`（有 id）/ `unconfirmed`（`ret=0` 但无 id）两档，
+  都证明不了「对方手机上真的显示出来了」。`client_id` 由本插件生成并写在 journal 里，作为用户对照手机的把手。
 - **设置卡的拆分只到"一个 chunk"这一步**：界面九个 Section 与卡片本体已经搬进 `src/client.card.js`
   （2452 行），入口 `src/client.js` 从 3590 行降到 1278 行，靠 loader 的包内 lazy chunk 协议
   （`register({id, chunk, factory})` + `require.async("./client.card.js")`）在激活时取回。

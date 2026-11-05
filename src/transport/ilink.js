@@ -58,6 +58,31 @@ export class SessionRejectedError extends Error {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * The id this plugin puts on an outbound message. Weixin echoes it back on the
+ * bot's own messages, so it is the handle a user can match in the journal
+ * against what their phone shows.
+ */
+function newClientId() {
+  return `dsh-weixin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * Turn a sendMessage response into the delivery step the journal records.
+ *
+ * @param {any} response  Whatever the vendored call returned.
+ * @param {string} clientId
+ */
+export function sendOutcome(response, clientId) {
+  const messageId = response?.message_id ?? response?.msg_id ?? response?.svr_id
+  const ret = typeof response?.ret === 'number' ? response.ret : undefined
+  const base = { clientId, ...(ret === undefined ? {} : { ret }) }
+  // `ret=0` and no id is not a success we can point at: say so, so the journal
+  // shows "accepted, no receipt" rather than a bare out line that reads as sent.
+  if (messageId === undefined || messageId === '') return { direction: 'unconfirmed', ...base }
+  return { direction: 'accepted', ...base, messageId: String(messageId) }
+}
+
+/**
  * A timer whose only job is to bound another promise.
  *
  * Unlike {@link sleep} it must not keep the event loop alive on its own: the
@@ -367,7 +392,10 @@ export class ILinkTransport {
    * @param {number} [options.longPollTimeoutMs]
    * @param {(line: string) => void} [options.log]
    * @param {(line: string) => void} [options.errLog]
-   * @param {(error: SessionRejectedError) => void} [options.onSessionRejected]
+   * @param {(error: SessionRejectedError, accountId: string) => void} [options.onSessionRejected]
+   *   The account id rides along because a freshly bound account can start
+   *   polling while this one is still ending, and the caller records the
+   *   expiry per account (issue #13).
    *   Called once when the server refuses the session, so the host can surface
    *   "log in again" somewhere the operator will actually see it.
    * @param {(message: any) => boolean} [options.bypassQueue]
@@ -583,7 +611,7 @@ export class ILinkTransport {
               ? 'the Weixin session has expired; messaging is stopped until you log in again (run bin/login.js, then reload)'
               : `the Weixin API rejected this session (${error.message}); messaging is stopped until you log in again`,
           )
-          this.#onSessionRejected?.(error)
+          this.#onSessionRejected?.(error, this.accountId)
           break
         }
         if (isAbortError(error)) {
@@ -609,24 +637,35 @@ export class ILinkTransport {
 
   /**
    * Send one text reply, split into chunks by the caller.
+   *
+   * `ret=0` is the only thing Weixin promises. There is no delivery receipt,
+   * and a response without `message_id` is a real shape (seen in the wild: it
+   * was accepted and the bubble never appeared). So the answer says which of
+   * the two happened — accepted with an id, or accepted without one — and the
+   * caller records *that*, instead of treating "HTTP worked" as "it arrived".
+   *
    * @param {any} message
+   * @returns {Promise<{ direction: 'accepted' | 'unconfirmed', clientId?: string, messageId?: string, ret?: number }>}
    */
   async send(message) {
     const item = { type: MessageItemType.TEXT, text_item: { text: message.text ?? '' } }
     // Pace every send, then tell the pacer what happened: three failures in a
     // row arm the cooldown that stops a retry storm from becoming a send ban.
     await this.pacer.acquire()
+    const clientId = newClientId()
+    let response
     try {
-      await sendMessage({
+      response = await sendMessage({
         baseUrl: this.baseUrl,
         token: this.token,
-        body: this.#body({ conversationId: message.conversationId, item, contextToken: message.contextToken }),
+        body: this.#body({ conversationId: message.conversationId, item, contextToken: message.contextToken, clientId }),
       })
     } catch (error) {
       this.pacer.noteFailure()
       throw error
     }
     this.pacer.noteSuccess()
+    return sendOutcome(response, clientId)
   }
 
   /**
@@ -718,12 +757,12 @@ export class ILinkTransport {
    * @param {any} params.item
    * @param {string} [params.contextToken]
    */
-  #body({ conversationId, item, contextToken }) {
+  #body({ conversationId, item, contextToken, clientId }) {
     const body = {
       msg: {
         from_user_id: '',
         to_user_id: conversationId,
-        client_id: `dsh-weixin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        client_id: clientId ?? newClientId(),
         message_type: MessageType.BOT,
         message_state: MessageState.FINISH,
         item_list: [item],

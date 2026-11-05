@@ -324,9 +324,10 @@ export class WeixinLoginController extends TypertRemoteService {
                 logger.info(
                     `weixin login: confirmed account=${status.ilink_bot_id} user=${redactToken(status.ilink_user_id)} token=${redactToken(status.bot_token)}`,
                 );
-                // A completed login writes a usable credential, so any expiry
-                // recorded from an earlier session no longer applies.
-                this.clearSessionExpired();
+                // A completed login writes a usable credential, so the expiry
+                // recorded against THIS account no longer applies. Other
+                // accounts keep their own state — their loops never logged in.
+                this.clearSessionExpired(status.ilink_bot_id);
                 // The loop that is running belongs to the credential that was
                 // on disk when it started — which is the one this login just
                 // replaced, or nothing at all on a fresh install. Tell the host
@@ -401,7 +402,7 @@ export class WeixinLoginController extends TypertRemoteService {
         }
         // Any in-flight QR session belongs to the account that just went away.
         logins.clear();
-        this.sessionExpired = false;
+        this.clearSessionExpired();
         return { removed, reloadRequired: removed.length > 0 };
     }
 
@@ -440,7 +441,10 @@ export class WeixinLoginController extends TypertRemoteService {
         // messaging stops while the card still shows "bound". The transport
         // records the refusal here so the card can say "log in again".
         return {
-            accounts,
+            accounts: accounts.map((account) => ({
+                ...account,
+                sessionExpired: this.expiredAccounts.has(account.accountId),
+            })),
             stateDir: stateDir(),
             pendingLogin: logins.size > 0,
             sessionExpired: this.sessionExpired === true,
@@ -1579,18 +1583,37 @@ export class WeixinLoginController extends TypertRemoteService {
     }
 
     /**
+     * Accounts the server has refused, by id.
+     *
+     * Set, not a boolean: with two bots bound, "the session expired" is a fact
+     * about one of them, and the card has to point at that one. `sessionExpired`
+     * below stays the any-account answer for older readers.
+     */
+    expiredAccounts = new Set();
+
+    /**
      * Note that the server refused the saved session.
      *
      * Called by the host when the poll loop sees `errcode: -14`. A fresh login
      * clears it, because the account is then writable again.
      */
-    markSessionExpired() {
+    markSessionExpired(accountId) {
+        const id = typeof accountId === "string" ? accountId.trim() : "";
+        if (id !== "") this.expiredAccounts.add(id);
         this.sessionExpired = true;
     }
 
-    /** Clear the flag: a completed login means the session is valid again. */
-    clearSessionExpired() {
-        this.sessionExpired = false;
+    /**
+     * Clear the flag: a completed login means the session is valid again.
+     *
+     * Scoped to the account that just logged in when one is named — clearing
+     * every account let a fresh login paper over a *different* account whose
+     * session is still expired. A bare call still clears everything (logout).
+     */
+    clearSessionExpired(accountId) {
+        const id = typeof accountId === "string" ? accountId.trim() : "";
+        if (id !== "") this.expiredAccounts.delete(id);
+        this.sessionExpired = id === "" ? false : this.expiredAccounts.size > 0;
     }
 
     /**

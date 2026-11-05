@@ -71,7 +71,10 @@ test('the loop raises errcode instead of silently polling on', () => {
 
 test('the transport reports expiry once, so the host can surface it', () => {
   const source = fs.readFileSync(TRANSPORT_PATH, 'utf8')
-  assert.match(source, /this\.#onSessionRejected\?\.\(error\)/, 'the host must be notified')
+  // The account id travels with the rejection: with two bots bound, "the
+  // session expired" is a fact about one of them, and the host has no other way
+  // to tell which loop hit it (issue #13).
+  assert.match(source, /this\.#onSessionRejected\?\.\(error, this\.accountId\)/, 'the host must be notified, and told which account')
   assert.match(source, /get sessionExpired\(\)/, 'expiry must be readable by the settings card')
   assert.match(
     source,

@@ -1,3 +1,32 @@
+## 修 issue #13 / #12：投递状态查得到，过期按账号记（2026-11-05，1.5.11）
+
+Leon-KTlan 提的 #13 有三个子指控，Rlxzmdd 提的 #12 是能力边界没说清。
+
+- **#13(a) `out` journal 早于发送**：`src/outbound.js` 的 `sendChunked()` 以前在 `channel.sendText()` 之前就写 journal，
+  所以「Agent 已生成回复但微信收不到」时日志反而说发过了。现在先写 `phase: 'sending'` 的暂定行，发送有结果后
+  `recordDelivery()` 再写一条 `phase: 'settled'` 的结果行；`src/message/journal.js` 的 `readJournal()` 用
+  `collapseDeliveryLines()` 把成对的两行合成一条（按同 `conversationId` + `accountId` 且 `at` 不早于匹配），
+  1.5.10 之前没有 `phase` 的老日志原样通过。
+- **#13(b) `ret=0` 不等于投递**：vendor `sendMessage()`（`vendor/openclaw-weixin/api/api.js:492`）在 `ret` 校验后直接
+  返回响应，**没有**取 `message_id`（vendor 自己的 `messaging/send.js:84` 取了，但这条路没用上）。`src/transport/ilink.js`
+  新增导出的 `sendOutcome(response, clientId)`：`message_id ?? msg_id ?? svr_id` 有值 → `{direction:'accepted', messageId}`，
+  否则 `{direction:'unconfirmed'}`；`send()` 还生成 `clientId`（`dsh-weixin-<ts>-<rand>`）交给 `#body()`，并一起写进 journal，
+  用户在手机上看到的消息带这个 id。`describeDelivery()` 给出的中文：发送中 / 服务端已接收 {id} / 服务端已接收，但没有回执号 {id} /
+  发送失败 / 发送失败，已排队重试；设置卡「消息流水」用 `describeDeliveryInCard()` 显示同一件事。
+- **#13(c) 过期标志张冠李戴**：`src/login-remote.js` 从单个布尔改成 `expiredAccounts = new Set()`，
+  `markSessionExpired(accountId)` / `clearSessionExpired(accountId)` 都带账号（裸调用 `clearSessionExpired()` 仍然清空全部 = 登出），
+  `status()` 给每个账号各自的 `sessionExpired`；`src/transport/ilink.js` 的 `#onSessionRejected` 现在带
+  `this.accountId`，`src/index.js` 用它把过期记到真正失败的那个账号上；扫码确认只清掉 `status.ilink_bot_id` 这一个。
+  设置卡的过期提示改成「账号 X 的登录已过期，收不到微信消息；其余账号不受影响」，账号行上多一个「登录过期」小标签。
+- **#12 群聊能力边界**：两份 README 的「群聊」一节都加了「这几个开关管的是收到群消息之后怎么处理，不管能不能进群」，
+  说明 iLink 没有自助入群接口、入群要在微信侧手动拉、`groupBotNames` 要写对实际 @ 的名字，并给出
+  「桌面微信 + Computer Use 桥接」为什么不做的结论；`src/config-remote.js` 与 `src/index.js` 的 `groupChatEnabled`
+  提示同步，架构文档「已知缺口」补两条（群聊准入在协议侧、投递状态只能到「服务端接收」）。
+- 测试：`test/journal.test.js` 新增 4 条（合并发送中 + 结果、`sendOutcome({ret:0})` → unconfirmed、守孤儿的 queued 行、
+  老日志兼容）；`test/login-remote.test.js` 新增「an expiry belongs to the account that hit it, not to the whole host」；
+  `test/transport-session.test.js` 的「宿主必须被告知」改成断言 `this.#onSessionRejected?.(error, this.accountId)`。
+  全量 **1232/1232**，`npm run check` 277 files ok。
+
 # 开发进度
 
 更新时间：2026-11-04

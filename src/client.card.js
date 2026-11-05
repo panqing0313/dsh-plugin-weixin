@@ -917,6 +917,11 @@ window.__ModuleLoader__.load({
 				: bound
 					? t("Bound", "已绑定")
 					: t("Not logged in", "未登录");
+			// Which account is expired, if any. `sessionExpired` alone says "some
+			// account", and with two bots bound that sentence points at nothing
+			// (issue #13: a valid new bot was labelled expired by an old loop).
+			const expiredIds = accounts.filter((account) => account.sessionExpired === true).map((account) => account.accountId);
+			const allExpired = bound && expiredIds.length === accounts.length;
 			// The per-account rows are the card's answer to "which account is
 			// which, and is it actually receiving": label (or raw id) plus the
 			// registry's last message time, then the four controls. Pausing is
@@ -944,6 +949,9 @@ window.__ModuleLoader__.load({
 									style: { fontSize: 12, color: C.labelSecondary },
 								}, account.accountId) : null,
 								account.paused ? createElement("span", { style: pillStyle("idle") }, t("paused", "已暂停")) : null,
+								account.sessionExpired === true
+									? createElement("span", { style: pillStyle("bad") }, t("expired", "登录过期"))
+									: null,
 								seen ? createElement("span", { style: { fontSize: 12, color: C.labelSecondary } }, seen) : null,
 								createElement("span", { style: { flex: 1 } }),
 								createElement("button", {
@@ -1058,10 +1066,16 @@ window.__ModuleLoader__.load({
 				sessionExpired
 					? createElement("div", { style: noticeStyle },
 							createElement("span", { style: { flex: "0 0 auto" } }, "⚠"),
-							createElement("span", null, t(
-								"The saved session has expired, so incoming messages are not being received. Scan again to log in.",
-								"登录已过期，当前收不到微信消息。请重新扫码登录。",
-							)))
+							createElement("span", null,
+								bound && !allExpired
+									? t(
+										`Session expired for ${expiredIds.join(", ")} — that account receives nothing until you scan again.`,
+										`账号 ${expiredIds.join("、")} 的登录已过期，收不到微信消息；其余账号不受影响。重新扫码即可恢复。`,
+									)
+									: t(
+										"The saved session has expired, so incoming messages are not being received. Scan again to log in.",
+										"登录已过期，当前收不到微信消息。请重新扫码登录。",
+									)))
 					: null,
 
 				state.phase === "idle" || state.phase === "confirmed" || state.phase === "failed"
@@ -2460,6 +2474,23 @@ window.__ModuleLoader__.load({
 					return "?";
 				}
 			};
+			/**
+			 * The delivery step in words. A line without one is either an
+			 * inbound message or a reply from a build that predates the field
+			 * (1.5.10) — both stay blank rather than guessing "sent".
+			 */
+			const describeDeliveryInCard = (entry, tr) => {
+				const id = entry.messageId ?? entry.clientId;
+				const tail = id === undefined ? "" : ` #${String(id).slice(-8)}`;
+				switch (entry.delivery) {
+					case "sending": return tr("sending\u2026", "发送中");
+					case "accepted": return tr("server accepted", "服务端已接收") + tail;
+					case "unconfirmed": return tr("injected at the server, no receipt", "服务端接收，但没回执号") + tail;
+					case "failed": return tr("send failed", "发送失败");
+					case "queued": return tr("send failed, queued for retry", "发送失败，已排队重试");
+					default: return "";
+				}
+			};
 
 			const all = entries ?? [];
 			// Search is client-side over everything loaded so far — text or
@@ -2531,7 +2562,12 @@ window.__ModuleLoader__.load({
 
 			const bubble = (entry, i) => {
 				const outgoing = entry.dir === "out";
-				const meta = [clockOf(entry.at), entry.accountId, entry.senderId].filter(Boolean).join(" \u00b7 ");
+				// Delivery is the half of the story the journal could not tell
+				// before: "the bot wrote a reply" and "Weixin took the reply" are
+				// different facts, and a missing bubble is exactly the gap
+				// between them (issue #13).
+				const delivery = outgoing ? describeDeliveryInCard(entry, t) : "";
+				const meta = [clockOf(entry.at), delivery, entry.accountId, entry.senderId].filter(Boolean).join(" \u00b7 ");
 				return createElement("div", {
 					key: `${entry.at}-${i}`,
 					style: { display: "flex", flexDirection: "column", alignItems: outgoing ? "flex-end" : "flex-start", gap: 2 },

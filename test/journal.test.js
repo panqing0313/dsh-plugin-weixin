@@ -3,7 +3,8 @@ import { test, before, after } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendJournal, readJournal, MAX_JOURNAL_TEXT_CHARS } from '../src/message/journal.js'
+import { appendJournal, readJournal, describeDelivery, MAX_JOURNAL_TEXT_CHARS } from '../src/message/journal.js'
+import { sendOutcome } from '../src/transport/ilink.js'
 
 let root
 
@@ -79,4 +80,40 @@ test('readJournal pages backwards with before, and filters by conversation', () 
 	assert.deepEqual(readJournal(root, { conversationId: 'cB' }).map((entry) => entry.text), ['新'])
 	const both = readJournal(root, { conversationId: 'cA', before: 300 })
 	assert.deepEqual(both.map((entry) => entry.text), ['中', '旧'], 'filters compose')
+})
+
+// issue #13: an `out` line used to be written before the send and never told
+// anyone how the send ended, so "the agent wrote a reply" read as "the phone got
+// one". The line now carries a provisional state and the outcome lands as a
+// second line; the reader has to put them back together.
+test('a reply records the send outcome, and the reader merges the pair', () => {
+	appendJournal(root, { dir: 'out', accountId: 'a10', conversationId: 'c10', text: '在的', delivery: 'sending', phase: 'sending', at: 50_000 })
+	appendJournal(root, { dir: 'out', accountId: 'a10', conversationId: 'c10', text: '', delivery: 'accepted', phase: 'settled', clientId: 'dsh-weixin-1-abcdefgh', messageId: 'srv-123456789', at: 50_001 })
+
+	const entries = readJournal(root, { accountId: 'a10', conversationId: 'c10' })
+	assert.equal(entries.length, 1, 'one message, not a blank bubble next to it')
+	assert.equal(entries[0].text, '在的')
+	assert.equal(entries[0].delivery, 'accepted')
+	assert.equal(entries[0].messageId, 'srv-123456789', 'the id the phone can be matched against')
+})
+
+test('ret=0 without a message id is "unconfirmed", not a success', () => {
+	assert.deepEqual(sendOutcome({ ret: 0 }, 'cid-1'), { direction: 'unconfirmed', clientId: 'cid-1', ret: 0 })
+	assert.deepEqual(sendOutcome({ ret: 0, message_id: 'm-1' }, 'cid-2'), { direction: 'accepted', clientId: 'cid-2', ret: 0, messageId: 'm-1' })
+})
+
+test('a failed send nobody can retry stays visible on its own', () => {
+	appendJournal(root, { dir: 'out', accountId: 'a11', conversationId: 'c11', text: '', delivery: 'queued', phase: 'settled', at: 60_000 })
+	const entries = readJournal(root, { accountId: 'a11' })
+	assert.equal(entries.length, 1)
+	assert.equal(entries[0].delivery, 'queued')
+	assert.equal(entries[0].text, '')
+})
+
+test('journal lines from before 1.5.10 have no delivery field and still read', () => {
+	appendJournal(root, { dir: 'out', accountId: 'a12', conversationId: 'c12', text: '老日志', at: 70_000 })
+	const [entry] = readJournal(root, { accountId: 'a12' })
+	assert.equal(entry.text, '老日志')
+	assert.equal(entry.delivery, undefined, 'never guesses "sent"')
+	assert.equal(describeDelivery(entry), '')
 })

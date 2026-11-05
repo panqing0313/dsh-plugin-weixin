@@ -1002,7 +1002,7 @@ export const FIELDS = [
       group: "群聊",
       groupEn: "Group chats",
       fields: [
-        { path: "groupChatEnabled", type: T.boolean, default: false, label: "参加群聊", labelEn: "Answer in groups", hint: "默认关闭：对每条群消息都答的机器人，在真群里就是刷屏；私聊不受影响", hintEn: "Off by default: a bot that answers every group message is spam" },
+        { path: "groupChatEnabled", type: T.boolean, default: false, label: "参加群聊", labelEn: "Answer in groups", hint: "默认关闭：对每条群消息都答的机器人，在真群里就是刷屏；私聊不受影响。它只管「收到群消息之后怎么处理」，不能把机器人拉进群——入群与群内权限得在微信那边给", hintEn: "Off by default: a bot that answers every group message is spam. This only governs what happens to a group message once it arrives; it cannot put the bot into a group" },
         { path: "groupSummaryEnabled", type: T.boolean, default: false, label: "群聊上下文摘要", labelEn: "Group context summary", hint: "群里攒够一批消息后，用一次后台调用把最近聊的压成几行，下次被叫到时一起给模型（默认关闭：会花后台额度）", hintEn: "After a batch of group messages, one background call summarizes the recent talk and passes it to the model next time you are mentioned (off by default: spends background budget)" },
         { path: "groupSummaryEvery", type: T.number, default: 12, min: 4, max: 100, step: 1, unit: "条", unitEn: "msgs", label: "每多少条摘要一次", labelEn: "Summarize every", hint: "攒够这么多条群消息做一次（默认 12）", hintEn: "Summarize after this many group messages (default 12)" },
         { path: "contactStaleDays", type: T.number, default: 45, min: 0, max: 3650, step: 1, unit: "天", unitEn: "days", label: "名片多久算旧", labelEn: "Card goes stale after", hint: "群成员名片超过这么多天没更新过内容时，注入时注明「可能已过时」；0 表示不判断", hintEn: "After this many days without an update, a group member card is marked as possibly out of date when injected; 0 turns the check off" },

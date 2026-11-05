@@ -317,7 +317,7 @@ export const Config = z.object({
   proactiveWindowStart: z.string().default('09:00').description('主动消息的时间窗开始，HH:mm；窗外（含夜里）一律不发。'),
   proactiveWindowEnd: z.string().default('23:00').description('主动消息的时间窗结束，HH:mm；必须晚于开始时间。'),
   proactiveLearnedWindow: z.boolean().default(true).description('从消息流水里学「对方通常几点在线」，把主动消息的时间窗收窄到那段（只收窄，不放宽；样本不够时不启用）。'),
-  groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。'),
+  groupChatEnabled: z.boolean().default(false).description('参加群聊：开启后才会在群里回话。默认关闭——一个对每条群消息都答的机器人，在真群里就是刷屏。私聊不受影响。它只管「收到群消息之后怎么处理」，不能把机器人拉进群：入群与群内权限是微信/iLink 那边对这个机器人给不给的问题。'),
   groupSummaryEnabled: z.boolean().default(false).description('群聊上下文摘要：群里攒够 groupSummaryEvery 条消息后，用一次后台调用把最近聊的压成几行，下次被叫到时折进提示词。默认关闭——它每次都要花一次调用。'),
   groupSummaryEvery: z.number().min(4).max(100).default(12).description('攒多少条群消息做一次摘要（默认 12）。'),
   contactStaleDays: z.number().min(0).max(3650).default(45).description('群成员名片多久算「旧」：超过这么多天没更新过内容时，注入时会注明「可能已过时」。0 表示不做这个判断。'),
@@ -1454,9 +1454,12 @@ export function apply(ctx, config) {
         // the plugin looks healthy and simply never replies. Record it on the
         // login controller so the settings card can say "log in again", and put
         // the same line in the log the operator watches.
-        onSessionRejected: (error) => {
+        // The account travels with the report: a login can complete while an
+        // old loop is still tearing down, so its `-14` must not be recorded
+        // against the account that just logged in successfully (issue #13).
+        onSessionRejected: (error, rejectedAccountId) => {
           try {
-            loginController?.markSessionExpired?.()
+            loginController?.markSessionExpired?.(rejectedAccountId ?? account.accountId)
           } catch {
             // the card is a convenience; never let it break the loop's report
           }

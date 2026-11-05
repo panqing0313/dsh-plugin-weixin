@@ -1,5 +1,20 @@
 ## 版本
 
+- **1.5.11** —— **回复发出去没有，现在查得到；过期不再冤枉新登录的账号**（issue #13 / #12）：
+  - **出站日志以前只证明「生成了文本」**：`sendChunked()` 在 `channel.sendText()` 之前就写了 `out` 行，所以
+    「日志里有 out，微信里没有」永远解释不通。现在 journal 分两步写：先写 `phase: "sending"` 的暂定行，发送有结果后
+    再写一条 `phase: "settled"` 的结果行（带 `delivery`、`messageId`、`clientId`），读日志时按同会话、`at` 不早于合并回一行。
+    设置卡「消息流水」那一行会显示发送中 / 服务端已接收 #xxxxxxxx / 服务端接收但没回执号 / 发送失败 / 已排队重试。
+  - **`ret=0` 不等于对方收到了**：`sendMessage` 正常返回里没有 `message_id`（vendor `api/api.js` 也不取），所以
+    传输层的 `send()` 现在把响应交给新增的 `sendOutcome()` 判定：有 id 记 `accepted`，`ret=0` 但无 id 记 `unconfirmed`，
+    并把本插件生成的 `client_id` 一起写进 journal —— 那是对照手机的唯一把手。
+  - **过期标志按账号记**：`markSessionExpired()` / `clearSessionExpired()` 带上账号 id，`status()` 的每个账号各有
+    自己的 `sessionExpired`，重新扫码只清掉**本次登录那个账号**的过期；设置卡的过期提示与账号行上的「登录过期」小标签
+    指名是哪个账号，不再让一个新登录的 bot 背上旧轮询留下的过期。
+  - **群聊的能力边界写清楚了**（issue #12）：`groupChatEnabled` 只决定「收到群消息之后怎么处理」，机器人能不能进群、
+    进群能不能被 @，是微信/iLink 对这个机器人的准入，插件不能也不会绕过；「桌面微信 + Computer Use 桥接」评估后不做。
+    README 中英、「群聊」配置项提示与架构文档的已知缺口同步更新。
+
 - **1.5.10** —— **工具提醒说人话**：原来那条提醒长成 `🔧 要用工具了` + `` `bash`：{"command":"head -c 2000 …"} ``
   —— 抬头是名词短语，正文把工具名加反引号当主语，参数是**原始 JSON**（`argumentText` 遇到不认识的参数
   就 `JSON.stringify`），手机上一整段转义引号。现在抬头说「我手上要动一下东西」（有风险时「⚠️ 这一步看着有风险」），

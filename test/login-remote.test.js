@@ -186,22 +186,22 @@ function readLoginLog() {
 test('a re-scan of a bot the server still considers bound is its own outcome, not a failure', async () => {
   const server = stubServer([{ ret: 0, status: 'binded_redirect' }])
   try {
-    await withLogin(async ({ c, start }) => {
-      const key = await start()
-      const result = await c.poll(key)
-      // The regression: this used to be {status:"failed"} with "该账号已连接过，
-      // 请先在手机上解除绑定" — reported as a dead end even though the operator
-      // had just been told by the phone that the bot was bound.
-      assert.equal(result.status, 'alreadyBound')
-      // The way out is on the phone, and only there: this host cannot unbind a
-      // bot the server no longer serves it a token for. The message has to say
-      // so, because that is the only action available to the operator.
-      assert.match(result.message, /手机微信/)
-      assert.match(result.message, /绑定/)
-      // It must not be mistaken for a successful bind: no credential was handed
-      // out, so claiming "bound" would be a lie the next status() would expose.
-      assert.equal((await c.status()).accounts.length, 0)
-    })
+      await withLogin(async ({ c, start }) => {
+        const key = await start()
+        const result = await c.poll(key)
+        // The regression: this used to be {status:"failed"} with "该账号已连接过，
+        // 请先在手机上解除绑定" — reported as a dead end even though the operator
+        // had just been told by the phone that the bot was bound.
+        assert.equal(result.status, 'alreadyBound')
+        // The way out is on the phone, and only there: this host cannot unbind a
+        // bot the server no longer serves it a token for. The message has to say
+        // so, because that is the only action available to the operator.
+        assert.match(result.message, /手机微信/)
+        assert.match(result.message, /绑定/)
+        // It must not be mistaken for a successful bind: no credential was handed
+        // out, so claiming "bound" would be a lie the next status() would expose.
+        assert.equal((await c.status()).accounts.length, 0)
+      })
   } finally {
     server.restore()
   }
@@ -262,6 +262,58 @@ test('a confirmed scan saves the credential and is visible to status()', async (
       )
       assert.equal(status.accounts[0].userId, 'me@im.wechat')
       assert.equal(status.sessionExpired, false, 'a fresh login clears the expiry flag')
+    })
+  } finally {
+    server.restore()
+  }
+})
+
+test('an expiry belongs to the account that hit it, not to the whole host', async () => {
+  // Issue #13: the operator scanned a fresh bot, and the card still said the
+  // session had expired — the old poll loop's `errcode: -14` was stored in one
+  // global boolean, so it described whatever account happened to be bound next.
+  // The flag has to name the account, and a login has to clear only its own.
+  const server = stubServer([
+    {
+      ret: 0,
+      status: 'confirmed',
+      ilink_bot_id: 'BOT@im.bot',
+      bot_token: 'BOT@im.bot:token',
+      baseurl: 'https://ilinkai.weixin.qq.com',
+      ilink_user_id: 'me@im.wechat',
+    },
+  ])
+  try {
+    await withLogin(async ({ c, start }) => {
+      const status = await c.status()
+      assert.equal(status.sessionExpired, false, 'a fresh controller starts unexpired')
+
+      // Recorded against the account that is about to be re-scanned: the
+      // timeline in issue #13 is "expired at 18:11:03, the same bot's inbound
+      // accepted at 18:11:13", so the ids collide by design.
+      c.markSessionExpired('BOT@im.bot')
+      const afterExpiry = await c.status()
+      assert.equal(afterExpiry.sessionExpired, true)
+      assert.equal(
+        afterExpiry.accounts.some((account) => account.sessionExpired === true),
+        false,
+        'before the re-scan the credential is gone, so no account claims the expiry',
+      )
+
+      const key = await start()
+      await c.poll(key)
+      const refreshed = await c.status()
+      assert.deepEqual(refreshed.accounts.map((account) => account.accountId), ['BOT@im.bot'])
+      assert.equal(refreshed.accounts[0].sessionExpired, false, 'the account that just logged in is not expired')
+      assert.equal(refreshed.sessionExpired, false, 'one login clears the notice it was about')
+
+      // An expiry on a *different* account survives that login: it is a fact
+      // about that account, and its own loop will keep failing until a re-scan.
+      c.markSessionExpired('BOT@im.bot')
+      c.markSessionExpired('OTHER@im.bot')
+      const both = await c.status()
+      assert.equal(both.sessionExpired, true)
+      assert.equal(both.accounts[0].sessionExpired, true, 'status() names the expired account')
     })
   } finally {
     server.restore()

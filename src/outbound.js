@@ -111,10 +111,17 @@ export async function sendChunked(transport, config, message) {
     ? { text: message.text ?? '', files: [] }
     : planRichContent(message.text ?? '', { codeFileChars: config.codeFileThreshold })
   const text = markdownToPlainText(plan.text, resolveMarkdownMode(config))
+  // The out line is written before the send (the text exists by then, and a
+  // crash mid-send must not lose it), and the outcome is folded back into the
+  // same line afterwards. That is the difference the operator needs: `out` in
+  // the journal means "the agent wrote this", `delivery` says whether Weixin
+  // ever took it, and whether it took it *with* a receipt.
   runtime.journal?.({
     accountId: transport.accountId,
     conversationId: message.conversationId,
     text,
+    delivery: 'sending',
+    phase: 'sending',
   })
   // `bubbles` is the human-pacing split (already plain text, one entry per
   // bubble). Without it this is the plain length-based chunking every other
@@ -132,9 +139,9 @@ export async function sendChunked(transport, config, message) {
     const channel = channelFor(transport)
     const chunk = { conversationId: message.conversationId, text: chunks[index], contextToken: message.contextToken }
     runtime.hooks?.emit(HOOK_POINTS.outboundReady, { accountId: transport.accountId, conversationId: message.conversationId, text: chunk.text })
+    let outcome
     try {
-      await channel.sendText(chunk)
-      runtime.hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: true })
+      outcome = await channel.sendText(chunk)
     } catch (error) {
       // A send that fails here used to lose the text forever: the model had
       // already written it and nothing held a copy. Queue it instead — the
@@ -144,14 +151,55 @@ export async function sendChunked(transport, config, message) {
       const pending = chunks.slice(index).join('')
       if (runtime.outbox !== undefined) {
         runtime.outbox.enqueue({ accountId: transport.accountId, conversationId: message.conversationId, text: pending, contextToken: message.contextToken })
-        runtime.hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: false, queued: pending.length })
+        recordDelivery(runtime, transport, message.conversationId, { delivery: 'queued' })
+        runtime.hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: false, delivery: 'queued', queued: pending.length })
         runtime.warn(`send failed (${String(error?.message ?? error)}); queued ${pending.length} chars for retry`)
         return
       }
+      recordDelivery(runtime, transport, message.conversationId, { delivery: 'failed' })
+      runtime.hooks?.emit(HOOK_POINTS.outboundSettled, { accountId: transport.accountId, conversationId: message.conversationId, sent: false, delivery: 'failed' })
       throw error
     }
+    // A transport that answers with nothing (a channel double, an older
+    // transport) is still a send the caller watched succeed; only an explicit
+    // "accepted but no receipt" downgrades the line.
+    const step = outcome?.direction === 'unconfirmed' ? 'unconfirmed' : 'accepted'
+    recordDelivery(runtime, transport, message.conversationId, {
+      delivery: step,
+      ...(outcome?.clientId === undefined ? {} : { clientId: outcome.clientId }),
+      ...(outcome?.messageId === undefined ? {} : { messageId: outcome.messageId }),
+    })
+    runtime.hooks?.emit(HOOK_POINTS.outboundSettled, {
+      accountId: transport.accountId,
+      conversationId: message.conversationId,
+      sent: true,
+      delivery: step,
+      ...(outcome?.messageId === undefined ? {} : { messageId: outcome.messageId }),
+    })
   }
   if (plan.files.length > 0) await sendSnippets(transport, message, plan.files)
+}
+
+/**
+ * Append one line saying how the send of this reply ended.
+ *
+ * A separate line rather than a rewrite of the out line: day files are append-
+ * only (see src/message/journal.js), and the pair reads in order — what was
+ * written, then what happened to it. The card folds them together.
+ *
+ * @param {{ journal?: Function }} runtime
+ * @param {{ accountId?: string }} transport
+ * @param {string} conversationId
+ * @param {{ delivery: string, clientId?: string, messageId?: string }} step
+ */
+function recordDelivery(runtime, transport, conversationId, step) {
+  runtime.journal?.({
+    accountId: transport.accountId,
+    conversationId,
+    text: '',
+    phase: 'settled',
+    ...step,
+  })
 }
 
 /**

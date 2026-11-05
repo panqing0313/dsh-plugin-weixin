@@ -177,7 +177,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.5.10`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.5.11`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -612,6 +612,8 @@ one file per day, text truncated to 200 characters). The "Message journal" tab o
 content, newest first), so you can confirm every account is alive without digging through logs. Writing the journal is best effort: failures only warn and never affect message delivery.
 At the top of the tab there is an **Export records** button: it renders the last 30 days as Markdown and the card downloads it directly, without going through a server-side file.
 `test/journal.test.js` and the messageJournal cases in `test/e2e.test.js` guard this behavior.
+
+**Outgoing messages carry a delivery state.** The `out` line used to be written *before* the send was even attempted, so "it is in the journal but not in WeChat" could never be explained. A reply is now recorded in two steps — a `sending` line, then an outcome line once the send returns — and the reader merges the pair into one bubble line: `sending…` / `server accepted #xxxxxxxx` / `server accepted, no receipt #xxxxxxxx` / `send failed` / `send failed, queued for retry`. The difference between `accepted` and `unconfirmed` is whether the server handed back a message id: `sendMessage` only answers `ret` and normally returns no `message_id`, so neither proves the other phone actually displayed it. The `#xxxxxxxx` is the tail of this plugin's own `client_id`, the handle to match against what the phone shows.
 
 ### Local recall search (/recall)
 
@@ -1071,6 +1073,12 @@ The `conversationId` of a group message is the `group_id`, so the reply address 
 Now it **does not join groups** by default; once enabled it defaults to **answering only when addressed** (`@name`, matched against the bot name in the first line, because iLink does not provide an @ list), and only `groupReplyWhen: "all"` answers every message.
 
 Private matters do not follow it into groups either: replies in a group **do not inject** long-term memory, recall snippets or the closeness line (`groupShareMemory: true` injects them). A group shares one session line, so context in a group is shared by all members — that is recorded under "known gaps" in the architecture doc.
+
+**These switches decide what happens to a group message once it arrives — not whether the bot can be in a group at all.** Group membership, and whether the bot can be @-mentioned there, is an authorisation decision on the WeChat / iLink side, about *this bot*; the plugin cannot change it and does not try: the iLink Bot API has no "add myself to a group" or "request to join" call, and no member list. In practice the bot usually has to be **invited by the group owner by hand**, and whether it then receives messages or can be addressed depends on the permissions it holds at that moment. Nothing arrives otherwise — no `group_id` message, no group chat to talk about — and turning `groupChatEnabled` on will not rescue it. So:
+
+- If `groupChatEnabled` is on and nothing happens in a group, check the WeChat side first: is the bot actually in the group, and is the owner/admin allowing it to speak? Then check that `groupBotNames` spells the name people actually @;
+- The plugin **does not** work around this. Joining, lifting a restriction, or re-joining after a kick is something only a person can do in WeChat;
+- On "bridge group chat with desktop WeChat plus Computer Use": **the answer is no**. It needs a machine left on and logged into desktop WeChat, reading the screen and sending messages by simulated clicks, dealing with window focus, captchas, multi-device kick-outs — and then handing chat contents to the model. Fragile, unauditable, and at odds with "a bot is a bot". If you need it in a group, the right place to fix that is the bot's group permissions on the WeChat side.
 
 ### Tool audit (toolAudit)
 
