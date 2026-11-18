@@ -18,6 +18,32 @@ function clock(ms) {
 }
 
 /**
+ * Count today's outbound journal lines by delivery state.
+ *
+ * Issue #16: the number that matters is how many replies Weixin accepted
+ * without a receipt (`unconfirmed`) — that is the state where the phone shows
+ * nothing. Outbound lines only; a settled line carries the delivery, an
+ * inbound or legacy line does not.
+ *
+ * @param {Array<any>} entries  Journal entries (any order, any day range the caller chose).
+ * @returns {{ total: number, unconfirmed: number }}
+ */
+export function countTodayDelivery(entries) {
+  let total = 0
+  let unconfirmed = 0
+  for (const entry of entries) {
+    if (entry?.dir !== 'out') continue
+    if (typeof entry.delivery !== 'string' || entry.delivery === '') continue
+    // The provisional `sending` line and its settled partner are both in the
+    // file; only the settled state is an outcome.
+    if (entry.delivery === 'sending') continue
+    total += 1
+    if (entry.delivery === 'unconfirmed') unconfirmed += 1
+  }
+  return { total, unconfirmed }
+}
+
+/**
  * @param {object} input
  * @param {string} [input.version]
  * @param {string} [input.hostVersion]
@@ -32,6 +58,8 @@ function clock(ms) {
  * @param {{ count?: number, lastAt?: number, misses?: number }} [input.proactive]
  * @param {string} [input.proactiveWindow] one line from describeLearnedHours()
  * @param {{ total?: number, stale?: number, staleDays?: number }} [input.contacts] group member cards
+ * @param {{ unconfirmed?: number, total?: number }} [input.delivery] today's outbound delivery counts
+ * @param {{ kind: string, description: string, failures: number, at: number } | null} [input.pollFailure]
  * @param {number} [input.journalToday]
  * @param {number} [input.conversations]
  * @param {number} [input.allowlist]
@@ -91,6 +119,30 @@ export function buildDiagReport(input) {
     `数据：今天流水 ${input.journalToday ?? 0} 条 · 会话记忆 ${input.conversations ?? 0} 个`
     + ` · 白名单 ${input.allowlist ?? 0} 人`,
   )
+
+  // Issue #16: "accepted, no receipt" is the shape where the phone shows
+  // nothing. Say how many of today's outbound messages landed in that state,
+  // so a reporter knows whether this is one message or the whole pipe.
+  const delivery = input.delivery
+  const deliveryTotal = delivery?.total ?? 0
+  const unconfirmed = delivery?.unconfirmed ?? 0
+  if (deliveryTotal > 0) {
+    const tail = unconfirmed > 0
+      ? `，其中 ${unconfirmed} 条服务端只回了 ret=0、没有消息号（手机可能收不到）`
+      : '，都有服务端回执号'
+    lines.push(`投递：今天发出 ${deliveryTotal} 条${tail}`)
+  }
+
+  // Issue #14: a loop that is retrying must not look like a loop that is fine.
+  // `lastPollFailure` is cleared by a good poll, so its presence means the
+  // inbound side is currently unhappy — say what and how many times.
+  const pollFailure = input.pollFailure
+  if (pollFailure !== undefined && pollFailure !== null) {
+    lines.push(
+      `收消息：上一轮轮询失败（${pollFailure.kind}：${pollFailure.description}），`
+      + `已连续 ${pollFailure.failures} 次，插件会自动重试`,
+    )
+  }
 
   if ((input.quietDelayMs ?? 0) > 0) {
     lines.push(`免打扰：静默中（约 ${Math.ceil(input.quietDelayMs / 60_000)} 分钟后恢复）`)

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildDiagReport } from '../src/message/diag.js'
+import { buildDiagReport, countTodayDelivery } from '../src/message/diag.js'
 
 test('the report names the gates that stop a reply', () => {
   const text = buildDiagReport({
@@ -59,4 +59,48 @@ test('no host version means no host claim', () => {
   const text = buildDiagReport({ version: '0.9.17', accountId: 'bot1', config: {} })
   assert.doesNotMatch(text, /宿主/)
   assert.match(text, /自检 · v0\.9\.17/)
+})
+
+/**
+ * Issue #16 and #14 both come down to "the self-check did not mention the thing
+ * that was actually wrong". Today's delivery mix and the last poll failure are
+ * that thing, so both have to appear — and stay absent when there is nothing
+ * wrong, so the report does not cry wolf.
+ */
+test('the self-check names unconfirmed deliveries and a failing poll loop', () => {
+  const worried = buildDiagReport({
+    version: '1.5.13',
+    accountId: 'bot1',
+    transportUp: true,
+    config: {},
+    delivery: { total: 6, unconfirmed: 6 },
+    pollFailure: { kind: 'unknown', description: 'network request failed', failures: 4, at: Date.now() },
+  })
+  assert.match(worried, /投递：今天发出 6 条，其中 6 条服务端只回了 ret=0、没有消息号/)
+  assert.match(worried, /收消息：上一轮轮询失败（unknown：network request failed），已连续 4 次，插件会自动重试/)
+
+  const calm = buildDiagReport({
+    version: '1.5.13',
+    accountId: 'bot1',
+    transportUp: true,
+    config: {},
+    delivery: { total: 6, unconfirmed: 0 },
+    pollFailure: null,
+  })
+  assert.match(calm, /投递：今天发出 6 条，都有服务端回执号/)
+  assert.doesNotMatch(calm, /收消息：/, 'a healthy loop says nothing about polling')
+})
+
+test('today’s delivery count ignores provisional and inbound lines', () => {
+  const entries = [
+    { dir: 'out', delivery: 'sending' },
+    { dir: 'out', delivery: 'accepted' },
+    { dir: 'out', delivery: 'sending' },
+    { dir: 'out', delivery: 'unconfirmed' },
+    { dir: 'out', delivery: 'failed' },
+    { dir: 'in' },
+    { dir: 'out' },
+  ]
+  assert.deepEqual(countTodayDelivery(entries), { total: 3, unconfirmed: 1 })
+  assert.deepEqual(countTodayDelivery([]), { total: 0, unconfirmed: 0 })
 })

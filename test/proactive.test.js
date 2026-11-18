@@ -280,3 +280,61 @@ test('being ignored twice costs far more than being busy once', () => {
   assert.ok(twoMisses.waitMs > 6 * 3_600_000, `and the wait is much longer than doubling (${twoMisses.waitMs})`)
   assert.ok(twoMisses.waitMs <= 24 * 3_600_000, 'still capped at a day')
 })
+
+/**
+ * Issue #15: the proactive pass failed because a route pointed at a provider
+ * that no longer exists. The chat stayed silent and the only trace was a log
+ * line — so the user asked the maintainers what was broken. `onError` is the
+ * way out: the caller tells the conversation (or at least tries to), and a
+ * failing notifier must not turn into a second failure.
+ */
+test('a failed proactive pass lets the caller tell the conversation why', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-proactive-onerror-'))
+  const notices = []
+  const cause = new Error('no adapter registered for provider "nvidia"')
+  const scheduler = new ProactiveScheduler({
+    stateRoot: root,
+    candidates: () => [{ accountId: 'bot1', conversationId: 'wxid_a', lastInboundAt: 0 }],
+    fire: async () => {
+      throw cause
+    },
+    config: () => ENABLED,
+    warn: () => {},
+    now: () => at(14),
+    rng: () => 0,
+    setTimeoutRef: () => null,
+    clearTimeoutRef: () => {},
+    onError: async (payload) => notices.push(payload),
+  })
+  const result = await scheduler.tick()
+  assert.equal(result.reason, 'failed')
+  assert.equal(notices.length, 1, 'the failure is reported once')
+  assert.equal(notices[0].accountId, 'bot1')
+  assert.equal(notices[0].conversationId, 'wxid_a')
+  assert.equal(notices[0].error, cause)
+})
+
+test('a notifier that itself throws does not break the tick', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-proactive-onerror-throw-'))
+  const warnings = []
+  const scheduler = new ProactiveScheduler({
+    stateRoot: root,
+    candidates: () => [{ accountId: 'bot1', conversationId: 'wxid_a', lastInboundAt: 0 }],
+    fire: async () => {
+      throw new Error('boom')
+    },
+    config: () => ENABLED,
+    warn: (line) => warnings.push(line),
+    now: () => at(14),
+    rng: () => 0,
+    setTimeoutRef: () => null,
+    clearTimeoutRef: () => {},
+    onError: async () => {
+      throw new Error('channel is down too')
+    },
+  })
+  const result = await scheduler.tick()
+  assert.equal(result.reason, 'failed')
+  assert.ok(warnings.some((line) => /could not be sent/.test(line)), warnings.join(' | '))
+  assert.equal(scheduler.status('bot1').misses, 1)
+})

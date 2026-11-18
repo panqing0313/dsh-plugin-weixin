@@ -46,6 +46,42 @@ Leon-KTlan 提的 #13 有三个子指控，Rlxzmdd 提的 #12 是能力边界没
   `test/transport-session.test.js` 的「宿主必须被告知」改成断言 `this.#onSessionRejected?.(error, this.accountId)`。
   全量 **1232/1232**，`npm run check` 277 files ok。
 
+## 修 issue #14 / #15 / #16：三种「静默」各补一处可见性（2026-11-18，1.5.13）
+
+三个 11 月中旬的 issue 有同一个形状：插件出了问题，但用户能看到的只有「它不回了」。
+
+- **#14（Mo-123-eng）长轮询在 `TypeError: fetch failed` 后不再收消息、也没有退避日志**。代码里 `#loop()` 的
+  catch 本来就会 `classifyFetchError` → `errLog` → `interruptibleSleep(RETRY_DELAY_MS=2_000)`，连续 3 次走
+  `BACKOFF_DELAY_MS=30_000`；watchdog abort 与 `ret !== 0` 是另外两处**完全复制**的退避块。复现不出「完全不重试」，
+  但两个真实缺陷可以指出：① 失败记录只进 `errLog`（日志文件），`/diag` 不显示，用户无从判断循环是否还活着；
+  ② 三份退避代码各自演化。修法：新增私有 `#notePollFailure(classified, failures)` 写 `#lastPollFailure`，
+  公开 getter `get lastPollFailure()`（返回副本）暴露 `{at, kind, description, failures}`；三处退避合并为
+  `async #backOff(consecutiveFailures)`（≥3 次长退避并归零，否则短退避）；`resp.ret !== 0` 改抛新增的
+  `export class ServerRefusedError`，最终 catch 里归为 `{type:'refused'}` 而非 `classifyFetchError` 的 `unknown`；
+  watchdog 分支归为 `{type:'timeout', description:'poll round aborted after <ms>ms'}`。`src/index.js` 的 `/diag`
+  传 `pollFailure: transport?.lastPollFailure ?? null`，`buildDiagReport` 输出「收消息：上一轮轮询失败（kind：description），
+  已连续 N 次，插件会自动重试」。
+- **#16（xiaoyang542）`ret=0` 无 `message_id` 时手机收不到**。`sendMessage` 只在 `resp.ret && resp.ret !== 0` 时抛错，
+  正常返回里可能没有 `message_id`（`vendor/openclaw-weixin/api/api.js:492`），`parseWeixinApiJson` 的
+  `LOSSLESS_ID_FIELDS` 只保证 `message_id`/`msg_id`/`svr_id` 若存在必是字符串。插件能做的不是「保证送达」（服务端没有回执），
+  而是把判断依据留下来：新增 `export function summarizeSendResponse(response)`（只取
+  `ret`/`errcode`/`errmsg`/`message_id`/`msg_id`/`svr_id`/`client_id`/`new_msg_id`，字符串截 64 字，永不抛），
+  `send()` 成功分支返回 `{...sendOutcome(...), response}`；`outbound.js` 的 `recordDelivery` 带上 `response`；
+  `journal.js` 的 `appendJournal` 写 `response`、`collapseDeliveryLines` 把它合并回暂定行；新增
+  `countTodayDelivery(entries)` 与 `/diag` 的「投递：今天发出 N 条，其中 M 条服务端只回了 ret=0、没有消息号」。
+- **#15（Dev-Wiki）删除过的 provider 仍在 `proactiveProvider` 里**。原文 `no adapter registered for provider "nvidia"`
+  来自宿主 `@deepseek-ai/dsh-llm/lib/index.js:2269`（`LlmRegistry` 找不到 adapter 时抛 `NO_ADAPTER`），不匹配任何已知
+  `KNOWN_MODEL_ERRORS` 形态，于是落到 `kind:'unknown'` 的兜底文案。新增 `kind:'no-adapter'`
+  （`/no adapter registered for provider|adapter .*not registered|unknown adapter/i`，`setting:'proactiveProvider'`），
+  hint 指明去清空 proactiveProvider / sideProvider / reportProvider。另外 `ProactiveScheduler` 新增构造参数
+  `onError`：`tick()` 的 catch 里在 `#warn` 之后 `await this.#onError({accountId, conversationId, error})`（自带 try/catch，
+  通知发不出去只 warn），`src/index.js:1066` 的构造传入 `onError`，内部 `noteModelError(error)` +
+  `sendChunked(transport, withSavedConfig(config), {conversationId, text: describeModelError(error)})`。
+- 测试：`test/inbound-resilience.test.js` +2（lastPollFailure 可读且计数、refused 不误报为网络错，注意避开与第二次
+  poll 的竞态：等 `calls < 2` 再读）、`test/diag.test.js` +2（投递与轮询两行、`countTodayDelivery` 忽略 sending 与入站行）、
+  `test/journal.test.js` +1（response 随投递行保存并按关键字段裁剪）、`test/model-errors.test.js` +1（no-adapter）、
+  `test/proactive.test.js` +2（onError 收到 cause、通知自己抛错不破坏 tick）。全量 **1243/1243**，`npm run check` 277 files ok。
+
 # 开发进度
 
 更新时间：2026-11-04

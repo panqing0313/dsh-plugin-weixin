@@ -197,6 +197,7 @@ export class ProactiveScheduler {
   #clearTimeout
   #tickMs
   #tickChance
+  #onError
   #timer
   #running
   #busy = new Set()
@@ -213,6 +214,11 @@ export class ProactiveScheduler {
     clearTimeoutRef = clearTimeout,
     tickMs = PROACTIVE_TICK_MS,
     tickChance = DEFAULT_TICK_CHANCE,
+    // Issue #15: a proactive pass that fails used to be a `warn` line and
+    // nothing else — the chat stayed silent, and the reason only existed in a
+    // log the user cannot read. `onError` lets the caller tell the conversation
+    // (in words the user can act on) while still counting the miss.
+    onError = null,
   }) {
     this.#stateRoot = stateRoot
     this.#candidates = candidates
@@ -225,6 +231,7 @@ export class ProactiveScheduler {
     this.#clearTimeout = clearTimeoutRef
     this.#tickMs = tickMs
     this.#tickChance = tickChance
+    this.#onError = onError
     this.#timer = null
     this.#running = false
   }
@@ -288,6 +295,16 @@ export class ProactiveScheduler {
           return { fired: 1, reason: 'sent' }
         } catch (error) {
           this.#warn(`proactive message failed for ${conversationId}: ${String(error)}`)
+          // Tell the user, in their own chat, why nothing arrived — but only if
+          // the caller wired a sender, and never at the cost of the tick: a
+          // notice that throws must not escape into the scheduler.
+          if (typeof this.#onError === 'function') {
+            try {
+              await this.#onError({ accountId, conversationId, error })
+            } catch (noticeError) {
+              this.#warn(`proactive failure notice for ${conversationId} could not be sent: ${String(noticeError)}`)
+            }
+          }
           // Count the miss anyway: a broken channel must not turn into a
           // retry storm every five minutes.
           this.recordSent(accountId, '', now)

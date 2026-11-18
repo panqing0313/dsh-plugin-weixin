@@ -1,5 +1,24 @@
 ## 版本
 
+- **1.5.13** —— **三个新 issue（#14 / #15 / #16）都是「出问题的时候，你看不到原因」**：
+  - **#14 长轮询停摆时，自检里现在能看到**：轮询失败后插件本来就会退避重试（2 秒，连续 3 次后 30 秒），
+    但那条记录只写进日志文件，用户看到的是「突然什么都不回了」。新增 `transport.lastPollFailure`
+    （`{at, kind, description, failures}`，连续次数），`/diag` 会多一行「收消息：上一轮轮询失败（kind：description），
+    已连续 N 次，插件会自动重试」。顺带把三处一模一样的退避代码合并成 `#backOff()`——它们之前各自漂移，
+    正是这类「静默」缺陷的温床；服务器 `ret !== 0` 的拒绝现在单独归为 `refused`（`ServerRefusedError`），
+    不再混进网络错误里。
+  - **#16 出站消息会把服务端原始响应留下来**：`ret=0` 但没有 `message_id` 时微信客户端可能根本不显示，
+    而旧版本只记一句「没回执号」。现在 journal 的投递行多一个 `response` 字段（只挑 `ret`/`errcode`/`errmsg`/
+    `message_id`/`msg_id`/`svr_id`/`client_id`/`new_msg_id`，字符串截 64 字），`/diag` 多一行「投递：今天发出 N 条，
+    其中 M 条服务端只回了 ret=0、没有消息号（手机可能收不到）」。设置卡消息流水里每条气泡也能看到这些原始字段。
+  - **#15 配置里删掉的供应商会被叫出名字**：`no adapter registered for provider "nvidia"` 这种错误以前不匹配
+    任何已知形态，只能落到「报给开发者」的兜底。新增 `no-adapter` 一类，直接说「这个供应商在宿主里已经不存在了，
+    常见是 proactiveProvider / sideProvider / reportProvider 没清空，把它留空或换一个还在的」。更关键的是：
+    主动开口失败以前只 `warn` 一行，用户在微信里完全看不到——现在会把这句话发回那个会话（`onError` 回调，
+    发不出去也不会影响调度）。
+  - 测试：新增 `test/inbound-resilience.test.js` 2 条、`test/diag.test.js` 2 条、`test/journal.test.js` 1 条、
+    `test/model-errors.test.js` 1 条、`test/proactive.test.js` 2 条；全量 **1243/1243**，`npm run check` 277 files ok。
+
 - **1.5.12** —— **宿主 `0.2.2-rc.1` 进了测试列表；「读到了版本却说读不到」修好了**：
   - **`0.2.2-rc.1` 已真机复核并加进 `TESTED_HOSTS`**（`src/host-compat.js`），`npm run doctor` 的 `host app` 一行
     现在显示 `host 0.2.2-rc.1 (tested)`，设置卡与 onboarding 里的宿主提示同步变绿。复核依据：doctor 14 项 0 problem、

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appendJournal, readJournal, describeDelivery, MAX_JOURNAL_TEXT_CHARS } from '../src/message/journal.js'
-import { sendOutcome } from '../src/transport/ilink.js'
+import { sendOutcome, summarizeSendResponse } from '../src/transport/ilink.js'
 
 let root
 
@@ -116,4 +116,29 @@ test('journal lines from before 1.5.10 have no delivery field and still read', (
 	assert.equal(entry.text, '老日志')
 	assert.equal(entry.delivery, undefined, 'never guesses "sent"')
 	assert.equal(describeDelivery(entry), '')
+})
+
+/**
+ * Issue #16: "accepted, no receipt" leaves the obvious question unanswered —
+ * what did the server actually say? The response sketch keeps the answer in
+ * the journal (and therefore in `/diag export`), so the next report can be
+ * diagnosed from the data instead of a screenshot.
+ */
+test('the send response is kept with the delivery line, clipped to key fields', () => {
+	const sketch = summarizeSendResponse({ ret: 0, errmsg: '', blob: 'x'.repeat(5000), message_id: 'm'.repeat(200) })
+	assert.equal(sketch.ret, 0)
+	assert.equal(sketch.message_id.length, 64, 'a long id is clipped, not stored whole')
+	assert.equal(sketch.blob, undefined, 'unrelated fields do not ride along')
+	assert.equal(summarizeSendResponse(undefined), undefined)
+	assert.deepEqual(summarizeSendResponse('weird'), { type: 'string' })
+
+	appendJournal(root, { dir: 'out', accountId: 'a13', conversationId: 'c13', text: 'hi', delivery: 'sending', phase: 'sending', at: 80_000 })
+	appendJournal(root, {
+		dir: 'out', accountId: 'a13', conversationId: 'c13', text: '',
+		delivery: 'unconfirmed', phase: 'settled', clientId: 'dsh-weixin-1-zzzz',
+		response: { ret: 0 }, at: 80_001,
+	})
+	const [entry] = readJournal(root, { accountId: 'a13' })
+	assert.equal(entry.delivery, 'unconfirmed')
+	assert.deepEqual(entry.response, { ret: 0 }, 'the response travels with the settled line into the merged entry')
 })

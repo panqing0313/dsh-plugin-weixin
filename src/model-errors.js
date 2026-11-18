@@ -52,6 +52,20 @@ export const KNOWN_MODEL_ERRORS = Object.freeze([
     hintEn: 'check the spelling of chatProvider — it must match a provider id the host already has',
   },
   {
+    // Issue #15: a provider that was configured once and then DELETED leaves the
+    // route pointing at nothing, and the host answers `no adapter registered for
+    // provider "nvidia"` — which matched none of the other patterns, so the user
+    // got the generic "report this to the developer" text with no way forward.
+    // The fix is on the user's side (clear the stale route), so say which field.
+    kind: 'no-adapter',
+    pattern: /no adapter registered for provider|adapter .*not registered|unknown adapter/i,
+    setting: 'proactiveProvider',
+    title: '这个供应商在宿主里已经不存在了',
+    titleEn: 'that provider no longer exists in the host',
+    hint: '配置里还指着一个已删除的供应商（常见是 proactiveProvider / sideProvider / reportProvider 没清空）；把它留空，或换成宿主里还在的供应商',
+    hintEn: 'a config field still points at a provider you deleted (usually proactiveProvider / sideProvider / reportProvider); clear it, or point it at a provider the host still has',
+  },
+  {
     kind: 'auth',
     pattern: /401|unauthori[sz]ed|invalid api[ _-]?key|incorrect api key|authentication|permission denied|403/i,
     setting: 'chatProvider',

@@ -88,3 +88,16 @@ test('the ring buffer forgets old errors; it is not an audit log', () => {
   assert.equal(readRecentModelErrors().length, 20)
   assert.match(readRecentModelErrors().at(-1).raw, /error 24/)
 })
+/**
+ * Issue #15: `no adapter registered for provider "nvidia"` — a provider that
+ * was configured once, then deleted. It matched nothing, so the user got the
+ * "report this to the developer" fallback for a fix that is entirely on their
+ * side (clear the dead route).
+ */
+test('a provider that was deleted from the host is named as such', () => {
+  const classified = classifyModelError(new Error('no adapter registered for provider "nvidia"'))
+  assert.equal(classified.kind, 'no-adapter')
+  assert.equal(classified.setting, 'proactiveProvider')
+  assert.match(classified.hint, /已删除的供应商/)
+  assert.doesNotMatch(classified.hint, /报给开发者/, 'the fallback advice is not the only thing said')
+})

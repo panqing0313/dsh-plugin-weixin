@@ -55,6 +55,23 @@ export class SessionRejectedError extends Error {
   }
 }
 
+/**
+ * The server answered, and the answer was a failure (`ret !== 0`).
+ *
+ * Kept separate from a fetch fault so #14's "stopped receiving" can be told
+ * apart from "the network died": this one means iLink itself said no, and the
+ * operator's screenshot of the log will not show a `POST fetch failed` line.
+ */
+export class ServerRefusedError extends Error {
+  /**
+   * @param {string} message
+   */
+  constructor(message) {
+    super(message)
+    this.name = 'ServerRefusedError'
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
@@ -80,6 +97,35 @@ export function sendOutcome(response, clientId) {
   // shows "accepted, no receipt" rather than a bare out line that reads as sent.
   if (messageId === undefined || messageId === '') return { direction: 'unconfirmed', ...base }
   return { direction: 'accepted', ...base, messageId: String(messageId) }
+}
+
+/**
+ * A short, JSON-safe sketch of a sendMessage response, for the journal.
+ *
+ * Issue #16: when the status says "accepted, no receipt", the next question is
+ * what the server actually said. Clipping the response to its key fields keeps
+ * that answer in the journal (and therefore in `/diag export`) without storing
+ * whatever else iLink decides to attach. Never throws — a journal line must not
+ * be the reason a send fails.
+ *
+ * @param {any} response
+ * @returns {Record<string, unknown> | undefined}
+ */
+export function summarizeSendResponse(response) {
+  if (response === null || typeof response !== 'object') {
+    return response === undefined ? undefined : { type: typeof response }
+  }
+  const keys = ['ret', 'errcode', 'errmsg', 'message_id', 'msg_id', 'svr_id', 'client_id', 'new_msg_id']
+  /** @type {Record<string, unknown>} */
+  const out = {}
+  for (const key of keys) {
+    const value = response[key]
+    if (value === undefined) continue
+    // Ids can be long decimal strings; keep them whole but capped so one weird
+    // field cannot bloat every journal line.
+    out[key] = typeof value === 'string' ? value.slice(0, 64) : value
+  }
+  return out
 }
 
 /**
@@ -444,6 +490,25 @@ export class ILinkTransport {
     this.loopPromise = null
     this.typingTicket = undefined
     this.#sessionExpired = false
+    // The last thing that went wrong with the inbound loop, and when. `null`
+    // means "no failure since the last good poll"; that is the state a healthy
+    // plugin is in, so silence here is meaningful rather than a gap.
+    this.#lastPollFailure = null
+  }
+
+  /**
+   * The most recent inbound-poll failure, or `null` when the loop is healthy.
+   *
+   * Added for issue #14: an operator whose plugin "stopped receiving but did
+   * not crash" needs to know whether the loop is retrying and what it is
+   * retrying against, without reading `~/.dsh/weixin/logs`. `failures` counts
+   * consecutive rejected rounds, so a single blip and a stuck loop look
+   * different.
+   *
+   * @returns {{ at: number, kind: string, description: string, failures: number } | null}
+   */
+  get lastPollFailure() {
+    return this.#lastPollFailure === null ? null : { ...this.#lastPollFailure }
   }
 
   /**
@@ -459,6 +524,8 @@ export class ILinkTransport {
   /** Set once the server refuses the session; see {@link SessionRejectedError}. */
   #onSessionRejected
   #sessionExpired = false
+  /** @type {{ at: number, kind: string, description: string, failures: number } | null} */
+  #lastPollFailure = null
   /** @type {(message: any) => boolean} */
   #bypassQueue
   /** @type {ReturnType<typeof createInboundScheduler> | undefined} */
@@ -532,14 +599,9 @@ export class ILinkTransport {
         if (!this.running) break
         consecutiveFailures += 1
         const classified = classifyFetchError(error)
+        this.#notePollFailure(classified, consecutiveFailures)
         this.errLog(`getUpdates threw (${classified.type}): ${classified.description}`)
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
-          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
-          consecutiveFailures = 0
-        } else {
-          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
-        }
+        consecutiveFailures = await this.#backOff(consecutiveFailures)
         continue
       } finally {
         clearTimeout(pollWatchdog)
@@ -555,19 +617,14 @@ export class ILinkTransport {
         this.errLog(`getUpdates watchdog: one poll round exceeded ${pollDeadlineMs}ms (headers arrived, body never did); aborted underneath and retrying`)
         this.abort = new AbortController()
         consecutiveFailures += 1
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
-          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
-          consecutiveFailures = 0
-        } else {
-          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
-        }
+        this.#notePollFailure({ type: 'timeout', description: `no response body within ${pollDeadlineMs}ms` }, consecutiveFailures)
+        consecutiveFailures = await this.#backOff(consecutiveFailures)
         continue
       }
       try {
         const resp = polled
         if (resp.ret !== undefined && resp.ret !== 0) {
-          throw new Error(`getUpdates ret=${resp.ret} errmsg=${resp.errmsg ?? '(none)'}`)
+          throw new ServerRefusedError(`getUpdates ret=${resp.ret} errmsg=${resp.errmsg ?? '(none)'}`)
         }
         // The API reports most failures through `errcode`, NOT `ret`: an
         // expired session comes back as `{errcode:-14, errmsg:"session timeout"}`
@@ -614,25 +671,64 @@ export class ILinkTransport {
           this.#onSessionRejected?.(error, this.accountId)
           break
         }
+        let classified
         if (isAbortError(error)) {
           // Headers arrived but the body never did and the watchdog fired.
           // A fresh controller for the next round; this round is a failure.
           this.errLog(`getUpdates watchdog: poll round aborted after ${pollDeadlineMs}ms; retrying`)
           this.abort = new AbortController()
+          classified = { type: 'timeout', description: `poll round aborted after ${pollDeadlineMs}ms` }
         } else {
-          const classified = classifyFetchError(error)
+          if (error instanceof ServerRefusedError) {
+            classified = { type: 'refused', description: error.message }
+          } else {
+            classified = classifyFetchError(error)
+          }
           this.errLog(`getUpdates failed (${classified.type}): ${classified.description}`)
         }
         consecutiveFailures += 1
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
-          await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
-          consecutiveFailures = 0
-        } else {
-          await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
-        }
+        this.#notePollFailure(classified, consecutiveFailures)
+        consecutiveFailures = await this.#backOff(consecutiveFailures)
       }
     }
+  }
+
+  /**
+   * Remember the last inbound-poll failure so a human can see it without
+   * reading log files (issue #14: the loop "stopped receiving" with no visible
+   * reason — it was retrying, but nothing said so where the operator looked).
+   *
+   * @param {{ type: string, description: string }} classified
+   * @param {number} failures  Consecutive failures, this one included.
+   */
+  #notePollFailure(classified, failures) {
+    this.#lastPollFailure = {
+      at: Date.now(),
+      kind: classified.type,
+      description: classified.description,
+      failures,
+    }
+  }
+
+  /**
+   * Wait out one failed round. Three consecutive failures switch to the long
+   * cooldown, which resets the counter; anything less waits the short retry.
+   *
+   * One helper for all three call sites (thrown fetch, swallowed watchdog
+   * abort, refused response) so the policy lives in exactly one place: the
+   * bug that let the loop hang was three copies drifting apart.
+   *
+   * @param {number} consecutiveFailures  Failures so far, this one included.
+   * @returns {Promise<number>} Counter to carry into the next round.
+   */
+  async #backOff(consecutiveFailures) {
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      this.errLog(`getUpdates failed ${consecutiveFailures} times; backing off ${BACKOFF_DELAY_MS}ms`)
+      await interruptibleSleep(BACKOFF_DELAY_MS, () => this.running)
+      return 0
+    }
+    await interruptibleSleep(RETRY_DELAY_MS, () => this.running)
+    return consecutiveFailures
   }
 
   /**
@@ -665,7 +761,7 @@ export class ILinkTransport {
       throw error
     }
     this.pacer.noteSuccess()
-    return sendOutcome(response, clientId)
+    return { ...sendOutcome(response, clientId), response: summarizeSendResponse(response) }
   }
 
   /**

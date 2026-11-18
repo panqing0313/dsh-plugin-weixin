@@ -168,6 +168,10 @@ export async function sendChunked(transport, config, message) {
       delivery: step,
       ...(outcome?.clientId === undefined ? {} : { clientId: outcome.clientId }),
       ...(outcome?.messageId === undefined ? {} : { messageId: outcome.messageId }),
+      // Issue #16: "accepted, no receipt" prompted the obvious next question —
+      // what did the server actually say? Keep the answer (key fields only,
+      // the transport clips it) so `/diag export` carries it.
+      ...(outcome?.response === undefined ? {} : { response: outcome.response }),
     })
     runtime.hooks?.emit(HOOK_POINTS.outboundSettled, {
       accountId: transport.accountId,
@@ -190,7 +194,7 @@ export async function sendChunked(transport, config, message) {
  * @param {{ journal?: Function }} runtime
  * @param {{ accountId?: string }} transport
  * @param {string} conversationId
- * @param {{ delivery: string, clientId?: string, messageId?: string }} step
+ * @param {{ delivery: string, clientId?: string, messageId?: string, response?: Record<string, unknown> }} step
  */
 function recordDelivery(runtime, transport, conversationId, step) {
   runtime.journal?.({

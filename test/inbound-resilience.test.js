@@ -128,3 +128,106 @@ test('a loop that dies anyway leaves a log line, never an unhandled rejection', 
     fs.rmSync(stateRoot, { recursive: true, force: true })
   }
 })
+
+/**
+ * Issue #14: "the plugin stopped receiving, and nothing said why."
+ *
+ * The loop already retried, but nothing an operator could see recorded that:
+ * `lastPollFailure` is that record. A network-shaped failure must surface the
+ * classified kind (the number the user pasted — `type=unknown` — lives in the
+ * vendor's log line, this one says the loop knows), the description, and a
+ * consecutive count; a later good poll is not the same as never having failed,
+ * but the count must not keep climbing once rounds succeed.
+ */
+test('the last poll failure is readable, and counts consecutive rounds', async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-last-failure-'))
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { ILinkTransport } = await import('../src/transport/ilink.js')
+    const transport = new ILinkTransport({
+      accountId: ACCOUNT_ID,
+      baseUrl: 'http://127.0.0.1:1',
+      token: 'tok',
+      longPollTimeoutMs: 50,
+      log() {},
+      errLog() {},
+      getUpdates: async () => {
+        throw new TypeError('fetch failed')
+      },
+    })
+    assert.equal(transport.lastPollFailure, null, 'a transport that has not polled has nothing to report')
+
+    await transport.start(async () => {})
+    const deadline = Date.now() + 5_000
+    while ((transport.lastPollFailure?.failures ?? 0) < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const failure = transport.lastPollFailure
+    await transport.stop()
+
+    assert.ok(failure !== null, 'after a failed round there has to be a record')
+    assert.equal(failure.kind, 'unknown', 'a bare TypeError: fetch failed classifies as unknown, like the report')
+    assert.match(failure.description, /network request failed/)
+    assert.ok(failure.failures >= 2, `consecutive failures are counted (got ${failure.failures})`)
+    assert.equal(typeof failure.at, 'number')
+    // The copy handed out must not be the live object: mutating it cannot
+    // confuse the next reader.
+    failure.failures = -1
+    assert.notEqual(transport.lastPollFailure?.failures, -1)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The server saying "no" (`ret !== 0`) is a different failure from the network
+ * dying, and #14's report was explicitly a network failure — the two must not
+ * be filed under the same kind, or the log tells the operator to check their
+ * wifi when iLink itself refused.
+ */
+test('a refused poll is reported as refused, not as a network fault', async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-refused-'))
+  const previous = process.env.DSH_WEIXIN_STATE_DIR
+  process.env.DSH_WEIXIN_STATE_DIR = stateRoot
+  try {
+    const { ILinkTransport } = await import('../src/transport/ilink.js')
+    const lines = []
+    let calls = 0
+    const transport = new ILinkTransport({
+      accountId: ACCOUNT_ID,
+      baseUrl: 'http://127.0.0.1:1',
+      token: 'tok',
+      longPollTimeoutMs: 50,
+      log() {},
+      errLog: (line) => lines.push(String(line)),
+      getUpdates: async () => {
+        calls += 1
+        if (calls === 1) return { ret: 5, errmsg: 'internal error' }
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return { ret: 0, msgs: [] }
+      },
+    })
+    await transport.start(async () => {})
+    // Round 1 refuses, round 2 is good: waiting for the count to reach 2
+    // proves the loop carried on past the refusal. (Stopping as soon as the
+    // record appears would race the second poll and pass or fail at random.)
+    const deadline = Date.now() + 5_000
+    while (calls < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const failure = transport.lastPollFailure
+    await transport.stop()
+
+    assert.equal(failure?.kind, 'refused', `ret=5 is a refused poll: ${lines.join(' | ')}`)
+    assert.match(failure?.description ?? '', /ret=5/)
+    assert.ok(calls >= 2, 'the loop keeps polling after a refusal')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_WEIXIN_STATE_DIR
+    else process.env.DSH_WEIXIN_STATE_DIR = previous
+    fs.rmSync(stateRoot, { recursive: true, force: true })
+  }
+})

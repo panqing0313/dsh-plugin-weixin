@@ -76,6 +76,27 @@ export function describeDelivery(entry, t) {
     }
 }
 
+/**
+ * Keep a send-response sketch small and JSON-safe before it hits the journal.
+ *
+ * The transport already clips it to key fields; this is the journal's own
+ * guard, because a journal line must never be the reason a send throws.
+ *
+ * @param {unknown} value
+ * @returns {Record<string, unknown> | undefined}
+ */
+function summarizeResponseField(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+    /** @type {Record<string, unknown>} */
+    const out = {}
+    for (const [key, raw] of Object.entries(value)) {
+        if (Object.keys(out).length >= 12) break
+        if (raw === null || typeof raw === 'number' || typeof raw === 'boolean') out[key] = raw
+        else if (typeof raw === 'string') out[key] = raw.slice(0, 64)
+    }
+    return Object.keys(out).length === 0 ? undefined : out
+}
+
 export function appendJournal(stateRoot, entry, { warn } = {}) {
     try {
         const at = typeof entry?.at === 'number' ? entry.at : Date.now()
@@ -83,6 +104,7 @@ export function appendJournal(stateRoot, entry, { warn } = {}) {
         const delivery = deliveryOf(entry.delivery)
         const messageId = entry.messageId === undefined ? undefined : String(entry.messageId)
         const clientId = entry.clientId === undefined ? undefined : String(entry.clientId)
+        const response = summarizeResponseField(entry.response)
         const line = JSON.stringify({
             at,
             dir: entry.dir === 'out' ? 'out' : 'in',
@@ -100,6 +122,10 @@ export function appendJournal(stateRoot, entry, { warn } = {}) {
             ...(delivery === undefined ? {} : { delivery }),
             ...(messageId === undefined ? {} : { messageId }),
             ...(clientId === undefined ? {} : { clientId }),
+            // Issue #16: the key fields of the sendmessage response, so
+            // "accepted, no receipt" can be explained later instead of guessed
+            // at. Absent on inbound lines and on old journals.
+            ...(response === undefined ? {} : { response }),
         })
         const dir = join(stateRoot, 'journal')
         mkdirSync(dir, { recursive: true })
@@ -167,7 +193,7 @@ export function collapseDeliveryLines(newestFirst) {
             && Number(candidate.at) >= Number(entry.at))
         if (match === undefined) return entry
         used.add(match)
-        return { ...entry, delivery: match.delivery, ...(match.messageId === undefined ? {} : { messageId: match.messageId }), ...(match.clientId === undefined ? {} : { clientId: match.clientId }) }
+        return { ...entry, delivery: match.delivery, ...(match.messageId === undefined ? {} : { messageId: match.messageId }), ...(match.clientId === undefined ? {} : { clientId: match.clientId }), ...(match.response === undefined ? {} : { response: match.response }) }
     }
     const merged = []
     for (const entry of newestFirst) {

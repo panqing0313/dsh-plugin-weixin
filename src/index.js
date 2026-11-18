@@ -32,7 +32,7 @@ import {
   setTempQuiet,
   tempQuietDelay,
 } from './message/temp-quiet.js'
-import { buildDiagReport } from './message/diag.js'
+import { buildDiagReport, countTodayDelivery } from './message/diag.js'
 import { MAX_RECENT_ERRORS, buildDiagExport } from './message/diag-export.js'
 import { detectHostVersion, hostStatus } from './host-compat.js'
 import { buildUsageReport } from './message/usage.js'
@@ -179,7 +179,7 @@ import { buildStyleFeedbackBlock, createStyleCommands, readStyleRules } from './
 // refusal that leaves no trace turns an allowlist mismatch into "the bot just
 // ignores me" with nothing to grep afterwards.
 import { logger as vendorLogger } from '../vendor/openclaw-weixin/util/logger.js'
-import { noteModelError, readRecentModelErrors, summarizeRecentModelErrors } from './model-errors.js'
+import { describeModelError, noteModelError, readRecentModelErrors, summarizeRecentModelErrors } from './model-errors.js'
 import {
   DEFAULT_CDN_BASE_URL,
   DEFAULT_MAX_INBOUND_MEDIA_BYTES,
@@ -1068,6 +1068,18 @@ export function apply(ctx, config) {
         warn,
         ...(proactiveTestMode ? { tickMs: Math.max(10, proactiveTestTickMs), tickChance: 1 } : {}),
         config: () => withSavedConfig(config),
+        // Issue #15: when a proactive pass fails, the chat used to stay silent
+        // and the reason lived only in a log. Say it in the conversation, in
+        // the words model-errors.js already translates, so a stale provider
+        // route reads as "clear proactiveProvider", not as mystery silence.
+        onError: async ({ accountId, conversationId, error }) => {
+          const transport = transports.get(accountId)
+          if (transport === undefined) return
+          noteModelError(error)
+          const notice = describeModelError(error)
+          if (notice === '') return
+          await sendChunked(transport, withSavedConfig(config), { conversationId, text: notice })
+        },
         candidates: () => {
           const live = withSavedConfig(config)
           const modes = readPersonaStore(stateRoot, { warn })
@@ -2005,6 +2017,8 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
           allowlist: Array.isArray(live.allowedSenders) ? live.allowedSenders.length : 0,
           quietDelayMs: quietDelay(Date.now(), live),
           modelError: summarizeRecentModelErrors(readRecentModelErrors(), { now: Date.now() }),
+          delivery: countTodayDelivery(readJournalRange(stateRoot, { accountId, days: 1 })),
+          pollFailure: transport?.lastPollFailure ?? null,
         })
       },
       mode: (arg) => {
