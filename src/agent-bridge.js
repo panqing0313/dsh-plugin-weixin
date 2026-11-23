@@ -1102,6 +1102,18 @@ export class AgentBridge {
     // repeated" would stop holding if the text were the key.
     let lastProgressTools = null
     let lateAnnounced = false
+    const notifiedApprovals = new Set()
+    const notifyPendingApprovals = async (reply) => {
+      if (!onProgress || reply.pendingApprovalIds.every((id) => notifiedApprovals.has(id))) return
+      for (const id of reply.pendingApprovalIds) notifiedApprovals.add(id)
+      lastProgressAt = Date.now()
+      lastProgressTools = reply.pendingTools.join(',')
+      try {
+        await onProgress('正在等待 DSH 审批。请在 DSH 界面处理，或在微信发 /cancel 结束本轮。')
+      } catch (error) {
+        this.errLog(`approval notice delivery failed: ${String(error)}`)
+      }
+    }
 
     while (Date.now() < deadline) {
       if (signal?.aborted === true) return { text: '（已取消）', sessionId }
@@ -1121,7 +1133,7 @@ export class AgentBridge {
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
-      if (reply.text !== '') return { text: reply.text, sessionId }
+      if (reply.text !== '' && reply.pendingApprovalIds.length === 0) return { text: reply.text, sessionId }
       // A failed turn is OVER: no assistant message will ever arrive, and the
       // turn/end(error) event is already durable. Waiting out the deadline
       // here holds record.busy for the whole budget, so the user's NEXT
@@ -1139,7 +1151,9 @@ export class AgentBridge {
       // progressAfterMs; after that a CHANGED tool set is re-announced at most
       // every progressEveryMs, so "running: bash" becoming "running: read"
       // reaches the user while one long unchanged tool never spams.
-      if (onProgress) {
+      if (reply.pendingApprovalIds.length > 0) {
+        await notifyPendingApprovals(reply)
+      } else if (onProgress) {
         const elapsed = Date.now() - startedAt
         const note = describePending(reply.pendingTools, elapsed)
         // Two thresholds, whichever comes first: a turn that is only thinking
@@ -1194,7 +1208,8 @@ export class AgentBridge {
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
-      if (reply.text !== '') {
+      if (reply.pendingApprovalIds.length > 0) await notifyPendingApprovals(reply)
+      if (reply.text !== '' && reply.pendingApprovalIds.length === 0) {
         try {
           await onLateReply({ kind: 'reply', text: reply.text })
         } catch (error) {

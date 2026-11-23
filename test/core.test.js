@@ -237,6 +237,19 @@ test('readAssistantReply tracks in-flight tool calls', () => {
   assert.notEqual(describePending(['bash'], 1_000), describePending(['bash'], 2_000), 'the elapsed clock moves the line')
 })
 
+test('readAssistantReply reports only approvals still pending in the current turn', () => {
+  const events = [
+    { type: 'approval/asked', seq: 0, data: { id: 'earlier' } },
+    { type: 'turn/start', seq: 1 },
+    { type: 'approval/asked', seq: 2, data: { id: 'first' } },
+    { type: 'approval/asked', seq: 3, data: { id: 'second' } },
+    { type: 'approval/decided', seq: 4, data: { id: 'first', outcome: 'rejected' } },
+  ]
+  assert.deepEqual(readAssistantReply({ events }).pendingApprovalIds, ['second'])
+  assert.deepEqual(readAssistantReply({ events, afterSeq: 3 }).pendingApprovalIds, [])
+  assert.deepEqual(readAssistantReply({ events: [...events, { type: 'turn/end', seq: 5 }] }).pendingApprovalIds, [])
+})
+
 test('describePending reflects tool changes for streaming progress', () => {
   // A2: the bridge re-announces a CHANGED tool set. The note itself must
   // differ when the pending set changes, or no amount of re-sending in

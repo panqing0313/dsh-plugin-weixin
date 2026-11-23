@@ -176,6 +176,39 @@ test('saveInboundBuffer is exclusive, so a generated name never clobbers a file'
 // The real pass-through: HTTP → decrypt → disk
 // ---------------------------------------------------------------------------
 
+test('an unnamed encrypted PNG lands with a PNG extension and MIME', async (t) => {
+  const root = tempDir('image-format')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const png = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
+  const key = crypto.randomBytes(16)
+  const result = await downloadInboundMedia({
+    media: { kind: 'image', fullUrl: 'https://example.invalid/image', aesKeyHex: key.toString('hex') },
+    maxBytes: DEFAULT_MAX_INBOUND_MEDIA_BYTES,
+    dir: root,
+    fetchImpl: async () => new Response(encryptAesEcb(png, key)),
+    token: () => 'IMG',
+  })
+  assert.equal(result.ok, true, result.reason)
+  assert.equal(result.name, 'IMG-image.png')
+  assert.equal(result.mime, 'image/png')
+  assert.deepEqual(fs.readFileSync(result.path), png)
+})
+
+test('unidentified image bytes are reported before any misleading file is saved', async (t) => {
+  const root = tempDir('unknown-image')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const result = await downloadInboundMedia({
+    media: { kind: 'image', fullUrl: 'https://example.invalid/image', fileName: 'image.jpg' },
+    maxBytes: DEFAULT_MAX_INBOUND_MEDIA_BYTES,
+    dir: root,
+    fetchImpl: async () => new Response('not a picture'),
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.code, 'unsupported-image-format')
+  assert.match(describeMediaFailures([{ kind: 'image', ...result }]), /图片无法识别.*请重新发送图片/)
+  assert.deepEqual(fs.readdirSync(root), [])
+})
+
 test('an image downloads, decrypts with a base64-of-16-bytes key, and lands on disk', async () => {
   const plaintext = Buffer.from('\x89PNG\r\n\x1a\n' + 'real image bytes'.repeat(20), 'binary')
   const key = crypto.randomBytes(16)
@@ -234,7 +267,7 @@ test('a file downloads and decrypts with a base64-of-hex key', async () => {
 })
 
 test('an image key given hex-encoded in aeskey is converted and decrypts', async () => {
-  const plaintext = Buffer.from('hex-keyed image')
+  const plaintext = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
   const key = crypto.randomBytes(16)
   const server = await serveOnce({ body: encryptAesEcb(plaintext, key) })
   const root = tempDir('hexkey')
@@ -255,7 +288,7 @@ test('an image key given hex-encoded in aeskey is converted and decrypts', async
 })
 
 test('a full_url on the descriptor is used verbatim instead of building a CDN URL', async () => {
-  const plaintext = Buffer.from('via full url')
+  const plaintext = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
   const key = crypto.randomBytes(16)
   const server = await serveOnce({ body: encryptAesEcb(plaintext, key) })
   const root = tempDir('fullurl')

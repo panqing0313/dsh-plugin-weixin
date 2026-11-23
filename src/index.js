@@ -2982,6 +2982,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       }
       const parts = []
       if (saved.length > 0) parts.push(describeInboundMedia(saved, message.text))
+      else if (prompt !== '') parts.push(prompt)
       // ② A document's text, not only its path: the model can answer "这份合同
       //    第三条写了什么" in the same turn. Anything unrecognised (pdf, images)
       //    falls back to the path-only description above.

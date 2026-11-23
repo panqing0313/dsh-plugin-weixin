@@ -570,6 +570,8 @@ ppt(x) csv zip tar gz 7z rar mp3 wav m4a ogg mp4 mov webm mkv avi silk`。
 拼进交给 Agent 的 prompt：图片提示 `read_image`，文件/视频提示 `read`。微信图片带的 caption 会一并
 保留，所以 Agent 既有图也有问题。
 
+图片会按解密后识别到的格式保存，避免把 PNG、WebP 或 GIF 误存成 JPEG。无法识别的图片会提示重发。
+
 两个安全要点：
 
 - **对端给的文件名绝不用来拼路径。** 文件名先取 basename、去掉分隔符与 `.`/`..` 段，再加随机前缀，
@@ -1101,6 +1103,8 @@ git / 装包 / 联网取东西各有自己的说法；参数拿不到时回落�
 动作到句子的映射在 `src/message/tool-guard.js` 的 `TOOL_ACTION_KEYS`，措辞在 `src/i18n.js` 的 `notice.doing.*`。
 
 同一会话同一工具十分钟内只提醒一次，免得一个连续跑命令的回合刷屏。`toolNotices: false` 关掉。
+
+如果 DSH 已发起审批，微信会提示去 DSH 界面处理，或在微信发 `/cancel` 结束本轮。
 
 ### 关系曲线与群里的人（affinity · contacts）
 
