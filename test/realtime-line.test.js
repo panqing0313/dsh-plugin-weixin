@@ -71,7 +71,7 @@ test('no sink means the feature is off, and the verdict says so', async () => {
   assert.equal(verdict.reason, 'off')
 })
 
-test('a line is delivered mid-turn, and the per-turn quota then refuses more', async () => {
+hostTest('a line is delivered mid-turn, and the per-turn quota then refuses more', async () => {
   const sent = []
   const { bridge, fake } = await bridgeWith(baseSessionIdFor('room-quota'), {
     onRealtimeReady: async (entry) => { sent.push(entry.text) },
@@ -95,7 +95,7 @@ test('a line is delivered mid-turn, and the per-turn quota then refuses more', a
   await running
 })
 
-test('lines are spaced by the minimum interval', async () => {
+hostTest('lines are spaced by the minimum interval', async () => {
   const { bridge, fake } = await bridgeWith(baseSessionIdFor('room-gap'), {
     onRealtimeReady: async () => {},
     realtimeMaxPerTurn: 5,
@@ -112,7 +112,7 @@ test('lines are spaced by the minimum interval', async () => {
   await running
 })
 
-test('an empty line is refused, not sent as a blank bubble', async () => {
+hostTest('an empty line is refused, not sent as a blank bubble', async () => {
   const sent = []
   const { bridge, fake } = await bridgeWith(baseSessionIdFor('room-empty'), {
     onRealtimeReady: async (entry) => { sent.push(entry.text) },
@@ -128,7 +128,7 @@ test('an empty line is refused, not sent as a blank bubble', async () => {
   await running
 })
 
-test('after the turn settles a line is refused as idle', async () => {
+hostTest('after the turn settles a line is refused as idle', async () => {
   const { bridge, fake } = await bridgeWith(baseSessionIdFor('room-late'), {
     onRealtimeReady: async () => {},
     realtimeMaxPerTurn: 5,
@@ -142,7 +142,7 @@ test('after the turn settles a line is refused as idle', async () => {
   assert.equal(verdict.reason, 'idle')
 })
 
-test('a failing sink costs the quota anyway, so a retry storm cannot happen', async () => {
+hostTest('a failing sink costs the quota anyway, so a retry storm cannot happen', async () => {
   let calls = 0
   const { bridge, fake } = await bridgeWith(baseSessionIdFor('room-fail'), {
     onRealtimeReady: async () => { calls += 1; throw new Error('no transport') },
