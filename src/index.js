@@ -24,6 +24,7 @@ import { randomBytes } from 'node:crypto'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { configureWeixinStateDir, accountsDir, configFile, ensureSessionsDir, inboxDir, stateDir, withSavedConfig } from './state.js'
 import { quietDelay } from './message/quiet-hours.js'
+import { installWeixinSayTool } from './tool-realtime.js'
 import {
   MAX_TEMP_QUIET_MS,
   clearTempQuiet,
@@ -389,6 +390,10 @@ export const Config = z.object({
   progressAfterMs: z.number().default(20_000).description('Send the first progress note to the user after this many milliseconds (a turn that is only thinking).'),
   progressToolAfterMs: z.number().min(0).default(8_000).description('Send the first progress note sooner - after this many milliseconds - when a tool is actually running. 0 disables the early note.'),
   progressEveryMs: z.number().default(60_000).description('Re-send a changed progress note at most this often, so tool changes stay visible without repeating an unchanged state.'),
+  realtimeSendEnabled: z.boolean().default(false).description('实时汇报：让模型在长回合中途主动说一句人话（注册 weixin_say 工具）。默认关闭；关闭时行为与以前完全一致。'),
+  realtimeMaxPerTurn: z.number().min(0).default(3).description('实时汇报：一个回合最多主动说几句（0 = 不许说）。'),
+  realtimeIntervalSeconds: z.number().min(0).default(20).description('实时汇报：两句之间至少隔多少秒，避免刷屏、也避开微信的发送频率限制。'),
+  realtimeMaxChars: z.number().min(0).default(120).description('实时汇报：单句最多多少字，超出截断。'),
   maxTurnWaitMs: z.number().default(1_200_000).description('Give up waiting for a turn after this many milliseconds.'),
   eventPollMs: z.number().min(0).max(60_000).default(1_000).description('会话事件轮询间隔（毫秒）：越小回答出现得越快，越大越省 CPU。'),
   // `z` here is a minimal schema helper (string/number/boolean), so enumerations
@@ -719,6 +724,37 @@ export function apply(ctx, config) {
             text: noticeText(verdict, resolveLocale(withSavedConfig(config).locale)),
           }).catch((failure) => warn(`tool notice failed: ${String(failure)}`))
         },
+        // Issue #10 实时汇报：the sink that actually sends a mid-turn line to
+        // WeChat. Kept here (not in the bridge) so the bridge stays free of
+        // transport lookup. Throwing on a missing transport makes `announce`
+        // report `failed` to the model instead of silently dropping the line.
+        onRealtimeReady: async ({ accountId, conversationId, text }) => {
+          const transport = transports.get(accountId)
+          if (transport === undefined) throw new Error('account has no live transport')
+          await sendChunked(transport, withSavedConfig(config), { conversationId, text })
+        },
+        // Issue #10 实时汇报：register `weixin_say` in the agent's own scope, so
+        // the model can only speak into the conversation it is already in. The
+        // session id from the calling agent maps back to that conversation;
+        // quiet hours, the master switch and per-turn throttling are enforced
+        // before anything goes out. Async install is fired and its own errors
+        // are swallowed (a host without the tools API just has no tool).
+        onAgentSetup: (agentCtx) => {
+          if (withSavedConfig(config).realtimeSendEnabled !== true) return
+          const say = async ({ text, agent }) => {
+            const live = withSavedConfig(config)
+            if (live.realtimeSendEnabled !== true) return { ok: false, reason: 'off' }
+            const sessionId = agent?.session?.id ?? agent?.id
+            const line = bridge.lineForSession(sessionId)
+            if (line === undefined) return { ok: false, reason: 'off', message: '找不到这条会话，这句话没发出去。' }
+            if (quietGateFor(Date.now(), line.accountId) > 0) return { ok: false, reason: 'quiet', message: '现在是免打扰时段，这句话没发出去。' }
+            return bridge.announce({ accountId: line.accountId, conversationId: line.conversationId, text })
+          }
+          void installWeixinSayTool({ agentCtx, say, warn }).catch((error) => warn(`weixin_say install failed: ${String(error)}`))
+        },
+        realtimeMaxPerTurn: config.realtimeMaxPerTurn,
+        realtimeMinIntervalMs: Number(config.realtimeIntervalSeconds) * 1000,
+        realtimeMaxChars: config.realtimeMaxChars,
       })
 
       // The P2 memory summarizer: folds recent turns into conv memory every

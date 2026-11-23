@@ -61,6 +61,17 @@ persona / accounts / sessions）。保留策略 `src/message/retention.js` 按�
 
 全部经 `bridge.summarize({sessionPrefix})` 走侧会话，**不会发任何气泡**（`/summary`、`/subscribe`、主动开口的正文才发）。
 
+### 实时汇报：模型主动在回合中途说一句（`weixin_say`）
+
+`realtimeSendEnabled` 打开时，`AgentBridge.#setup()` 拿到的 per-agent scoped `agentCtx` 会被 `installWeixinSayTool`
+注册一个**只对该 agent 可见**的 `weixin_say` 工具（`src/tool-realtime.js`）。模型调用它时，会话由调用方
+`exec.agent.session.id` 经 `AgentBridge.lineForSession()` 反查，**模型永远拿不到 conversationId**。
+
+节流全在 `AgentBridge.announce()`：每回合最多 `realtimeMaxPerTurn` 句、两句至少隔 `realtimeIntervalSeconds` 秒，
+`idle`/`cancelled`/免打扰都拒发，**发送失败也扣预算**（防重试撞封禁）。发出时走 `onRealtimeReady` →
+`sendChunked`，与普通回复同一条出站收口、同一条消息流水。工具返回 `{sent, reason, message}`，模型据此知道用户到底
+看没看到，不会自说自话。默认关；宿主没有 `@deepseek-ai/dsh-tools` 时工具不装，会话不受影响。
+
 ## 排障顺序
 
 1. `npm run doctor` —— 十项检查一次说完：node 版本、包版本、状态目录可写、白名单是否为空

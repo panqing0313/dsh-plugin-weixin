@@ -105,6 +105,7 @@ window.__ModuleLoader__.load({
 				"dateReminderLeadDays": "live", "digestEnabled": "live", "backgroundDailyLimit": "live", "digestWhen": "live", "memoryReviewEnabled": "live",
 				"memoryReviewWhen": "live", "toolAudit": "live", "markdownMode": "live", "busyMessageMode": "live", "sourceContext": "live",
 				"readLinks": "live", "progressAfterMs": "live", "progressToolAfterMs": "live", "progressEveryMs": "live", "maxTurnWaitMs": "live",
+				"realtimeSendEnabled": "live", "realtimeMaxPerTurn": "live", "realtimeIntervalSeconds": "live", "realtimeMaxChars": "live",
 				"typingIndicator": "live", "mediaEnabled": "live", "autoSendFiles": "live", "maxMediaBytes": "live", "maxInboundMediaBytes": "live",
 				"cdnBaseUrl": "live",
 			};

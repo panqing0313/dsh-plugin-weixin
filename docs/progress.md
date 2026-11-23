@@ -1,3 +1,28 @@
+## 给模型一个「中途说一句」的出口：`weixin_say` 实时汇报（2026-11-23，1.5.14）
+
+issue #10（Rlxzmdd）：用本地模型很慢，常见 `（thinking… (5m58s)）`，用户在微信里干等，看不出是卡住还是还在跑；
+他试过 `schedule_create`（要等回合结束）和插件 `/steer`（只是用户→模型方向），都无法让模型在**当前回合中途**主动说一句。
+
+- **为什么是工具而不是回调**：`bridge.summarize()` 明确不发 `onProgress`（摘要必须对微信保持沉默），而 `onProgress`
+  只有插件自己知道状态。真正需要「模型想说话」的钩子必须是模型能主动调用的东西——一个工具。
+- **为什么用 per-agent scoped 注册**：宿主 `ToolsService.register()` 注册在「调用处 ctx 的作用域」，`restrict()` 要求
+  scoped ctx。`AgentBridge.#setup()` 里 `setup(agentCtx)` 拿到的 `agentCtx` 正是 per-agent scoped context。于是在
+  `onAgentSetup` 里对每个新建 agent 注册一个只对它可见的 `weixin_say`——**模型只能说到自己正在聊的那个会话**，
+  因为它永远拿不到 conversationId：会话由 `exec.agent.session.id` 经 `AgentBridge.lineForSession()` 反查。
+- **节流放在桥上，不放工具里**：`AgentBridge.announce()` 统一管闸——每回合最多 `realtimeMaxPerTurn`（默认 3）句、
+  两句至少隔 `realtimeIntervalSeconds`（默认 20）秒、`idle`/`cancelled`/免打扰时段都拒发，且**发送失败也扣预算**
+  （否则失败的 sink 会被模型重试到撞上微信封禁）。工具只负责把模型参数翻译成 `announce` 调用、把 `{sent,reason,message}`
+  原样回给模型，让模型知道用户到底看没看到。
+- **默认关闭**：`realtimeSendEnabled` 默认 false，关闭时行为与以前完全一致；`installWeixinSayTool` 在宿主没有
+  `@deepseek-ai/dsh-tools` 时 warn 并返回 undefined（工具不出现，但不影响会话）。四个配置项在设置卡「进度」分组可调、
+  保存即生效（`config-effect.js` 与 `client.card.js` 效果表均标 `live`）。
+- **「只能发 10 条」的真相**：`src/message/rate-limit.js` 的 `OutboundPacer` 默认 **120 秒窗口最多 15 条**，超了触发约
+  30 分钟账号级封禁——这不是「单会话 10 条」，而是账号级发送窗口。单次回复本身无分块数上限。慢模型建议开实时汇报，
+  让它在中途报进度，用户就不必等你 thinking 完才看到东西。
+- 测试：`test/message-realtime.test.js` 9 + `test/tool-realtime.test.js` 8 + `test/realtime-line.test.js` 7（含
+  failed 仍扣预算、idle、interval、limit、空句、lineForSession 反查）；配置字段由 `config-effect`/`config-remote` 自动兜住。
+  `npm run check` 282 files ok；全量 **1267/1267**。
+
 ## 宿主 0.2.2-rc.1 进测试列表，顺手修掉「读到了却说读不到」（2026-11-05，1.5.12）
 
 用户要求把本机宿主 `0.2.2-rc.1` 加进已验证列表（`npm run doctor` 原来显示「不在测试列表里」）。按
