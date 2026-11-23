@@ -379,18 +379,13 @@ export class AgentBridge {
    * only inside a DSH profile; a profile showing a different shape degrades to
    * running without the listener rather than failing to load.
    *
-   * @param {{ provider: string, model: string }} [routeOverride] run this
-   *   session on a different provider/model — what the memory model setting
-   *   uses, so background summarising cannot spend the conversation's model.
+   * @param {{ provider: string, model: string } | null} [route] The session's
+   *   selected route. Omit it to resolve the current default; null means
+   *   the route was already resolved and the host will choose the model.
    */
-  async #setup(routeOverride) {
-    // C20: the caller's route (a side session's own model) wins; otherwise the
-    // conversation route this plugin was configured with; otherwise the host's
-    // default. `chatRoute()` returns undefined when nothing is configured, so a
-    // deployment that never touched the setting behaves exactly as before.
-    const route = routeOverride ?? this.chatRoute?.() ?? (await this.#route())
+  async #setup(route = this.#resolveRoute()) {
     const agentOptions =
-      route === undefined
+      route == null
         ? undefined
         : {
             provider: route.provider,
@@ -401,22 +396,26 @@ export class AgentBridge {
 
     const setup = async (agentCtx) => {
       if (presetId !== undefined) await presets.mount(agentCtx, presetId)
-      if (route !== undefined) {
+      if (route != null) {
         const install = await loadInstallModelSelection()
         if (install !== undefined) {
           install(agentCtx, { current: route, assembled: undefined })
         }
       }
     }
-    const hasSetup = presetId !== undefined || route !== undefined
+    const hasSetup = presetId !== undefined || route != null
     return { agentOptions, setup: hasSetup ? setup : undefined }
+  }
+
+  #resolveRoute(override) {
+    return override ?? this.chatRoute?.() ?? this.#defaultRoute()
   }
 
   /**
    * The deployment's default provider/model route, or undefined when the
    * service is absent (a host that routes some other way).
    */
-  async #route() {
+  #defaultRoute() {
     const defaults = this.ctx.get('agentDefaultModel')
     try {
       const selection = defaults?.currentSelection?.()
@@ -476,7 +475,7 @@ export class AgentBridge {
    *
    * @param {string} conversationId
    * @param {string} [accountId] owning bot account; bare key when absent
-   * @param {{ sessionId?: string, sideMeta?: { parentSession?: string, origin?: string } }} [options]
+   * @param {{ sessionId?: string, sideMeta?: { parentSession?: string, origin?: string }, route?: { provider: string, model: string } | null }} [options]
    *   `sessionId` attaches an EXPLICIT session instead of the conversation's
    *   active line (the memory summarizer's side session); `sideMeta` adds
    *   header-admitted meta (parentSession/origin) so the side session files
@@ -783,15 +782,15 @@ export class AgentBridge {
     }
     this.onBackgroundCall?.()
     const key = scopedLineKey(accountId, conversationId)
-    // The route is part of the identity: a session created under one model
-    // cannot be re-pointed at another, so changing the memory model has to
-    // start a fresh side session instead of quietly reusing the old one.
-    const identity = route === undefined ? key : `${key}|${route.provider}/${route.model}`
+    // Include the model chosen after fallbacks. A cached side session keeps its
+    // original model even when the configured chat route or host default changes.
+    const selectedRoute = this.#resolveRoute(route)
+    const identity = selectedRoute === undefined ? key : `${key}|${selectedRoute.provider}/${selectedRoute.model}`
     const digest = createHash('sha1').update(identity).digest('hex').slice(0, 16)
     const sessionId = `${sessionPrefix}${digest}`
     const record = await this.attach(conversationId, accountId, {
       sessionId,
-      ...(route === undefined ? {} : { route }),
+      route: selectedRoute ?? null,
       sideMeta: {
         origin: 'subagent',
         parentSession: this.#activeSessionId(conversationId, accountId),

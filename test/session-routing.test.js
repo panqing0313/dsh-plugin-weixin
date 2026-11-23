@@ -14,12 +14,49 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { hostTest } from './host-packages.mjs'
 
 const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-routing-'))
 process.env.DSH_WEIXIN_STATE_DIR = stateRoot
 
 const { SessionLines, baseSessionIdFor } = await import('../src/sessions.js')
 const { AgentBridge } = await import('../src/agent-bridge.js')
+
+hostTest('a background session follows changes to the host default model', async () => {
+  const opened = []
+  let current = { provider: 'nvidia', model: 'old-model' }
+  const probeError = new Error('stop before calling a model')
+  const agents = {
+    async create({ sessionId, agentOptions }) {
+      opened.push({ sessionId, agentOptions })
+      return {
+        agent: {
+          session: { id: sessionId, snapshotEvents: () => [] },
+          followup: () => { throw probeError },
+        },
+        dispose: async () => {},
+      }
+    },
+  }
+  const services = { agents, agentDefaultModel: { currentSelection: () => current } }
+  const bridge = new AgentBridge({ ctx: { get: (name) => services[name] } })
+  const run = (route) => bridge.summarize({ conversationId: 'room', prompt: 'say hello', sessionPrefix: 'wx-pro-', route })
+  try {
+    await assert.rejects(run(), probeError)
+    current = { provider: 'working', model: 'new-model' }
+    await assert.rejects(run(), probeError)
+    assert.deepEqual(opened.map(({ agentOptions }) => agentOptions), [
+      { provider: 'nvidia', model: 'old-model' },
+      current,
+    ])
+    assert.notEqual(opened[0].sessionId, opened[1].sessionId)
+    await assert.rejects(run(), probeError)
+    await assert.rejects(run(current), probeError)
+    assert.equal(opened.length, 2)
+  } finally {
+    await bridge.dispose()
+  }
+})
 
 test.after(() => {
   fs.rmSync(stateRoot, { recursive: true, force: true })
