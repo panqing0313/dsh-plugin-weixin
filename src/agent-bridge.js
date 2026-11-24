@@ -495,18 +495,13 @@ export class AgentBridge {
    * only inside a DSH profile; a profile showing a different shape degrades to
    * running without the listener rather than failing to load.
    *
-   * @param {{ provider: string, model: string }} [routeOverride] run this
-   *   session on a different provider/model — what the memory model setting
-   *   uses, so background summarising cannot spend the conversation's model.
+   * @param {{ provider: string, model: string } | null} [route] The session's
+   *   selected route. Omit it to resolve the current default; null means
+   *   the route was already resolved and the host will choose the model.
    */
-  async #setup(routeOverride) {
-    // C20: the caller's route (a side session's own model) wins; otherwise the
-    // conversation route this plugin was configured with; otherwise the host's
-    // default. `chatRoute()` returns undefined when nothing is configured, so a
-    // deployment that never touched the setting behaves exactly as before.
-    const route = routeOverride ?? this.chatRoute?.() ?? (await this.#route())
+  async #setup(route = this.#resolveRoute()) {
     const agentOptions =
-      route === undefined
+      route == null
         ? undefined
         : {
             provider: route.provider,
@@ -517,7 +512,7 @@ export class AgentBridge {
 
     const setup = async (agentCtx) => {
       if (presetId !== undefined) await presets.mount(agentCtx, presetId)
-      if (route !== undefined) {
+      if (route != null) {
         const install = await loadInstallModelSelection()
         if (install !== undefined) {
           install(agentCtx, { current: route, assembled: undefined })
@@ -534,15 +529,19 @@ export class AgentBridge {
         }
       }
     }
-    const hasSetup = presetId !== undefined || route !== undefined
+    const hasSetup = presetId !== undefined || route != null
     return { agentOptions, setup: hasSetup ? setup : undefined }
+  }
+
+  #resolveRoute(override) {
+    return override ?? this.chatRoute?.() ?? this.#defaultRoute()
   }
 
   /**
    * The deployment's default provider/model route, or undefined when the
    * service is absent (a host that routes some other way).
    */
-  async #route() {
+  #defaultRoute() {
     const defaults = this.ctx.get('agentDefaultModel')
     try {
       const selection = defaults?.currentSelection?.()
@@ -602,7 +601,7 @@ export class AgentBridge {
    *
    * @param {string} conversationId
    * @param {string} [accountId] owning bot account; bare key when absent
-   * @param {{ sessionId?: string, sideMeta?: { parentSession?: string, origin?: string } }} [options]
+   * @param {{ sessionId?: string, sideMeta?: { parentSession?: string, origin?: string }, route?: { provider: string, model: string } | null }} [options]
    *   `sessionId` attaches an EXPLICIT session instead of the conversation's
    *   active line (the memory summarizer's side session); `sideMeta` adds
    *   header-admitted meta (parentSession/origin) so the side session files
@@ -923,15 +922,15 @@ export class AgentBridge {
     }
     this.onBackgroundCall?.()
     const key = scopedLineKey(accountId, conversationId)
-    // The route is part of the identity: a session created under one model
-    // cannot be re-pointed at another, so changing the memory model has to
-    // start a fresh side session instead of quietly reusing the old one.
-    const identity = route === undefined ? key : `${key}|${route.provider}/${route.model}`
+    // Include the model chosen after fallbacks. A cached side session keeps its
+    // original model even when the configured chat route or host default changes.
+    const selectedRoute = this.#resolveRoute(route)
+    const identity = selectedRoute === undefined ? key : `${key}|${selectedRoute.provider}/${selectedRoute.model}`
     const digest = createHash('sha1').update(identity).digest('hex').slice(0, 16)
     const sessionId = `${sessionPrefix}${digest}`
     const record = await this.attach(conversationId, accountId, {
       sessionId,
-      ...(route === undefined ? {} : { route }),
+      route: selectedRoute ?? null,
       sideMeta: {
         origin: 'subagent',
         parentSession: this.#activeSessionId(conversationId, accountId),
@@ -1243,6 +1242,18 @@ export class AgentBridge {
     // repeated" would stop holding if the text were the key.
     let lastProgressTools = null
     let lateAnnounced = false
+    const notifiedApprovals = new Set()
+    const notifyPendingApprovals = async (reply) => {
+      if (!onProgress || reply.pendingApprovalIds.every((id) => notifiedApprovals.has(id))) return
+      for (const id of reply.pendingApprovalIds) notifiedApprovals.add(id)
+      lastProgressAt = Date.now()
+      lastProgressTools = reply.pendingTools.join(',')
+      try {
+        await onProgress('正在等待 DSH 审批。请在 DSH 界面处理，或在微信发 /cancel 结束本轮。')
+      } catch (error) {
+        this.errLog(`approval notice delivery failed: ${String(error)}`)
+      }
+    }
 
     while (Date.now() < deadline) {
       if (signal?.aborted === true) return { text: '（已取消）', sessionId }
@@ -1262,7 +1273,7 @@ export class AgentBridge {
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
-      if (reply.text !== '') return { text: reply.text, sessionId }
+      if (reply.text !== '' && reply.pendingApprovalIds.length === 0) return { text: reply.text, sessionId }
       // A failed turn is OVER: no assistant message will ever arrive, and the
       // turn/end(error) event is already durable. Waiting out the deadline
       // here holds record.busy for the whole budget, so the user's NEXT
@@ -1280,7 +1291,9 @@ export class AgentBridge {
       // progressAfterMs; after that a CHANGED tool set is re-announced at most
       // every progressEveryMs, so "running: bash" becoming "running: read"
       // reaches the user while one long unchanged tool never spams.
-      if (onProgress) {
+      if (reply.pendingApprovalIds.length > 0) {
+        await notifyPendingApprovals(reply)
+      } else if (onProgress) {
         const elapsed = Date.now() - startedAt
         const note = describePending(reply.pendingTools, elapsed)
         // Two thresholds, whichever comes first: a turn that is only thinking
@@ -1335,7 +1348,8 @@ export class AgentBridge {
       const events = record.agent.session?.snapshotEvents?.() ?? []
       this.#auditEvents(record, events, before)
       const reply = readAssistantReply({ events, afterSeq: before })
-      if (reply.text !== '') {
+      if (reply.pendingApprovalIds.length > 0) await notifyPendingApprovals(reply)
+      if (reply.text !== '' && reply.pendingApprovalIds.length === 0) {
         try {
           await onLateReply({ kind: 'reply', text: reply.text })
         } catch (error) {

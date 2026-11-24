@@ -526,11 +526,11 @@ export function apply(ctx, config) {
   const warn = (line) => ctx.logger?.warn?.(`dsh-weixin: ${redactSecrets(String(line))}`)
   const fileLog = vendorLogger.withAccount('dsh-weixin')
 
-  // Settings the operator saved through the UI live beside the credentials, so
-  // they survive a reinstall of the package. They fill in what the composition
-  // did not set; an explicit value in the profile YAML still wins, because the
-  // YAML is the live decision and an overlay must not make it lie.
-  config = withSavedConfig(config ?? {})
+  // Keep the composition separate so clearing a card override can reveal the
+  // original value instead of falling back to the saved value from startup.
+  const compositionConfig = config ?? {}
+  const readCurrentConfig = () => withSavedConfig(compositionConfig)
+  config = readCurrentConfig()
 
   const disabled = config.enabled === false
   if (disabled) {
@@ -589,13 +589,11 @@ export function apply(ctx, config) {
     warn(`settings ASR service unavailable: ${String(error)}`)
     asrController = undefined
   }
-  // The settings form's view of every configurable option. It is handed the
-  // *merged* config so the form can show effective values, and it reads the
-  // saved overlay itself on every call — so a value written from the form, or
-  // by hand while DSH is running, is reflected without a reload.
+  // The settings form reads the saved overlay itself. Give it the composition
+  // so it can report the correct source and fallback after a field is cleared.
   let configController
   try {
-    configController = new ConfigController(ctx, { config })
+    configController = new ConfigController(ctx, { config: compositionConfig })
   } catch (error) {
     warn(`settings config service unavailable: ${String(error)}`)
     configController = undefined
@@ -696,7 +694,7 @@ export function apply(ctx, config) {
         // tool per turn: a turn that runs ten bash commands is still one turn.
         // C20: the conversation's route, re-read per turn so a card edit lands
         // without restarting the plugin.
-        chatRoute: () => routeFor('chat', withSavedConfig(config)),
+        chatRoute: () => routeFor('chat', readCurrentConfig()),
         // ⑥ 后台预算：0 = 不限；读实时配置，卡片改完下一次调用就生效。
         allowBackground: () => {
           const live = withSavedConfig(config)
@@ -763,12 +761,15 @@ export function apply(ctx, config) {
       // The memory model (optional): background summaries, fact extraction and
       // consolidation run on a cheaper route when one is configured, so a
       // chatty day of persona upkeep cannot spend the conversation's model.
-      const memoryRoute = () => routeFor('memory', config)
+      const memoryRoute = () => routeFor('memory', readCurrentConfig())
       // C20: background side sessions (summary, subscriptions, proactive) get
       // their own route; without one they fall back to the memory route, so a
       // single cheap model covers everything that is not the conversation.
       // purpose 明确时优先用该用途自己的路由；否则保持原来的回落链。
-      sideRoute = (purpose = 'side') => routeFor(purpose, config) ?? sideRouteFor(config)
+      sideRoute = (purpose = 'side') => {
+        const live = readCurrentConfig()
+        return routeFor(purpose, live) ?? sideRouteFor(live)
+      }
       memorySummarizer = createMemorySummarizer({
         bridge,
         stateRoot,
@@ -3017,6 +3018,7 @@ function createInboundHandler({ config, accountId, transport, bridge, memorySumm
       }
       const parts = []
       if (saved.length > 0) parts.push(describeInboundMedia(saved, message.text))
+      else if (prompt !== '') parts.push(prompt)
       // ② A document's text, not only its path: the model can answer "这份合同
       //    第三条写了什么" in the same turn. Anything unrecognised (pdf, images)
       //    falls back to the path-only description above.

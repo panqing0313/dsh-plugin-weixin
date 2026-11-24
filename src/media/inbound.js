@@ -46,6 +46,8 @@ export const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
 
 /** Longest extension we will carry over from a peer-supplied file name. */
 const MAX_EXTENSION_LENGTH = 12
+const MAX_BASE_NAME_LENGTH = 120
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 /** Characters that are never safe in a file name on any supported platform. */
 const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f/\\:*?"<>|]/g
@@ -90,7 +92,7 @@ export function safeBaseName(raw, fallback = 'file') {
   // Cap the length: a file name is metadata from a stranger, and a 4KB name
   // would exceed every filesystem's limit and fail the write after the download
   // has already been paid for.
-  return cleaned.length > 120 ? `${cleaned.slice(0, 120)}` : cleaned
+  return cleaned.slice(0, MAX_BASE_NAME_LENGTH)
 }
 
 /**
@@ -337,7 +339,18 @@ export async function downloadInboundMedia(params) {
         }
       }
     }
-    const peerName = typeof media.fileName === 'string' && media.fileName !== '' ? media.fileName : defaultNameFor(kind)
+    let peerName = typeof media.fileName === 'string' && media.fileName !== '' ? media.fileName : defaultNameFor(kind)
+    if (kind === 'image') {
+      const extension = imageExtension(plaintext)
+      if (extension === undefined) {
+        return { ok: false, code: 'unsupported-image-format', reason: '无法识别为 PNG、JPEG、WebP 或 GIF，请重新发送图片' }
+      }
+      const base = safeBaseName(peerName, 'image')
+      const existing = path.extname(base)
+      const suffix = extension === '.jpg' && existing.toLowerCase() === '.jpeg' ? '.jpeg' : extension
+      const stem = base.slice(0, base.length - existing.length)
+      peerName = stem.slice(0, MAX_BASE_NAME_LENGTH - suffix.length) + suffix
+    }
     const saved = await saveInboundBuffer(plaintext, peerName, {
       ...(params.dir === undefined ? {} : { dir: params.dir }),
       ...(params.token === undefined ? {} : { token: params.token }),
@@ -474,11 +487,21 @@ async function transcodeVoiceToWav(result, params) {
   }
 }
 
+/** Detect the image formats accepted by DSH read_image from decrypted bytes. */
+function imageExtension(buffer) {
+  if (buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return '.png'
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg'
+  const gif = buffer.toString('latin1', 0, 6)
+  if (gif === 'GIF87a' || gif === 'GIF89a') return '.gif'
+  if (buffer.toString('latin1', 0, 4) === 'RIFF' && buffer.toString('latin1', 8, 12) === 'WEBP') return '.webp'
+  return undefined
+}
+
 /** Fallback stem when the message named nothing ("file.bin" upstream). */
 function defaultNameFor(kind) {
   switch (kind) {
     case 'image':
-      return 'image.jpg'
+      return 'image'
     case 'voice':
       return 'voice.silk'
     case 'video':
@@ -525,7 +548,9 @@ function mimeForName(name, kind) {
  * @returns {string}
  */
 export function describeMediaFailures(failures) {
-  const lines = failures.map((f) => `${kindLabel(f.kind)}下载失败：${f.reason}`)
+  const lines = failures.map((f) => f.code === 'unsupported-image-format'
+    ? `${kindLabel(f.kind)}${f.reason}`
+    : `${kindLabel(f.kind)}下载失败：${f.reason}`)
   return lines.join('\n')
 }
 
@@ -555,7 +580,7 @@ export function describeInboundMedia(saved, caption) {
     const size = formatBytes(item.bytes)
     const head = `[用户发送的${kindLabel(item.kind)}已保存到本地：${item.path}（${item.name}, ${size}）]`
     if (item.kind === 'image') {
-      return `${head}\n请用 read_image 工具查看这个文件的内容。`
+      return `${head}\n请用 read_image 工具查看这个文件。若无法读取，请直接说明原因并请用户重发 PNG 或 JPEG。`
     }
     if (item.kind === 'voice') {
       if (typeof item.transcript === 'string') {

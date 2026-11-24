@@ -63,7 +63,7 @@ export function streamText(stream) {
  * @param {readonly any[]} params.events  `agent.session.snapshotEvents()`.
  * @param {number} [params.afterSeq]      Ignore events at or below this seq, so a
  *   reply is never re-sent when the same conversation continues.
- * @returns {{ text: string, settledSeq: number, pendingTools: string[], sawTurnBoundary: boolean,
+ * @returns {{ text: string, settledSeq: number, pendingTools: string[], pendingApprovalIds: string[], sawTurnBoundary: boolean,
  *   turnError: (string | undefined) }} `turnError` is set when the turn ended
  *   in an error (`turn/end` with `reason.kind === 'error'`, e.g. a model
  *   provider failure). A failed turn carries NO assistant text — the attempts
@@ -78,6 +78,7 @@ export function readAssistantReply({ events, afterSeq = -1 }) {
   let turnError
   /** @type {Map<string, string>} */
   const pending = new Map()
+  const pendingApprovals = new Set()
 
   for (const event of events ?? []) {
     if (typeof event?.seq === 'number' && event.seq <= afterSeq) continue
@@ -86,9 +87,11 @@ export function readAssistantReply({ events, afterSeq = -1 }) {
         // A new turn invalidates anything collected from the previous one.
         sawTurnBoundary = true
         pending.clear()
+        pendingApprovals.clear()
         turnError = undefined
         break
       case 'turn/end': {
+        pendingApprovals.clear()
         // The terminal event of every turn. `reason.kind === 'completed'`
         // means the answer arrived as assistant/message; `error` means the
         // turn is over and NO reply is coming — surface it so the caller can
@@ -101,6 +104,14 @@ export function readAssistantReply({ events, afterSeq = -1 }) {
         }
         break
       }
+      case 'approval/asked': {
+        const id = event.data?.id
+        if (typeof id === 'string') pendingApprovals.add(id)
+        break
+      }
+      case 'approval/decided':
+        pendingApprovals.delete(event.data?.id)
+        break
       case 'tool/call': {
         const callId = event.data?.callId
         if (typeof callId === 'string') {
@@ -127,7 +138,7 @@ export function readAssistantReply({ events, afterSeq = -1 }) {
     }
   }
 
-  return { text, settledSeq, pendingTools: [...pending.values()], sawTurnBoundary, turnError }
+  return { text, settledSeq, pendingTools: [...pending.values()], pendingApprovalIds: [...pendingApprovals], sawTurnBoundary, turnError }
 }
 
 /**

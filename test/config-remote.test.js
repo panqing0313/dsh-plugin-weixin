@@ -16,7 +16,11 @@ import os from 'node:os'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { ConfigController, FIELDS } = await import('../src/config-remote.js')
-const { Config } = await import('../src/index.js')
+const { apply, Config } = await import('../src/index.js')
+const { AgentBridge } = await import('../src/agent-bridge.js')
+const { bumpTurnAndBond } = await import('../src/memory.js')
+const { ProactiveScheduler } = await import('../src/message/proactive.js')
+const { ILinkTransport } = await import('../src/transport/ilink.js')
 
 /** A throwaway state root, so nothing writes the operator's real config.json. */
 function withStateRoot() {
@@ -40,6 +44,52 @@ function controller(config = {}) {
 
 const fieldOf = (listing, path) => listing.groups.flatMap((group) => group.fields).find((field) => field.path === path)
 const allFields = () => FIELDS.flatMap((group) => group.fields)
+
+test('clearing a saved proactive model takes effect on the running scheduler', { timeout: 5000 }, async (t) => {
+  const { root, restore } = withStateRoot()
+  const routeFields = [
+    { path: 'proactiveProvider', value: 'nvidia' },
+    { path: 'proactiveModel', value: 'old-model' },
+  ]
+  const accountId = 'bot1'
+  const conversationId = 'wxid_test'
+  const accountDir = nodePath.join(root, 'openclaw-weixin', 'accounts')
+  const now = new Date(2026, 10, 23, 12).getTime()
+  let scheduler
+  let dispose
+  const routes = []
+  try {
+    const settings = controller()
+    await settings.save(routeFields, 'en')
+    fs.mkdirSync(accountDir, { recursive: true })
+    fs.writeFileSync(nodePath.join(accountDir, `${accountId}.json`), JSON.stringify({
+      token: 'test-token', userId: conversationId, baseUrl: 'https://example.invalid',
+    }), { mode: 0o600 })
+    bumpTurnAndBond(root, accountId, conversationId, { now: now - 4 * 60 * 60_000 })
+
+    t.mock.method(Date, 'now', () => now)
+    t.mock.method(Math, 'random', () => 0)
+    t.mock.method(ProactiveScheduler.prototype, 'start', function () { scheduler = this })
+    t.mock.method(AgentBridge.prototype, 'summarize', async ({ route }) => { routes.push(route) })
+    t.mock.method(ILinkTransport.prototype, 'refreshConfig', async () => {})
+    const { promise: listening, resolve: ready } = Promise.withResolvers()
+    t.mock.method(ILinkTransport.prototype, 'start', async () => ready())
+    apply({
+      get: () => undefined,
+      effect(start) { dispose = start(); return { dispose } },
+    }, Config({ accountId, allowedSenders: [conversationId], personaDefaultMode: 'girlfriend', proactiveEnabled: true }))
+    await listening
+
+    await scheduler.tick()
+    assert.deepEqual(routes[0], { provider: 'nvidia', model: 'old-model' })
+    await settings.save(routeFields.map(({ path }) => ({ path, value: '' })), 'en')
+    await scheduler.tick()
+    assert.deepEqual(routes, [{ provider: 'nvidia', model: 'old-model' }, undefined])
+  } finally {
+    await dispose?.()
+    restore()
+  }
+})
 
 test('every field the form shows agrees with the schema default, in both directions', async () => {
   // This is the check that matters most. The form carries its own copy of each

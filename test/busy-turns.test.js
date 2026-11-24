@@ -223,6 +223,37 @@ hostTest('/steer <instruction> steers the running turn regardless of the configu
   await Promise.all([first, second])
 })
 
+hostTest('the bridge reports a pending DSH approval once and waits for the reply', async () => {
+  const fake = streamingAgent()
+  const notes = []
+  let decisionTimer
+  fake.agent.followup = () => {
+    fake.push({ type: 'turn/start', seq: 0 })
+    fake.push({ type: 'tool/call', seq: 1, data: { callId: 'bash-1', name: 'bash' } })
+    fake.push({ type: 'approval/asked', seq: 2, data: { id: 'approval-1', toolName: 'bash', callId: 'bash-1' } })
+    decisionTimer = setTimeout(() => {
+      fake.push({ type: 'approval/decided', seq: 3, data: { id: 'approval-1', outcome: 'rejected' } })
+      fake.push({ type: 'tool/result', seq: 4, data: { message: { source: { callId: 'bash-1' } } } })
+      fake.push({ type: 'assistant/message', seq: 5, data: { message: { content: [{ type: 'text', text: '已停止执行该命令。' }] } } })
+    }, 100)
+  }
+  const bridge = await bridgeWith(fake, { progressAfterMs: 15, progressEveryMs: 15, pollMs: 5 })
+  try {
+    const reply = await bridge.deliver({
+      conversationId: 'room-approval',
+      text: '看看这张图',
+      onProgress: (note) => { notes.push(note) },
+    })
+    assert.equal(reply.text, '已停止执行该命令。')
+    assert.equal(notes.length, 1)
+    assert.match(notes[0], /等待 DSH 审批/)
+    assert.match(notes[0], /\/cancel/)
+  } finally {
+    clearTimeout(decisionTimer)
+    await bridge.dispose()
+  }
+})
+
 hostTest('progress streams: a changed tool set is re-announced, an unchanged one is not', async () => {
   const notes = []
   const { agent, push } = streamingAgent()

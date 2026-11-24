@@ -524,7 +524,7 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
 
   // A fake CDN holding one AES-ECB encrypted image, keyed the way an ImageItem
   // keys one (hex in `aeskey`).
-  const plaintext = Buffer.from('\x89PNG\r\n\x1a\nThe real picture bytes'.repeat(8), 'binary')
+  const plaintext = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
   const key = crypto.randomBytes(16)
   const cdnRequests = []
   const cdn = http.createServer((req, res) => {
@@ -602,6 +602,7 @@ test('an inbound image is downloaded, decrypted, saved and handed to the agent',
     const inbox = path.join(stateRoot, 'media', 'inbound')
     const files = fs.readdirSync(inbox)
     assert.equal(files.length, 1)
+    assert.equal(path.extname(files[0]), '.png')
     assert.deepEqual(fs.readFileSync(path.join(inbox, files[0])), plaintext)
     assert.match(prompt, new RegExp(files[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 
@@ -946,7 +947,7 @@ test('a CDN root saved in the account record is used when config does not set on
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
 
   const key = Buffer.from('0123456789abcdef', 'utf8')
-  const plaintext = Buffer.from('account-record CDN payload', 'utf8')
+  const plaintext = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
   const { encryptAesEcb } = await import('../vendor/openclaw-weixin/cdn/aes-ecb.js')
   const cdnRequests = []
   const cdn = http.createServer((req, res) => {
@@ -1039,7 +1040,7 @@ test('a whitespace-only cdnBaseUrl counts as unset and does not shadow the accou
   process.env.DSH_WEIXIN_STATE_DIR = stateRoot
 
   const key = Buffer.from('0123456789abcdef', 'utf8')
-  const plaintext = Buffer.from('whitespace CDN payload', 'utf8')
+  const plaintext = fs.readFileSync(new URL('../assets/stickers/actcute.png', import.meta.url))
   const { encryptAesEcb } = await import('../vendor/openclaw-weixin/cdn/aes-ecb.js')
   const cdnRequests = []
   // Accepts both directions: the encrypted download blob, and the encrypted
