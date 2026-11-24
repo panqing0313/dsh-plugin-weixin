@@ -175,7 +175,7 @@ dsh-plugin-weixin
 
 也可以填 git 地址或绝对路径。安装后 DSH 会自动把 bundle 挂上，重启生效。
 
-当前已发布版本：[`dsh-plugin-weixin@1.5.13`](https://www.npmjs.com/package/dsh-plugin-weixin)。
+当前已发布版本：[`dsh-plugin-weixin@1.5.14`](https://www.npmjs.com/package/dsh-plugin-weixin)。
 
 ### 方式三：`npx`（不需要先 clone）
 
@@ -387,6 +387,10 @@ node bin/login.js --force            # 已有账号时强制重新扫码
 | `voiceOutbound` | `false` | 音频附件按微信语音发出而不是文件（wav/silk 进程内转码，其余走 ffmpeg）。**默认关**：实测服务端接受机器人语音（ret=0）但不投递，开着会让附件无声消失；发送被拒时仍会自动降级为文件 |
 | `markdownMode` | `'strip'` | 回复的 Markdown 处理：`strip` 转微信可读纯文本，`off` 原样发送 |
 | `progressAfterMs` | `45000` | 超时前发一条进度提示 |
+| `realtimeSendEnabled` | `false` | 实时汇报：让模型在长回合中途主动说一句人话（注册 `weixin_say` 工具）。默认关——关着时行为与以前一致。开了一个回合最多主动说几句、两句隔多久、单句多长由下面三项控制 |
+| `realtimeMaxPerTurn` | `3` | 一个回合最多主动说几句；`0` 表示不许说 |
+| `realtimeIntervalSeconds` | `20` | 两句之间至少隔多少秒，避免刷屏、也避开微信的发送频率限制 |
+| `realtimeMaxChars` | `120` | 单句最多多少字，超出截断 |
 | `maxTurnWaitMs` | `1200000` | 等待一轮的上限 |
 | `typingIndicator` | `true` | 有 typing ticket 时显示“正在输入” |
 | `mediaEnabled` | `true` | 把回复里引用的本地文件作为附件发出（出站） |
@@ -1105,6 +1109,25 @@ git / 装包 / 联网取东西各有自己的说法；参数拿不到时回落�
 同一会话同一工具十分钟内只提醒一次，免得一个连续跑命令的回合刷屏。`toolNotices: false` 关掉。
 
 如果 DSH 已发起审批，微信会提示去 DSH 界面处理，或在微信发 `/cancel` 结束本轮。
+
+### 实时汇报：长回合里让模型说一句（realtimeSendEnabled）
+
+慢模型跑一个长回合时，微信里只有「正在输入」，用户干等，看不出是卡住还是还在跑。开了 `realtimeSendEnabled`，
+模型就能在回合**中途**调用一个 `weixin_say` 工具，说一句人话（「在查了，先回你一句」「找到两条，继续看第三条」），
+走和最终回复完全相同的出站路径，落进同一个会话、同一条消息流水。
+
+- **模型不能说错地方**：工具注册在这个 agent 自己的作用域里，要说的会话由它自己的 session 反查，模型永远拿不到、
+  也不用传 conversationId —— 只能说到自己正在聊的那个会话。
+- **有节流**：一个回合最多 `realtimeMaxPerTurn`（默认 3）句、两句至少隔 `realtimeIntervalSeconds`（默认 20）秒；
+  回合结束、被 `/cancel`、免打扰时段都拒发；空句不发。模型会拿到「发了 / 没发（为什么）」的明确结果，所以它不会
+  自顾自地以为用户看见了。
+- **默认关**。关着时行为与以前完全一致。`weixin_say` 只有宿主提供 `@deepseek-ai/dsh-tools` 时才会装上；没有就
+  安静地不提供这个工具，不影响会话。
+
+> 「微信对面只能收 10 条」的真相：不是单会话限制。插件出站有**账号级发送窗口**（`OutboundPacer` 默认 120 秒最多
+> 15 条，超了会触发约 30 分钟的账号封禁）；单次回复本身没有分块数上限。慢模型建议开着实时汇报，让它中途报进度。
+
+下文「群聊」一节与它无关；两者可同时开。
 
 ### 关系曲线与群里的人（affinity · contacts）
 

@@ -1,5 +1,22 @@
 ## 版本
 
+- **1.5.14** —— **长回合不再只有「正在输入」：模型可以中途主动说一句人话**（issue #10）：
+  - **`weixin_say` 工具**：开了「实时汇报」后，模型在长回合里可以调用 `weixin_say("在查了，先回你一句")`，
+    通过和最终回复完全相同的出站路径（`sendChunked`）发进同一个微信会话，不再让用户对着 `（thinking… (5m58s)）` 干等。
+    工具注册在**该 agent 自己的 scoped context** 里，要说的会话由调用方的 `exec.agent.session.id` 反查
+    （`AgentBridge.lineForSession`），模型永远拿不到、也不需要传 conversationId —— 它只能说到自己正在聊的那个会话。
+  - **节流与边界**：`AgentBridge.announce` 统一管闸——一个回合最多 `realtimeMaxPerTurn` 句（默认 3）、两句至少隔
+    `realtimeIntervalSeconds` 秒（默认 20）、回合结束（`idle`）、被取消（`cancel`）、免打扰时段都会拒发，且**发送失败也照样
+    扣掉预算**（失败就重试会撞上微信的封禁）。空句不发。模型拿到的返回值是 `{sent, reason, message}`，能明确知道用户
+    到底看没看到，而不是自说自话。
+  - **默认关闭**：`realtimeSendEnabled` 默认 false，行为与以前完全一致；开启后还有「每回合几句 / 最小间隔 / 单句字数」
+    三个可调项（设置卡「进度」分组下都能改，保存即生效）。
+  - 「对面只能发 10 条」澄清：真正的机制是**账号级发送窗口**（`OutboundPacer` 默认 120 秒最多 15 条，超了触发约 30 分钟
+    账号封禁），不是「单会话只能 10 条」；单次回复本身没有分块数上限。慢模型建议开实时汇报 + 让它在中途说进度。
+  - 测试：新增 `test/message-realtime.test.js`（节流/清洗 9 条）、`test/tool-realtime.test.js`（工具定义与 execute 8 条）、
+    `test/realtime-line.test.js`（`announce` + `lineForSession` 7 条）；`test/config-effect.test.js` 与
+    `test/config-remote.test.js` 自动覆盖新字段；全量 **1267/1267**，`npm run check` 282 files ok。
+
 - **1.5.13** —— **三个新 issue（#14 / #15 / #16）都是「出问题的时候，你看不到原因」**：
   - **#14 长轮询停摆时，自检里现在能看到**：轮询失败后插件本来就会退避重试（2 秒，连续 3 次后 30 秒），
     但那条记录只写进日志文件，用户看到的是「突然什么都不回了」。新增 `transport.lastPollFailure`

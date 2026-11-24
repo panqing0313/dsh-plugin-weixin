@@ -21,8 +21,9 @@
  */
 import { createHash } from 'node:crypto'
 import { readAssistantReply, describePending } from './session-reader.js'
-import { baseSessionIdFor, scopedLineKey, SessionLines, runSessionCommand } from './sessions.js'
+import { baseSessionIdFor, scopedLineKey, SessionLines, runSessionCommand, readLines } from './sessions.js'
 import { describeModelError } from './model-errors.js'
+import { shouldAnnounce, sanitizeRealtimeText, DEFAULT_REALTIME_MAX_PER_TURN, DEFAULT_REALTIME_INTERVAL_MS, DEFAULT_REALTIME_MAX_CHARS } from './message/realtime.js'
 
 /**
  * `@deepseek-ai/dsh-llm` resolves only from inside a DSH profile, so it is
@@ -120,6 +121,15 @@ export function parseSteerCommand(text) {
  *   means "no audit", which is the default so a bare bridge writes nothing.
  *   An `ok:false, aborted:true` result is emitted by the bridge itself for a
  *   call the host never finished because `/cancel` interrupted the turn.
+ * @property {(agentCtx: any) => void} [onAgentSetup] Called once per agent as it
+ *   is created/resumed, with the agent's own scoped context. The plugin uses it
+ *   to register the model-facing `weixin_say` tool in that agent's scope only
+ *   (issue #10), so the tool can reach the conversation the agent is talking in.
+ * @property {(entry: { accountId: string, conversationId: string, text: string,
+ *   at: number }) => void} [onRealtimeReady] Called by {@link announce} once a
+ *   realtime line has passed the throttle, right before it is handed to the
+ *   outbound sender. The caller owns the actual send (the bridge knows no
+ *   transport). Absent means "realtime speaking is off".
  */
 
 export class AgentBridge {
@@ -179,6 +189,17 @@ export class AgentBridge {
     this.onToolCall = options.onToolCall
     // C20: the conversation's own route, when the operator pinned one.
     this.chatRoute = options.chatRoute
+    // Issue #10: fired once per agent with its scoped context so the plugin can
+    // register the model-facing `weixin_say` tool in that agent's own scope.
+    this.onAgentSetup = options.onAgentSetup
+    // Issue #10: the sink that actually sends a realtime line to WeChat. Absent
+    // means the feature is off and `announce` is a no-op that reports so.
+    this.onRealtimeReady = options.onRealtimeReady
+    // Issue #10: the per-turn throttle, passed through from config so the card
+    // can tune it live. Defaults match the module constants.
+    this.realtimeMaxPerTurn = options.realtimeMaxPerTurn ?? DEFAULT_REALTIME_MAX_PER_TURN
+    this.realtimeMinIntervalMs = options.realtimeMinIntervalMs ?? DEFAULT_REALTIME_INTERVAL_MS
+    this.realtimeMaxChars = options.realtimeMaxChars ?? DEFAULT_REALTIME_MAX_CHARS
     // Conversation id -> the session id its next message must reach. Needed
     // because `deliver` is handed a session id but must still be able to route
     // a late reply and, for a brand-new line, share one in-flight creation.
@@ -223,6 +244,42 @@ export class AgentBridge {
     const sessionId = this.lines.active(conversationId, accountId)
     this.conversationTargets.set(key, sessionId)
     return sessionId
+  }
+
+  /**
+   * Reverse-resolve a session id to its (accountId, conversationId) line.
+   *
+   * Used by the model-facing `weixin_say` tool: the tool is registered in the
+   * agent's own scope and knows only the calling agent's session id (issue #10),
+   * never a conversation id the model could type. This maps back to the one
+   * conversation that session belongs to, so a realtime line can only reach
+   * that conversation. Scans the persisted line store (cheap, small) plus the
+   * in-memory targets the plugin has already resolved.
+   *
+   * @param {string} sessionId
+   * @returns {{ accountId: string, conversationId: string } | undefined}
+   */
+  lineForSession(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '') return undefined
+    for (const [key, session] of this.conversationTargets) {
+      if (session !== sessionId) continue
+      const sep = key.indexOf(':')
+      if (sep > 0) return { accountId: key.slice(0, sep), conversationId: key.slice(sep + 1) }
+      return { accountId: '', conversationId: key }
+    }
+    let store
+    try {
+      store = readLines()
+    } catch {
+      return undefined
+    }
+    for (const [key, entry] of Object.entries(store ?? {})) {
+      if (entry?.active !== sessionId && !(Array.isArray(entry?.lines) && entry.lines.some((line) => line?.sessionId === sessionId))) continue
+      const sep = key.indexOf(':')
+      if (sep > 0) return { accountId: key.slice(0, sep), conversationId: key.slice(sep + 1) }
+      return { accountId: '', conversationId: key }
+    }
+    return undefined
   }
 
   /**
@@ -334,6 +391,65 @@ export class AgentBridge {
   }
 
   /**
+   * Deliver one model-spoken line mid-turn (issue #10: `weixin_say`).
+   *
+   * The model calls a tool while its turn is running; the tool calls back here
+   * with the sentence it wants spoken. This method is the one place the throttle
+   * lives: it refuses a line when the turn has ended, when the turn has already
+   * spoken its quota, or when the last line was too recent — and on success it
+   * hands the text to the caller's outbound sink.
+   *
+   * Returns a verdict the tool hands straight back to the model so it knows
+   * whether the user actually saw the line, without guessing.
+   *
+   * @param {{ conversationId: string, accountId?: string, text: string }} params
+   * @returns {{ ok: true, text: string } | { ok: false, reason: 'off' | 'idle' | 'cancelled' | 'limit' | 'interval' | 'empty' | 'quiet' | 'failed', message: string }}
+   */
+  async announce({ conversationId, accountId, text }) {
+    if (this.onRealtimeReady === undefined) {
+      return { ok: false, reason: 'off', message: '实时汇报没开启，这句话没有发出去。' }
+    }
+    const key = scopedLineKey(accountId, conversationId)
+    const sessionId = this.conversationTargets.get(key) ?? this.lines.active(conversationId, accountId)
+    const record = sessionId === undefined ? undefined : this.sessions.get(sessionId)
+    // Only a running turn can speak mid-turn; after it settles the reply is the
+    // answer and a "by the way" line would arrive out of order.
+    if (record === undefined || record.busy !== true || record.realtime?.active !== true) {
+      return { ok: false, reason: 'idle', message: '这个回合已经结束了，这句话没发出去（直接写进最终回复即可）。' }
+    }
+    const verdict = shouldAnnounce({
+      sent: record.realtime.sent,
+      lastAt: record.realtime.lastAt,
+      now: Date.now(),
+      maxPerTurn: this.realtimeMaxPerTurn,
+      minIntervalMs: this.realtimeMinIntervalMs,
+      cancelled: record.cancelled === true,
+    })
+    if (!verdict.allowed) {
+      const message = verdict.reason === 'limit'
+        ? `这个回合已经说过 ${record.realtime.sent} 句了，先不说了（最终回复里一次讲清即可）。`
+        : verdict.reason === 'cancelled'
+          ? '这个回合已被取消，这句话不发了。'
+          : '刚才才说过一句，隔一会儿再说（有节流）。'
+      return { ok: false, reason: verdict.reason, message }
+    }
+    const line = sanitizeRealtimeText(text, { maxChars: this.realtimeMaxChars })
+    if (line === '') return { ok: false, reason: 'empty', message: '这句话是空的，没发出去。' }
+    // Mark the budget BEFORE sending: a send that throws must still cost the
+    // quota, otherwise a failing sink could be retried into a ban.
+    record.realtime.sent += 1
+    record.realtime.lastAt = Date.now()
+    try {
+      await this.onRealtimeReady({ accountId: accountId ?? '', conversationId, text: line, at: record.realtime.lastAt })
+      this.log?.(`realtime line delivered for ${conversationId}: ${line}`)
+      return { ok: true, text: line }
+    } catch (error) {
+      this.errLog(`realtime line delivery failed for ${conversationId}: ${String(error)}`)
+      return { ok: false, reason: 'failed', message: `这句话没发出去（${String(error?.message ?? error)}）。` }
+    }
+  }
+
+  /**
    * Resolve (creating if needed) the Workspace that owns our conversations.
    *
    * A session only appears under a named group in the GUI when some Workspace
@@ -400,6 +516,16 @@ export class AgentBridge {
         const install = await loadInstallModelSelection()
         if (install !== undefined) {
           install(agentCtx, { current: route, assembled: undefined })
+        }
+      }
+      // Issue #10: register the model-facing `weixin_say` tool in THIS agent's
+      // scoped context. Best-effort — a hook that throws must not break the
+      // session, the conversation just loses the ability to speak mid-turn.
+      if (this.onAgentSetup !== undefined) {
+        try {
+          this.onAgentSetup(agentCtx)
+        } catch (error) {
+          this.errLog(`onAgentSetup failed (weixin_say unavailable for this session): ${String(error)}`)
         }
       }
     }
@@ -581,6 +707,10 @@ export class AgentBridge {
       // gateway, a per-session pick, a model that changed in the GUI). Without it
       // every bill row read "默认" even though the session plainly had a model.
       route: await this.#sessionRoute(handle.agent),
+      // Issue #10: per-turn realtime state. `sent`/`lastAt` are reset when a
+      // turn starts (deliver), and `active` is true only while a turn is
+      // running so `announce` can refuse a line after the reply has gone out.
+      realtime: { sent: 0, lastAt: 0, active: false },
     }
     this.sessions.set(sessionId, record)
     // Resume can resurrect a session this plugin never filed (created by an
@@ -692,6 +822,13 @@ export class AgentBridge {
       return await this.#enqueue({ record, conversationId, accountId, text, onProgress, signal, onLateReply, senderId })
     }
     record.busy = true
+    // Issue #10: a fresh turn gets a fresh realtime budget. Reset here (not on
+    // attach) so a long conversation is not silently capped across turns.
+    if (record.realtime !== undefined) {
+      record.realtime.sent = 0
+      record.realtime.lastAt = 0
+      record.realtime.active = true
+    }
     try {
       const createUserMessage = await loadCreateUserMessage()
       const before = this.#lastSeq(record.agent)
@@ -747,6 +884,9 @@ export class AgentBridge {
       return settled
     } finally {
       record.busy = false
+      // The turn is over: a realtime line can no longer be delivered as a
+      // mid-turn note — the real reply is about to be the last word.
+      if (record.realtime !== undefined) record.realtime.active = false
       // The turn is over, so a stale cancel flag would suppress the NEXT
       // turn's reply entirely.
       record.cancelled = false

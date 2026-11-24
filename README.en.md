@@ -177,7 +177,7 @@ dsh-plugin-weixin
 
 You can also enter a git URL or an absolute path. After installation DSH mounts the bundle automatically; restart to take effect.
 
-Currently published version: [`dsh-plugin-weixin@1.5.13`](https://www.npmjs.com/package/dsh-plugin-weixin).
+Currently published version: [`dsh-plugin-weixin@1.5.14`](https://www.npmjs.com/package/dsh-plugin-weixin).
 
 ### With `npx` (no clone needed)
 
@@ -397,6 +397,10 @@ default mode simply has no persona block" or "the live mode does, switch to it a
 | `voiceOutbound` | `false` | Send audio attachments as WeChat voice notes instead of files (wav/silk transcoded in-process, everything else via ffmpeg). **Off** by default: in practice the server accepts bot voice (ret=0) but does not deliver it, so turning it on makes attachments disappear silently; a rejected send still degrades to a file automatically |
 | `markdownMode` | `'strip'` | Markdown handling for replies: `strip` converts to WeChat-readable plain text, `off` sends as-is |
 | `progressAfterMs` | `45000` | Send a progress hint before the timeout |
+| `realtimeSendEnabled` | `false` | Real-time updates: let the model say one short line mid-turn (registers the `weixin_say` tool). Off by default — unchanged behaviour when off |
+| `realtimeMaxPerTurn` | `3` | Max mid-turn lines per turn; `0` forbids them |
+| `realtimeIntervalSeconds` | `20` | Minimum seconds between lines |
+| `realtimeMaxChars` | `120` | Max characters per line; longer lines are clipped |
 | `maxTurnWaitMs` | `1200000` | Upper bound on waiting for one turn |
 | `typingIndicator` | `true` | Show "typing" when there is a typing ticket |
 | `mediaEnabled` | `true` | Send local files referenced in a reply as attachments (outbound) |
@@ -1050,6 +1054,18 @@ The plugin **cannot block** tool execution: DSH does not expose approval/permiss
 The half it can do is **timely notice**: when the Agent is about to write a file, delete a file, move a file or run a command during a turn, it immediately sends a WeChat message (tool name + argument summary; arguments containing `rm -rf`, `sudo`, `curl | bash`, `git push --force`, `chmod 777`, `dd if=` and the like are marked ⚠️ risky), and says plainly: `/cancel` can stop **the steps after this one** — the step already running may have executed.
 
 The same tool in the same conversation is only announced once every ten minutes, so a turn that runs commands back to back does not spam. `toolNotices: false` turns it off.
+
+### Real-time updates: one line mid-turn (realtimeSendEnabled)
+
+A slow model on a long turn leaves the user staring at "typing…", unable to tell a stall from a long wait. With `realtimeSendEnabled`, the model can call a `weixin_say` tool mid-turn to say one short human line ("still looking, back in a second"), through the same outbound path as the final reply, into the same conversation and message journal.
+
+- **It cannot post to the wrong place**: the tool is registered in that agent's own scope, and the conversation is reverse-resolved from the agent's own session — the model never gets, and never passes, a conversation id. It can only speak into the conversation it is already in.
+- **It is throttled**: at most `realtimeMaxPerTurn` (default 3) lines per turn, each at least `realtimeIntervalSeconds` (default 20) seconds apart; refused after the turn ends, after `/cancel`, and during quiet hours; empty lines are dropped. The model gets an explicit "sent / not sent (why)" result, so it never assumes the user saw something it did not.
+- **Off by default.** When off, behaviour is exactly as before. `weixin_say` is only installed when the host provides `@deepseek-ai/dsh-tools`; without it the tool is quietly absent and the session is unaffected.
+
+> The truth about "the other side only gets 10 messages": it is not a per-conversation limit. Outbound has an **account-level send window** (`OutboundPacer` defaults to at most 15 messages per 120 seconds; exceeding it triggers a roughly 30-minute account ban). A single reply itself has no chunk-count limit. For slow models, leave real-time updates on so progress is reported mid-turn.
+
+This is unrelated to the "Group chat" section below; both can be on at once.
 
 ### Relationship curves and the people in a group (affinity · contacts)
 
